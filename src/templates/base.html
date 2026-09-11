@@ -442,11 +442,11 @@
                   </button>
                 {% endif %}
 
-                {# Define search type from current media type (if it exists) or last search type #}
-                {% if media_type == MediaTypes.SEASON.value %}
-                  {% firstof MediaTypes.TV.value as search_type %}
+                {# Define search type: defaults to 'all' for every new search, unless currently on search page with a specific category filter #}
+                {% if request.resolver_match.url_name == 'search' and request.GET.media_type and request.GET.media_type != 'all' %}
+                  {% firstof request.GET.media_type 'all' as search_type %}
                 {% else %}
-                  {% firstof media_type user.last_search_type as search_type %}
+                  {% firstof 'all' as search_type %}
                 {% endif %}
 
                 {# Search bar #}

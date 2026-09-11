@@ -3,7 +3,7 @@ services:
     container_name: floppy
     # Image defaults to :latest tag (latest commit on the latest branch)
     # Use :release or :vX.X.X for stable builds from the release branch/GitHub Releases
-    image: ghcr.io/dannyvfilms/floppy:latest
+    image: ghcr.io/markenjaden/floppy:latest
     restart: unless-stopped
     depends_on:
       - redis

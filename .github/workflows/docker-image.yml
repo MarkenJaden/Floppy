@@ -28,8 +28,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: dannyvfilms/floppy
-  LEGACY_IMAGE_NAME: dannyvfilms/yamtrack
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   test:
@@ -228,12 +227,8 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          # Dual-publish during the rename grace period: the legacy path keeps
-          # receiving identical tags so pre-rename deployments still get
-          # updates. Drop the second line once traffic to it has died off.
           images: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-            ${{ env.REGISTRY }}/${{ env.LEGACY_IMAGE_NAME }}
           tags: |
             type=ref,event=pr
             type=semver,pattern={{version}}
@@ -252,11 +247,8 @@ jobs:
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
-          # The one-time bootstrap is needed because floppy was created by a
-          # PAT-based push, while the existing yamtrack package is already
-          # associated with this repository. Normal builds stay on GITHUB_TOKEN.
-          username: ${{ inputs.bootstrap_ghcr == true && 'dannyvfilms' || github.actor }}
-          password: ${{ inputs.bootstrap_ghcr == true && secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
         id: build-and-push
@@ -273,3 +265,30 @@ jobs:
           build-args: |
             VERSION=${{ steps.get-version.outputs.VERSION }}
             COMMIT_SHA=${{ github.sha }}
+
+      - name: Trigger Coolify Deployment
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/latest' || github.ref == 'refs/heads/release')
+        env:
+          COOLIFY_DEPLOY_URL: ${{ secrets.COOLIFY_DEPLOY_URL || 'https://coolify.markenjaden.de/api/v1/deploy?uuid=uiunypliol92u4seivnzrmyt&force=false' }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+        run: |
+          if [ -z "$COOLIFY_TOKEN" ]; then
+            echo "::warning::COOLIFY_TOKEN is not configured in repository secrets. Skipping Coolify automatic deployment."
+            exit 0
+          fi
+          echo "Triggering Coolify deployment with force=true to ensure latest Docker image is pulled..."
+          # Force pull new image
+          DEPLOY_URL=$(echo "$COOLIFY_DEPLOY_URL" | sed 's/force=false/force=true/')
+          response=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            --request GET "$DEPLOY_URL" \
+            --header "Authorization: Bearer $COOLIFY_TOKEN")
+          http_code=$(echo "$response" | grep "HTTP_STATUS:" | cut -d':' -f2)
+          body=$(echo "$response" | sed '/HTTP_STATUS:/d')
+          echo "Coolify HTTP status: $http_code"
+          echo "Coolify response: $body"
+          if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+            echo "Coolify deployment successfully triggered!"
+          else
+            echo "::error::Coolify deployment failed with status $http_code: $body"
+            exit 1
+          fi

@@ -1,3 +1,4 @@
+import concurrent.futures
 import logging
 
 from django.conf import settings
@@ -16,16 +17,92 @@ from app.models import (
     Item,
     MediaTypes,
     PodcastShowTracker,
+    Sources,
 )
 from app.providers import services
 from app.services import metadata_resolution
-from app.templatetags.app_tags import media_url, music_album_url, music_artist_url
+from app.templatetags.app_tags import (
+    media_type_readable_plural,
+    media_url,
+    music_album_url,
+    music_artist_url,
+)
 from users.models import VALID_SEARCH_TYPES, MediaStatusChoices
 
 logger = logging.getLogger(__name__)
 
 # Minimum characters before the search bar fires autocomplete suggestions.
 MIN_SUGGESTION_QUERY_LENGTH = 2
+
+
+class PodcastShowAdapter:
+    """Adapter to make PodcastShowTracker compatible with media components."""
+
+    def __init__(self, tracker):
+        """Initialize the podcast adapter."""
+        self.tracker = tracker
+        self.id = tracker.id
+        self.status = tracker.status
+        self.score = tracker.score
+        self.start_date = tracker.start_date
+        self.end_date = tracker.end_date
+        self.notes = tracker.notes
+        self.created_at = tracker.created_at
+        self.updated_at = tracker.updated_at
+
+        self.item, _ = Item.objects.get_or_create(
+            media_id=tracker.show.podcast_uuid,
+            source=tracker.show.source,
+            media_type=MediaTypes.PODCAST.value,
+            defaults={
+                "title": tracker.show.title,
+                "image": tracker.show.image or settings.IMG_NONE,
+            },
+        )
+        show_image = tracker.show.image or settings.IMG_NONE
+        if (
+            self.item.title != tracker.show.title
+            or self.item.image != show_image
+        ):
+            self.item.title = tracker.show.title
+            self.item.image = show_image
+            self.item.save(update_fields=["title", "image"])
+
+
+class MusicAlbumAdapter:
+    """Adapter to make AlbumTracker compatible with media components."""
+
+    def __init__(self, tracker):
+        """Initialize the music album adapter."""
+        self.tracker = tracker
+        self.id = tracker.id
+        self.album = tracker.album
+        self.status = tracker.status
+        self.score = tracker.score
+        self.start_date = tracker.start_date
+        self.end_date = tracker.end_date
+        self.notes = tracker.notes
+        self.created_at = tracker.created_at
+        self.updated_at = tracker.updated_at
+        self.home_music_card = True
+
+        self.item, _ = Item.objects.get_or_create(
+            media_id=str(tracker.album.id),
+            source=Sources.MUSICBRAINZ.value,
+            media_type=MediaTypes.MUSIC.value,
+            defaults={
+                "title": tracker.album.title,
+                "image": tracker.album.image or settings.IMG_NONE,
+            },
+        )
+        album_image = tracker.album.image or settings.IMG_NONE
+        if (
+            self.item.title != tracker.album.title
+            or self.item.image != album_image
+        ):
+            self.item.title = tracker.album.title
+            self.item.image = album_image
+            self.item.save(update_fields=["title", "image"])
 
 
 def _mark_grouped_anime_route(media_items):
@@ -103,11 +180,261 @@ def _matched_title(item_obj, search_query, user):
     return None
 
 
+def _media_search_all(request, query, page, layout):
+    """Handle search across all media categories simultaneously."""
+    if request.user.is_authenticated:
+        enabled_types = request.user.get_enabled_media_types()
+    else:
+        enabled_types = [
+            mt
+            for mt in MediaTypes.values
+            if mt not in (MediaTypes.EPISODE.value, MediaTypes.SEASON.value)
+        ]
+
+    local_results = []
+    local_results_limit = 36
+    if request.user.is_authenticated and query and page == 1:
+        try:
+            for mt in enabled_types:
+                if mt == MediaTypes.PODCAST.value:
+                    show_trackers = (
+                        PodcastShowTracker.objects.filter(user=request.user)
+                        .exclude(show__title__isnull=True)
+                        .exclude(show__title__exact="")
+                        .filter(show__title__icontains=query)
+                        .select_related("show")[:12]
+                    )
+                    for tracker in show_trackers:
+                        adapter = PodcastShowAdapter(tracker)
+                        local_results.append({
+                            "item": adapter.item,
+                            "media": adapter,
+                            "matched_title": _matched_title(adapter.item, query, request.user),
+                        })
+                elif mt == MediaTypes.MUSIC.value:
+                    album_trackers = (
+                        AlbumTracker.objects.filter(user=request.user)
+                        .exclude(album__title__isnull=True)
+                        .exclude(album__title__exact="")
+                        .filter(
+                            Q(album__title__icontains=query)
+                            | Q(album__artist__name__icontains=query),
+                        )
+                        .select_related("album", "album__artist")[:12]
+                    )
+                    for tracker in album_trackers:
+                        adapter = MusicAlbumAdapter(tracker)
+                        local_results.append({
+                            "item": adapter.item,
+                            "media": adapter,
+                            "matched_title": _matched_title(adapter.item, query, request.user),
+                        })
+                else:
+                    local_queryset = BasicMedia.objects.get_media_list(
+                        request.user,
+                        mt,
+                        MediaStatusChoices.ALL,
+                        "title",
+                        search=query,
+                        direction="asc",
+                    )
+                    local_media = list(local_queryset)[:12]
+                    include_anime_in_anime, include_anime_in_tv = (
+                        metadata_resolution.anime_library_visibility(request.user)
+                    )
+                    if mt == MediaTypes.TV.value and not include_anime_in_tv:
+                        local_media = [
+                            media
+                            for media in local_media
+                            if getattr(getattr(media, "item", None), "library_media_type", None)
+                            != MediaTypes.ANIME.value
+                        ]
+                    elif mt == MediaTypes.ANIME.value and include_anime_in_anime:
+                        grouped = [
+                            media
+                            for media in BasicMedia.objects.get_media_list(
+                                request.user,
+                                MediaTypes.TV.value,
+                                MediaStatusChoices.ALL,
+                                "title",
+                                search=query,
+                                direction="asc",
+                            )
+                            if getattr(getattr(media, "item", None), "library_media_type", None)
+                            == MediaTypes.ANIME.value
+                        ]
+                        _mark_grouped_anime_route(grouped)
+                        local_media.extend(grouped)
+
+                    BasicMedia.objects.annotate_max_progress(local_media, mt)
+                    for media in local_media:
+                        item = getattr(media, "item", None)
+                        if item:
+                            local_results.append({
+                                "item": item,
+                                "media": media,
+                                "matched_title": _matched_title(item, query, request.user),
+                            })
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Local all-search failed: %s", exception_summary(exc))
+
+    def _local_sort_key(res):
+        t = str(getattr(res.get("item"), "title", "") or "").casefold()
+        q = query.casefold()
+        if t == q:
+            return (0, t)
+        if t.startswith(q):
+            return (1, t)
+        if q in t:
+            return (2, t)
+        return (3, t)
+
+    local_results.sort(key=_local_sort_key)
+    local_results_total = len(local_results)
+    local_results = local_results[:local_results_limit]
+
+    all_results_by_type = []
+    if query:
+        candidate_types = [
+            MediaTypes.MOVIE.value,
+            MediaTypes.TV.value,
+            MediaTypes.ANIME.value,
+            MediaTypes.MANGA.value,
+            MediaTypes.GAME.value,
+            MediaTypes.BOOK.value,
+            MediaTypes.COMIC.value,
+            MediaTypes.BOARDGAME.value,
+            MediaTypes.PODCAST.value,
+            MediaTypes.MUSIC.value,
+        ]
+        active_types = [t for t in candidate_types if t in enabled_types]
+
+        search_targets = []
+        default_lang = metadata_resolution.metadata_language_default(request.user)
+        for mt in active_types:
+            source_options = metadata_resolution.available_metadata_sources(mt, request.user)
+            if not source_options:
+                continue
+            default_source = metadata_resolution.metadata_default_source(request.user, mt)
+            source = (
+                default_source
+                if default_source in {o.value for o in source_options}
+                else source_options[0].value
+            )
+            search_targets.append((mt, source))
+
+        def _search_target(target):
+            mt, source = target
+            try:
+                with services.interactive_request_scope():
+                    data = services.search(
+                        mt,
+                        query,
+                        1,
+                        source,
+                        language=default_lang,
+                    )
+            except Exception as exc:
+                logger.debug("Online search for %s failed: %s", mt, exception_summary(exc))
+                return mt, None
+            return mt, data
+
+        raw_data_map = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(search_targets) or 1, 8)) as executor:
+            futures = {executor.submit(_search_target, target): target[0] for target in search_targets}
+            for future in concurrent.futures.as_completed(futures):
+                mt, data = future.result()
+                if data:
+                    raw_data_map[mt] = data
+
+        for mt in active_types:
+            data = raw_data_map.get(mt)
+            if not data:
+                continue
+            if mt == MediaTypes.MUSIC.value:
+                res = [
+                    {
+                        "media_id": rel.get("release_id"),
+                        "title": rel.get("title"),
+                        "media_type": MediaTypes.MUSIC.value,
+                        "source": Sources.MUSICBRAINZ.value,
+                        "image": rel.get("image") or settings.IMG_NONE,
+                        "artist_name": rel.get("artist_name"),
+                        "release_date": rel.get("release_date"),
+                        "is_music_release": True,
+                    }
+                    for rel in data.get("releases", [])[:6]
+                ]
+                res.extend([
+                    {
+                        "media_id": art.get("artist_id"),
+                        "title": art.get("name"),
+                        "media_type": MediaTypes.MUSIC.value,
+                        "source": Sources.MUSICBRAINZ.value,
+                        "image": art.get("image") or settings.IMG_NONE,
+                        "artist_name": art.get("name"),
+                        "disambiguation": art.get("disambiguation"),
+                        "is_music_artist": True,
+                    }
+                    for art in data.get("artists", [])[:4]
+                ])
+                if res:
+                    all_results_by_type.append({
+                        "value": mt,
+                        "display": media_type_readable_plural(mt),
+                        "results": res,
+                        "total": len(res),
+                    })
+            else:
+                raw_results = data.get("results", [])[:8]
+                if raw_results:
+                    enriched = helpers.enrich_items_with_user_data(
+                        request,
+                        raw_results,
+                        section_name="search",
+                    )
+                    for r in enriched:
+                        r["matched_title"] = _matched_title(
+                            r.get("item"), query, request.user
+                        )
+                    all_results_by_type.append({
+                        "value": mt,
+                        "display": media_type_readable_plural(mt),
+                        "results": enriched,
+                        "total": len(enriched),
+                    })
+
+    total_online = sum(g["total"] for g in all_results_by_type)
+    flat_results = [item for g in all_results_by_type for item in g["results"]]
+
+    context = {
+        "user": request.user,
+        "data": {
+            "page": 1,
+            "total_results": total_online,
+            "total_pages": 1,
+            "results": flat_results,
+        },
+        "all_results_by_type": all_results_by_type,
+        "source": None,
+        "source_options": [],
+        "media_type": "all",
+        "layout": layout,
+        "local_results": local_results,
+        "local_results_total": local_results_total,
+        "local_results_limit": local_results_limit,
+        "local_results_kind": "media",
+    }
+    return render(request, "app/search.html", context)
+
+
 @require_GET
 def media_search(request):
     """Return the media search page."""
-    requested_media_type = request.GET["media_type"]
-    if request.user.is_authenticated:
+    requested_media_type = request.GET.get("media_type", "all")
+    if requested_media_type == "all":
+        media_type = "all"
+    elif request.user.is_authenticated:
         media_type = request.user.update_preference(
             "last_search_type",
             requested_media_type,
@@ -115,10 +442,13 @@ def media_search(request):
     elif requested_media_type in VALID_SEARCH_TYPES:
         media_type = requested_media_type
     else:
-        media_type = MediaTypes.TV.value
-    query = request.GET["q"]
+        media_type = "all"
+    query = request.GET.get("q", "").strip()
     page = int(request.GET.get("page", 1))
     layout = request.GET.get("layout", "grid")
+
+    if media_type == "all":
+        return _media_search_all(request, query, page, layout)
 
     local_results = []
     local_results_total = 0
@@ -141,38 +471,6 @@ def media_search(request):
                 show_trackers = show_trackers.order_by("show__title")[
                     :local_results_limit
                 ]
-
-                class PodcastShowAdapter:
-                    """Adapter to make PodcastShowTracker compatible with media components."""
-
-                    def __init__(self, tracker):
-                        self.tracker = tracker
-                        self.id = tracker.id
-                        self.status = tracker.status
-                        self.score = tracker.score
-                        self.start_date = tracker.start_date
-                        self.end_date = tracker.end_date
-                        self.notes = tracker.notes
-                        self.created_at = tracker.created_at
-                        self.updated_at = tracker.updated_at
-
-                        self.item, _ = Item.objects.get_or_create(
-                            media_id=tracker.show.podcast_uuid,
-                            source=tracker.show.source,
-                            media_type=MediaTypes.PODCAST.value,
-                            defaults={
-                                "title": tracker.show.title,
-                                "image": tracker.show.image or settings.IMG_NONE,
-                            },
-                        )
-                        show_image = tracker.show.image or settings.IMG_NONE
-                        if (
-                            self.item.title != tracker.show.title
-                            or self.item.image != show_image
-                        ):
-                            self.item.title = tracker.show.title
-                            self.item.image = show_image
-                            self.item.save(update_fields=["title", "image"])
 
                 adapted_media = [
                     PodcastShowAdapter(tracker) for tracker in show_trackers
@@ -401,6 +699,28 @@ def get_saved_suggestions(user, media_type, query, limit=8):
     """
     suggestions = []
 
+    if media_type == "all":
+        enabled_types = (
+            user.get_enabled_media_types()
+            if hasattr(user, "get_enabled_media_types")
+            else [
+                mt
+                for mt in MediaTypes.values
+                if mt not in (MediaTypes.EPISODE.value, MediaTypes.SEASON.value)
+            ]
+        )
+        for mt in enabled_types:
+            if len(suggestions) >= limit:
+                break
+            per_type_limit = max(2, limit // max(1, len(enabled_types)))
+            suggs = get_saved_suggestions(user, mt, query, limit=per_type_limit)
+            for s in suggs:
+                if not any(existing["url"] == s["url"] for existing in suggestions):
+                    suggestions.append(s)
+                    if len(suggestions) >= limit:
+                        break
+        return suggestions[:limit]
+
     if media_type == MediaTypes.PODCAST.value:
         show_trackers = (
             PodcastShowTracker.objects.filter(user=user)
@@ -550,7 +870,7 @@ def search_suggestions(request):
     if (
         not request.user.is_authenticated
         or len(query) < MIN_SUGGESTION_QUERY_LENGTH
-        or media_type not in {choice.value for choice in MediaTypes}
+        or (media_type != "all" and media_type not in {choice.value for choice in MediaTypes})
     ):
         return render(request, "app/components/search_suggestions.html")
 

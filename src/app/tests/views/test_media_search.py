@@ -9,7 +9,9 @@ from app.models import (
     AlbumTracker,
     Artist,
     ArtistTracker,
+    Item,
     MediaTypes,
+    Movie,
     PodcastShow,
     PodcastShowTracker,
     Sources,
@@ -344,3 +346,90 @@ class MediaSearchViewTests(TestCase):
         self.assertEqual(len(messages), 1)
         self.assertIn("Hardcover", str(messages[0]))
         self.assertIn("unavailable", str(messages[0]))
+
+    @patch("app.providers.services.search")
+    def test_media_search_all_view(self, mock_search):
+        """Test searching with media_type=all searches across categories."""
+        mock_search.return_value = {
+            "page": 1,
+            "total_results": 1,
+            "total_pages": 1,
+            "results": [
+                {
+                    "media_id": "238",
+                    "title": "Search Hit",
+                    "media_type": MediaTypes.MOVIE.value,
+                    "source": Sources.TMDB.value,
+                    "image": "http://example.com/image.jpg",
+                },
+            ],
+            "releases": [
+                {
+                    "release_id": "rel-1",
+                    "title": "Test Album",
+                    "artist_name": "Test Artist",
+                    "image": "http://example.com/album.jpg",
+                },
+            ],
+            "artists": [
+                {
+                    "artist_id": "art-1",
+                    "name": "Test Artist",
+                    "image": "http://example.com/artist.jpg",
+                },
+            ],
+        }
+
+        response = self.client.get(reverse("search") + "?media_type=all&q=test")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "app/search.html")
+        self.assertEqual(response.context["media_type"], "all")
+        self.assertTrue(len(response.context["all_results_by_type"]) > 0)
+        self.assertGreater(mock_search.call_count, 1)
+
+    @patch("app.providers.services.search")
+    def test_media_search_defaults_to_all(self, mock_search):
+        """When media_type is omitted, search defaults to 'all'."""
+        mock_search.return_value = {
+            "page": 1,
+            "total_results": 0,
+            "total_pages": 0,
+            "results": [],
+        }
+
+        response = self.client.get(reverse("search") + "?q=test")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "app/search.html")
+        self.assertEqual(response.context["media_type"], "all")
+
+    @patch("app.providers.services.search")
+    def test_media_search_all_local_results(self, mock_search):
+        """Local library items appear in local_results when searching all."""
+        mock_search.return_value = {
+            "page": 1,
+            "total_results": 0,
+            "total_pages": 0,
+            "results": [],
+        }
+        item = Item.objects.create(
+            media_id="999",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.MOVIE.value,
+            title="Local Movie Found",
+            image="http://example.com/image.jpg",
+        )
+        Movie.objects.create(
+            item=item,
+            user=self.user,
+            status=Status.COMPLETED.value,
+            progress=1,
+        )
+
+        response = self.client.get(reverse("search") + "?media_type=all&q=Local+Movie")
+
+        self.assertEqual(response.status_code, 200)
+        local_results = response.context["local_results"]
+        self.assertEqual(len(local_results), 1)
+        self.assertEqual(local_results[0]["item"].title, "Local Movie Found")

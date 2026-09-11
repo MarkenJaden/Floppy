@@ -344,6 +344,8 @@ def media_type_readable(media_type):
 @register.filter
 def media_type_readable_plural(media_type):
     """Return the readable media type in plural form."""
+    if str(media_type).lower() == "all":
+        return _("All")
     # English suffixes do not produce correct plurals in other languages.
     return {
         MediaTypes.TV: _("TV Shows"),
@@ -813,15 +815,22 @@ def get_search_media_types(user):
     else:
         enabled_types = user.get_enabled_media_types()
 
-    # Filter and format the types for search
-    return [
+    # Filter and format the types for search, with 'All' as the first option
+    types = [
+        {
+            "display": _("All"),
+            "value": "all",
+        }
+    ]
+    types.extend([
         {
             "display": media_type_readable_plural(media_type),
             "value": media_type,
         }
         for media_type in enabled_types
         if media_type != MediaTypes.SEASON.value
-    ]
+    ])
+    return types
 
 
 @register.simple_tag

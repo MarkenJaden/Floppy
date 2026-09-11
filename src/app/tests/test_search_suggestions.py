@@ -84,3 +84,10 @@ class SearchSuggestionsViewTests(TestCase):
         self.client.logout()
         response = self._get("godfa")
         self.assertEqual(response.status_code, 302)
+
+    def test_media_type_all_suggests_across_saved_items(self):
+        """When media_type is 'all', saved items across categories are suggested."""
+        response = self._get("godfa", media_type="all")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "The Godfather")
+        self.assertContains(response, "/details/")

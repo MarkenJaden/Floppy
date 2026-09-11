@@ -1,0 +1,152 @@
+name: Upstream Sync & Validate
+
+on:
+  schedule:
+    # Run daily at 04:00 UTC
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: 'Upstream repository (owner/repo)'
+        required: false
+        default: 'MarkenJaden/Floppy'
+      upstream_branch:
+        description: 'Upstream branch to sync from'
+        required: false
+        default: 'latest'
+      target_branch:
+        description: 'Target branch to update in this repo'
+        required: false
+        default: 'latest'
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+jobs:
+  sync-and-validate:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_REPO: ${{ inputs.upstream_repo || 'MarkenJaden/Floppy' }}
+      UPSTREAM_BRANCH: ${{ inputs.upstream_branch || 'latest' }}
+      TARGET_BRANCH: ${{ inputs.target_branch || 'latest' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ env.TARGET_BRANCH }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          echo "Fetching from upstream https://github.com/${UPSTREAM_REPO}.git (${UPSTREAM_BRANCH})..."
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" || git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+      - name: Check for upstream changes
+        id: check_changes
+        run: |
+          BEHIND_COUNT=$(git rev-list --count HEAD..upstream/${UPSTREAM_BRANCH})
+          echo "Commits behind upstream: ${BEHIND_COUNT}"
+          if [ "${BEHIND_COUNT}" -eq 0 ]; then
+            echo "Already up to date with upstream."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Attempt merge
+        id: attempt_merge
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          echo "Attempting merge of upstream/${UPSTREAM_BRANCH} into ${TARGET_BRANCH}..."
+          if git merge --no-edit upstream/${UPSTREAM_BRANCH}; then
+            echo "merge_status=clean" >> $GITHUB_OUTPUT
+          else
+            echo "Merge conflict detected!"
+            git merge --abort || true
+            echo "merge_status=conflict" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Handle merge conflict
+        if: steps.attempt_merge.outputs.merge_status == 'conflict'
+        run: |
+          BRANCH_NAME="upstream-sync/conflict-${{ github.run_id }}"
+          echo "Creating conflict branch ${BRANCH_NAME}..."
+          git checkout -b "${BRANCH_NAME}"
+          git merge -X ours --no-edit upstream/${UPSTREAM_BRANCH} || true
+          git push origin "${BRANCH_NAME}"
+          gh pr create \
+            --title "⚠️ Upstream Sync Conflict - Manual Resolution Required" \
+            --body "Automated sync from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` into \`${TARGET_BRANCH}\` failed due to merge conflicts. Please inspect and resolve manually on branch \`${BRANCH_NAME}\`." \
+            --base "${TARGET_BRANCH}" \
+            --head "${BRANCH_NAME}" || \
+          gh issue create \
+            --title "⚠️ Upstream Sync Conflict" \
+            --body "Merge conflict occurred when syncing from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\`. Check branch \`${BRANCH_NAME}\`."
+          exit 1
+
+      - name: Set up Python
+        if: steps.attempt_merge.outputs.merge_status == 'clean'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        if: steps.attempt_merge.outputs.merge_status == 'clean'
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.3"
+
+      - name: Install dependencies
+        if: steps.attempt_merge.outputs.merge_status == 'clean'
+        run: |
+          uv sync --locked --no-default-groups --group test --group lint
+
+      - name: Run lint and preflight checks
+        if: steps.attempt_merge.outputs.merge_status == 'clean'
+        id: run_checks
+        run: |
+          uv run --no-sync ruff check src
+
+      - name: Run test suite
+        if: steps.attempt_merge.outputs.merge_status == 'clean'
+        id: run_tests
+        run: |
+          export SECRET="$(uv run --no-sync python -c 'import secrets; print(secrets.token_urlsafe(50))')"
+          uv run --no-sync python src/manage.py test \
+            app users lists events integrations api config \
+            --parallel --buffer --exclude-tag network --exclude-tag slow
+
+      - name: Handle test/validation failure
+        if: failure() && steps.attempt_merge.outputs.merge_status == 'clean'
+        run: |
+          BRANCH_NAME="upstream-sync/test-failure-${{ github.run_id }}"
+          echo "Automated tests or lint checks failed on merged code. Creating branch ${BRANCH_NAME}..."
+          git checkout -b "${BRANCH_NAME}"
+          git push origin "${BRANCH_NAME}"
+          gh pr create \
+            --title "❌ Upstream Sync Validation Failed" \
+            --body "Upstream changes from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` were merged cleanly, but automated linting or test suite checks failed. Please review branch \`${BRANCH_NAME}\` before merging into \`${TARGET_BRANCH}\`." \
+            --base "${TARGET_BRANCH}" \
+            --head "${BRANCH_NAME}" || \
+          gh issue create \
+            --title "❌ Upstream Sync Validation Failed" \
+            --body "Upstream changes from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` caused test or lint failures. Check branch \`${BRANCH_NAME}\`."
+          exit 1
+
+      - name: Push merged changes to target branch
+        if: steps.attempt_merge.outputs.merge_status == 'clean'
+        run: |
+          echo "All validation checks passed! Pushing to ${TARGET_BRANCH}..."
+          git push origin "${TARGET_BRANCH}"
+          echo "Triggering Docker image build workflow..."
+          gh workflow run docker-image.yml --ref "${TARGET_BRANCH}" || true
