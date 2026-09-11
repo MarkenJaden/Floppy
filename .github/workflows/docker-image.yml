@@ -280,8 +280,9 @@ jobs:
           # Force pull new image
           DEPLOY_URL=$(echo "$COOLIFY_DEPLOY_URL" | sed 's/force=false/force=true/')
           response=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
-            --request GET "$DEPLOY_URL" \
-            --header "Authorization: Bearer $COOLIFY_TOKEN")
+            --request POST "$DEPLOY_URL" \
+            --header "Authorization: Bearer $COOLIFY_TOKEN" \
+            --header "Content-Type: application/json")
           http_code=$(echo "$response" | grep "HTTP_STATUS:" | cut -d':' -f2)
           body=$(echo "$response" | sed '/HTTP_STATUS:/d')
           echo "Coolify HTTP status: $http_code"
