@@ -12201,3 +12201,23 @@ msgstr "90 Tage"
 #, python-format
 msgid "Server Default (%(language)s)"
 msgstr "Serverstandard (%(language)s)"
+
+msgid "All"
+msgstr "Alle"
+
+#, python-format
+msgid "View all %(type)s"
+msgstr "Alle %(type)s anzeigen"
+
+msgid "In Your Library"
+msgstr "In deiner Bibliothek"
+
+msgid "Online Results"
+msgstr "Online-Ergebnisse"
+
+msgid "Filter by:"
+msgstr "Filtern nach:"
+
+msgid "Enter a search term above to find media across all categories."
+msgstr "Gib oben einen Suchbegriff ein, um medienübergreifend zu suchen."
+

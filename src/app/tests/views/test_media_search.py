@@ -347,9 +347,22 @@ class MediaSearchViewTests(TestCase):
         self.assertIn("Hardcover", str(messages[0]))
         self.assertIn("unavailable", str(messages[0]))
 
+    def test_media_search_all_view(self):
+        """Test searching with media_type=all renders progressive prioritized categories."""
+        response = self.client.get(reverse("search") + "?media_type=all&q=test")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "app/search.html")
+        self.assertEqual(response.context["media_type"], "all")
+        prioritized = response.context["prioritized_categories"]
+        self.assertTrue(len(prioritized) > 0)
+        # Verify Movies and TV are prioritized first
+        self.assertEqual(prioritized[0]["value"], MediaTypes.MOVIE.value)
+        self.assertEqual(prioritized[1]["value"], MediaTypes.TV.value)
+
     @patch("app.providers.services.search")
-    def test_media_search_all_view(self, mock_search):
-        """Test searching with media_type=all searches across categories."""
+    def test_media_search_group(self, mock_search):
+        """Test media_search_group returns HTML fragment with results and View all link."""
         mock_search.return_value = {
             "page": 1,
             "total_results": 1,
@@ -363,30 +376,31 @@ class MediaSearchViewTests(TestCase):
                     "image": "http://example.com/image.jpg",
                 },
             ],
-            "releases": [
-                {
-                    "release_id": "rel-1",
-                    "title": "Test Album",
-                    "artist_name": "Test Artist",
-                    "image": "http://example.com/album.jpg",
-                },
-            ],
-            "artists": [
-                {
-                    "artist_id": "art-1",
-                    "name": "Test Artist",
-                    "image": "http://example.com/artist.jpg",
-                },
-            ],
         }
 
-        response = self.client.get(reverse("search") + "?media_type=all&q=test")
+        response = self.client.get(reverse("search_group") + "?media_type=movie&q=test")
 
         self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(response, "app/search.html")
-        self.assertEqual(response.context["media_type"], "all")
-        self.assertTrue(len(response.context["all_results_by_type"]) > 0)
-        self.assertGreater(mock_search.call_count, 1)
+        self.assertTemplateUsed(response, "app/components/search_group_results.html")
+        self.assertContains(response, "Search Hit")
+        self.assertContains(response, "View all Movies")
+        # Ensure the bug %(type)s is not present
+        self.assertNotContains(response, "%(type)s")
+
+    @patch("app.providers.services.search")
+    def test_media_search_group_empty(self, mock_search):
+        """When a category has no results, search_group returns an empty response."""
+        mock_search.return_value = {
+            "page": 1,
+            "total_results": 0,
+            "total_pages": 0,
+            "results": [],
+        }
+
+        response = self.client.get(reverse("search_group") + "?media_type=movie&q=nonexistent")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.decode(), "")
 
     @patch("app.providers.services.search")
     def test_media_search_defaults_to_all(self, mock_search):

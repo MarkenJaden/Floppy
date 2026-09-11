@@ -1,9 +1,9 @@
-import concurrent.futures
 import logging
 
 from django.conf import settings
 from django.contrib import messages
 from django.db.models import Q
+from django.http import HttpResponse
 from django.shortcuts import render
 from django.utils.translation import gettext
 from django.views.decorators.http import require_GET
@@ -180,8 +180,25 @@ def _matched_title(item_obj, search_query, user):
     return None
 
 
+SEARCH_ALL_PRIORITY_ORDER = [
+    # Priority 1: Movies & TV Shows (load immediately in parallel)
+    (MediaTypes.MOVIE.value, "load"),
+    (MediaTypes.TV.value, "load"),
+    # Priority 2: Anime, Manga, Games (fast follow with 120ms delay)
+    (MediaTypes.ANIME.value, "load delay:120ms"),
+    (MediaTypes.MANGA.value, "load delay:120ms"),
+    (MediaTypes.GAME.value, "load delay:120ms"),
+    # Priority 3: Books, Comics, Board Games, Podcasts, Music (load with 250ms delay)
+    (MediaTypes.BOOK.value, "load delay:250ms"),
+    (MediaTypes.COMIC.value, "load delay:250ms"),
+    (MediaTypes.BOARDGAME.value, "load delay:250ms"),
+    (MediaTypes.PODCAST.value, "load delay:250ms"),
+    (MediaTypes.MUSIC.value, "load delay:250ms"),
+]
+
+
 def _media_search_all(request, query, page, layout):
-    """Handle search across all media categories simultaneously."""
+    """Handle search across all media categories with progressive loading."""
     if request.user.is_authenticated:
         enabled_types = request.user.get_enabled_media_types()
     else:
@@ -293,129 +310,29 @@ def _media_search_all(request, query, page, layout):
     local_results_total = len(local_results)
     local_results = local_results[:local_results_limit]
 
-    all_results_by_type = []
+    prioritized_categories = []
     if query:
-        candidate_types = [
-            MediaTypes.MOVIE.value,
-            MediaTypes.TV.value,
-            MediaTypes.ANIME.value,
-            MediaTypes.MANGA.value,
-            MediaTypes.GAME.value,
-            MediaTypes.BOOK.value,
-            MediaTypes.COMIC.value,
-            MediaTypes.BOARDGAME.value,
-            MediaTypes.PODCAST.value,
-            MediaTypes.MUSIC.value,
+        prioritized_categories = [
+            {
+                "value": mt,
+                "display": media_type_readable_plural(mt),
+                "trigger": trigger,
+            }
+            for mt, trigger in SEARCH_ALL_PRIORITY_ORDER
+            if mt in enabled_types
         ]
-        active_types = [t for t in candidate_types if t in enabled_types]
-
-        search_targets = []
-        default_lang = metadata_resolution.metadata_language_default(request.user)
-        for mt in active_types:
-            source_options = metadata_resolution.available_metadata_sources(mt, request.user)
-            if not source_options:
-                continue
-            default_source = metadata_resolution.metadata_default_source(request.user, mt)
-            source = (
-                default_source
-                if default_source in {o.value for o in source_options}
-                else source_options[0].value
-            )
-            search_targets.append((mt, source))
-
-        def _search_target(target):
-            mt, source = target
-            try:
-                with services.interactive_request_scope():
-                    data = services.search(
-                        mt,
-                        query,
-                        1,
-                        source,
-                        language=default_lang,
-                    )
-            except Exception as exc:
-                logger.debug("Online search for %s failed: %s", mt, exception_summary(exc))
-                return mt, None
-            return mt, data
-
-        raw_data_map = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(search_targets) or 1, 8)) as executor:
-            futures = {executor.submit(_search_target, target): target[0] for target in search_targets}
-            for future in concurrent.futures.as_completed(futures):
-                mt, data = future.result()
-                if data:
-                    raw_data_map[mt] = data
-
-        for mt in active_types:
-            data = raw_data_map.get(mt)
-            if not data:
-                continue
-            if mt == MediaTypes.MUSIC.value:
-                res = [
-                    {
-                        "media_id": rel.get("release_id"),
-                        "title": rel.get("title"),
-                        "media_type": MediaTypes.MUSIC.value,
-                        "source": Sources.MUSICBRAINZ.value,
-                        "image": rel.get("image") or settings.IMG_NONE,
-                        "artist_name": rel.get("artist_name"),
-                        "release_date": rel.get("release_date"),
-                        "is_music_release": True,
-                    }
-                    for rel in data.get("releases", [])[:6]
-                ]
-                res.extend([
-                    {
-                        "media_id": art.get("artist_id"),
-                        "title": art.get("name"),
-                        "media_type": MediaTypes.MUSIC.value,
-                        "source": Sources.MUSICBRAINZ.value,
-                        "image": art.get("image") or settings.IMG_NONE,
-                        "artist_name": art.get("name"),
-                        "disambiguation": art.get("disambiguation"),
-                        "is_music_artist": True,
-                    }
-                    for art in data.get("artists", [])[:4]
-                ])
-                if res:
-                    all_results_by_type.append({
-                        "value": mt,
-                        "display": media_type_readable_plural(mt),
-                        "results": res,
-                        "total": len(res),
-                    })
-            else:
-                raw_results = data.get("results", [])[:8]
-                if raw_results:
-                    enriched = helpers.enrich_items_with_user_data(
-                        request,
-                        raw_results,
-                        section_name="search",
-                    )
-                    for r in enriched:
-                        r["matched_title"] = _matched_title(
-                            r.get("item"), query, request.user
-                        )
-                    all_results_by_type.append({
-                        "value": mt,
-                        "display": media_type_readable_plural(mt),
-                        "results": enriched,
-                        "total": len(enriched),
-                    })
-
-    total_online = sum(g["total"] for g in all_results_by_type)
-    flat_results = [item for g in all_results_by_type for item in g["results"]]
 
     context = {
         "user": request.user,
         "data": {
             "page": 1,
-            "total_results": total_online,
+            "total_results": 0,
             "total_pages": 1,
-            "results": flat_results,
+            "results": [],
         },
-        "all_results_by_type": all_results_by_type,
+        "all_results_by_type": [],
+        "prioritized_categories": prioritized_categories,
+        "query": query,
         "source": None,
         "source_options": [],
         "media_type": "all",
@@ -426,6 +343,112 @@ def _media_search_all(request, query, page, layout):
         "local_results_kind": "media",
     }
     return render(request, "app/search.html", context)
+
+
+@require_GET
+def media_search_group(request):
+    """Return an HTMX fragment containing search results for a single media type."""
+    media_type = request.GET.get("media_type", "").strip()
+    query = request.GET.get("q", "").strip()
+    layout = request.GET.get("layout", "grid")
+
+    if not query or media_type not in VALID_SEARCH_TYPES:
+        return HttpResponse("")
+
+    source_options = metadata_resolution.available_metadata_sources(
+        media_type, request.user
+    )
+    if not source_options:
+        return HttpResponse("")
+
+    default_source = metadata_resolution.metadata_default_source(
+        request.user, media_type
+    )
+    source = (
+        default_source
+        if default_source in {o.value for o in source_options}
+        else source_options[0].value
+    )
+    language = metadata_resolution.metadata_language_default(request.user)
+
+    try:
+        with services.interactive_request_scope():
+            data = services.search(
+                media_type,
+                query,
+                1,
+                source,
+                user=request.user,
+                language=language,
+            )
+    except Exception as exc:
+        logger.debug(
+            "Online search for %s failed: %s",
+            media_type,
+            exception_summary(exc),
+        )
+        return HttpResponse("")
+
+    if media_type == MediaTypes.MUSIC.value:
+        res = [
+            {
+                "media_id": rel.get("release_id"),
+                "title": rel.get("title"),
+                "media_type": MediaTypes.MUSIC.value,
+                "source": Sources.MUSICBRAINZ.value,
+                "image": rel.get("image") or settings.IMG_NONE,
+                "artist_name": rel.get("artist_name"),
+                "release_date": rel.get("release_date"),
+                "is_music_release": True,
+            }
+            for rel in data.get("releases", [])[:6]
+        ]
+        res.extend([
+            {
+                "media_id": art.get("artist_id"),
+                "title": art.get("name"),
+                "media_type": MediaTypes.MUSIC.value,
+                "source": Sources.MUSICBRAINZ.value,
+                "image": art.get("image") or settings.IMG_NONE,
+                "artist_name": art.get("name"),
+                "disambiguation": art.get("disambiguation"),
+                "is_music_artist": True,
+            }
+            for art in data.get("artists", [])[:4]
+        ])
+        results = res
+    else:
+        raw_results = data.get("results", [])[:8]
+        if raw_results:
+            results = helpers.enrich_items_with_user_data(
+                request,
+                raw_results,
+                section_name="search",
+            )
+            for r in results:
+                r["matched_title"] = _matched_title(
+                    r.get("item"), query, request.user
+                )
+        else:
+            results = []
+
+    if not results:
+        return HttpResponse("")
+
+    group = {
+        "value": media_type,
+        "display": media_type_readable_plural(media_type),
+        "results": results,
+        "total": len(results),
+    }
+
+    context = {
+        "group": group,
+        "query": query,
+        "layout": layout,
+        "user": request.user,
+    }
+    return render(request, "app/components/search_group_results.html", context)
 
 
 @require_GET

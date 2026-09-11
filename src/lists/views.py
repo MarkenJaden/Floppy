@@ -438,6 +438,8 @@ def list_detail(request, list_reference):
         else None,
         "items_count": total_items_count,
         "filtered_items_count": filtered_items_count,
+        "completion_percent": completion_percent,
+        "completed_count": completed_count,
         "current_sort": params["sort_by"],
         "current_direction": params["direction"],
         "chip_sort": chip_sort,
@@ -520,8 +522,6 @@ def list_detail(request, list_reference):
                     MediaTypes.values, key=lambda v: MediaTypes(v).label
                 ),
                 "collaborators_count": custom_list.collaborators.count() + 1,
-                "completion_percent": completion_percent,
-                "completed_count": completed_count,
                 "media_type_breakdown": media_type_breakdown,
             },
         )

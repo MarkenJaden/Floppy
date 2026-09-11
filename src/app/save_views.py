@@ -45,6 +45,10 @@ from app.templatetags.app_tags import media_url
 from app.track_modal_views import (
     _render_standard_track_modal,
 )
+from lists.collaborator_sync import (
+    sync_episode_to_list_collaborators,
+    sync_media_to_list_collaborators,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +312,7 @@ def media_save(request):
             media.item.image = image_url
             media.item.save(update_fields=["image"])
         logger.info("%s saved successfully.", media)
+        sync_media_to_list_collaborators(media, request.user)
         display_title = (
             media.item.get_display_title(request.user)
             if hasattr(media.item, "get_display_title")
@@ -1061,6 +1066,8 @@ def episode_save(request):
         related_season._sync_status_after_episode_change()
         cache_utils.clear_time_left_cache_for_user(related_season.user_id)
         cache_utils.clear_media_list_cache_for_user(related_season.user_id)
+
+    sync_episode_to_list_collaborators(episode, request.user)
 
     if request.headers.get("HX-Request"):
         episode_history = list(

@@ -1276,6 +1276,9 @@ class ListDetailViewTests(TestCase):
         trigger = json.loads(response["HX-Trigger"])
         self.assertEqual(trigger["listCountUpdated"]["count"], 3)
         self.assertEqual(trigger["listCountUpdated"]["label"], "3 items")
+        self.assertIn("completion_percent", response.context)
+        self.assertIn('id="list-completion-stats"', response.content.decode())
+        self.assertIn('hx-swap-oob="outerHTML"', response.content.decode())
 
     def test_list_detail_htmx_count_tracks_membership_toggle(self):
         """A refreshed manual-list response reports the committed item count."""

@@ -47,6 +47,11 @@ urlpatterns = [
     path("tags", views.tag_index, name="tag_index"),
     path("search", views.media_search, name="search"),
     path(
+        "search/group",
+        views.media_search_group,
+        name="search_group",
+    ),
+    path(
         "search/suggestions",
         views.search_suggestions,
         name="search_suggestions",

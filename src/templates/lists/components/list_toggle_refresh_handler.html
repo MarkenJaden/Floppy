@@ -2,29 +2,83 @@
   // The toggle swaps itself with hx-swap="outerHTML", so listen on the
   // persistent body and replace the prior handler after boosted navigation.
   (() => {
-    const itemsView = document.getElementById('items-view');
     if (window.__floppyListToggleRefreshHandler) {
       document.body.removeEventListener(
         'htmx:afterRequest',
         window.__floppyListToggleRefreshHandler,
       );
     }
+    if (window.__floppyListCloseModalRefreshHandler) {
+      document.body.removeEventListener(
+        'closeModal',
+        window.__floppyListCloseModalRefreshHandler,
+      );
+    }
+
+    let _refreshGridTimeout = null;
+    function scheduleRefresh() {
+      const itemsView = document.getElementById('items-view');
+      if (
+        itemsView
+        && itemsView.isConnected
+        && typeof refreshCustomListGrid === 'function'
+      ) {
+        if (_refreshGridTimeout) {
+          clearTimeout(_refreshGridTimeout);
+        }
+        _refreshGridTimeout = setTimeout(() => {
+          _refreshGridTimeout = null;
+          const currentItemsView = document.getElementById('items-view');
+          if (
+            currentItemsView
+            && currentItemsView.isConnected
+            && typeof refreshCustomListGrid === 'function'
+          ) {
+            refreshCustomListGrid();
+          }
+        }, 50);
+      }
+    }
+
     window.__floppyListToggleRefreshHandler = (event) => {
       const requestPath = event.detail && event.detail.pathInfo
         && event.detail.pathInfo.requestPath;
       if (
-        itemsView
-        && itemsView.isConnected
+        event.detail
         && event.detail.successful
         && requestPath
-        && requestPath.endsWith('/list_item_toggle')
+        && (
+          requestPath.endsWith('/list_item_toggle') ||
+          requestPath.includes('media_save') ||
+          requestPath.includes('episode_save') ||
+          requestPath.includes('episode_drop') ||
+          requestPath.includes('podcast_save') ||
+          requestPath.includes('song_save') ||
+          requestPath.includes('media_delete') ||
+          requestPath.includes('/media/save') ||
+          requestPath.includes('/episode/save') ||
+          requestPath.includes('/podcast/save') ||
+          requestPath.includes('/song/save') ||
+          requestPath.includes('/media/delete') ||
+          requestPath.includes('/episode/drop') ||
+          requestPath.includes('/score/') ||
+          requestPath.includes('/progress_edit/')
+        )
       ) {
-        refreshCustomListGrid();
+        scheduleRefresh();
       }
     };
     document.body.addEventListener(
       'htmx:afterRequest',
       window.__floppyListToggleRefreshHandler,
+    );
+
+    window.__floppyListCloseModalRefreshHandler = () => {
+      scheduleRefresh();
+    };
+    document.body.addEventListener(
+      'closeModal',
+      window.__floppyListCloseModalRefreshHandler,
     );
 
     if (window.__floppyListCountUpdatedHandler) {

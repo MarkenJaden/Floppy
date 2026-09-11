@@ -35,4 +35,7 @@
   <div id="list-results-summary" hx-swap-oob="true">
     {% include "lists/components/list_results_summary.html" %}
   </div>
+  {% if not is_pagination and completion_percent is not None %}
+    {% include "lists/components/list_completion_stats.html" with oob=True %}
+  {% endif %}
 {% endif %}

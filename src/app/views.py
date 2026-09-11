@@ -307,6 +307,7 @@ from app.score_views import (
 from app.search_views import (
     _mark_grouped_anime_route,
     media_search,
+    media_search_group,
     search_suggestions,
 )
 from app.season_details_views import season_details
@@ -2253,6 +2254,7 @@ __all__ = [
     "media_rewatch",
     "media_save",
     "media_search",
+    "media_search_group",
     "metadata_resolution",
     "metadata_utils",
     "migrate_grouped_anime",
