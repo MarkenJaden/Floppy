@@ -9,7 +9,7 @@ on:
       upstream_repo:
         description: 'Upstream repository (owner/repo)'
         required: false
-        default: 'MarkenJaden/Floppy'
+        default: 'dannyvfilms/Floppy'
       upstream_branch:
         description: 'Upstream branch to sync from'
         required: false
@@ -29,7 +29,7 @@ jobs:
   sync-and-validate:
     runs-on: ubuntu-latest
     env:
-      UPSTREAM_REPO: ${{ inputs.upstream_repo || 'MarkenJaden/Floppy' }}
+      UPSTREAM_REPO: ${{ inputs.upstream_repo || 'dannyvfilms/Floppy' }}
       UPSTREAM_BRANCH: ${{ inputs.upstream_branch || 'latest' }}
       TARGET_BRANCH: ${{ inputs.target_branch || 'latest' }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
