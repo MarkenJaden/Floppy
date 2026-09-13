@@ -18,7 +18,7 @@ from django.db.models import Q
 from django.http import Http404, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.utils.translation import gettext
+from django.utils.translation import gettext, ngettext
 from django.views.decorators.http import require_GET, require_POST
 
 from app import helpers
@@ -612,3 +612,249 @@ def fetch_release_year(request):
         )
 
     return JsonResponse({"year": None})
+
+
+@require_GET
+def collection_add_to_list_modal(request):
+    """Render modal to select multiple items or the entire collection to add to a custom list."""
+    source = request.GET.get("source")
+    media_type = request.GET.get("media_type")
+    media_id = request.GET.get("media_id")
+    collection_name = request.GET.get("collection_name", "").strip()
+
+    if not source or not media_type or not media_id:
+        return HttpResponseBadRequest("Missing required parameters")
+
+    try:
+        metadata = services.get_media_metadata(media_type, media_id, source)
+    except Exception as exc:
+        logger.warning("Failed to get metadata for collection modal: %s", exc)
+        metadata = {}
+
+    related = metadata.get("related") or {}
+    collection_items = related.get(collection_name)
+    if not collection_items:
+        for k, v in related.items():
+            if k not in ("seasons", "recommendations") and k.lower() == collection_name.lower():
+                collection_items = v
+                collection_name = k
+                break
+    if not collection_items:
+        for k, v in related.items():
+            if k not in ("seasons", "recommendations") and v:
+                collection_items = v
+                collection_name = k
+                break
+    collection_items = collection_items or []
+
+    custom_lists = (
+        CustomList.objects.filter(is_smart=False)
+        .filter(Q(owner=request.user) | Q(collaborators=request.user))
+        .distinct()
+        .order_by("name")
+    )
+
+    return render(
+        request,
+        "lists/components/collection_add_modal.html",
+        {
+            "collection_name": collection_name,
+            "collection_items": collection_items,
+            "custom_lists": custom_lists,
+            "source": source,
+            "media_type": media_type,
+            "parent_media_id": media_id,
+        },
+    )
+
+
+@require_POST
+def collection_add_to_list_submit(request):
+    """Add selected items from a collection to a custom list."""
+    custom_list_id = request.POST.get("custom_list_id")
+    source = request.POST.get("source")
+    media_type = request.POST.get("media_type")
+    parent_media_id = request.POST.get("parent_media_id")
+    collection_name = request.POST.get("collection_name", "").strip()
+    selected_media_ids = request.POST.getlist("selected_media_ids")
+
+    if not custom_list_id:
+        response = HttpResponse("")
+        response["HX-Trigger"] = json.dumps({
+            "showToast": {
+                "message": gettext("Please select a list."),
+                "type": "error",
+            }
+        })
+        return response
+
+    if not selected_media_ids:
+        response = HttpResponse("")
+        response["HX-Trigger"] = json.dumps({
+            "showToast": {
+                "message": gettext("Please select at least one item."),
+                "type": "error",
+            }
+        })
+        return response
+
+    custom_list = get_object_or_404(
+        CustomList.objects.filter(
+            Q(owner=request.user) | Q(collaborators=request.user),
+            id=custom_list_id,
+        ).distinct(),
+    )
+
+    if custom_list.is_smart:
+        return HttpResponse(status=403)
+
+    discover_tab_cache.mark_active_from_request(
+        request,
+        fallback_media_type=media_type,
+    )
+
+    collection_items_by_id = {}
+    ordered_ids = []
+    if parent_media_id and source and media_type:
+        try:
+            parent_meta = services.get_media_metadata(media_type, parent_media_id, source)
+            related = parent_meta.get("related") or {}
+            c_items = related.get(collection_name)
+            if not c_items:
+                for k, v in related.items():
+                    if k not in ("seasons", "recommendations") and k.lower() == collection_name.lower():
+                        c_items = v
+                        break
+            if not c_items:
+                for k, v in related.items():
+                    if k not in ("seasons", "recommendations") and v:
+                        c_items = v
+                        break
+            for item_dict in (c_items or []):
+                if isinstance(item_dict, dict) and "media_id" in item_dict:
+                    mid_key = str(item_dict["media_id"])
+                    collection_items_by_id[mid_key] = item_dict
+                    ordered_ids.append(mid_key)
+        except Exception as exc:
+            logger.warning("Failed to retrieve collection items from parent metadata: %s", exc)
+
+    if ordered_ids:
+        order_index = {mid: i for i, mid in enumerate(ordered_ids)}
+        selected_media_ids = sorted(
+            selected_media_ids,
+            key=lambda mid: order_index.get(str(mid), 999),
+        )
+
+    items_to_add = []
+    for mid in selected_media_ids:
+        mid_str = str(mid)
+        item = Item.objects.filter(
+            media_id=mid_str,
+            source=source,
+            media_type=media_type,
+        ).first()
+
+        if not item:
+            item_meta = collection_items_by_id.get(mid_str)
+            if item_meta:
+                release_datetime = helpers.extract_release_datetime(item_meta)
+                item = Item.objects.create(
+                    media_id=mid_str,
+                    source=source,
+                    media_type=media_type,
+                    image=item_meta.get("image", ""),
+                    release_datetime=release_datetime,
+                    **_list_item_title_fields_from_metadata(media_type, item_meta),
+                )
+            else:
+                try:
+                    meta = services.get_media_metadata(media_type, mid_str, source)
+                    release_datetime = helpers.extract_release_datetime(meta)
+                    item = Item.objects.create(
+                        media_id=mid_str,
+                        source=source,
+                        media_type=media_type,
+                        image=meta.get("image", ""),
+                        release_datetime=release_datetime,
+                        **_list_item_title_fields_from_metadata(media_type, meta),
+                    )
+                except Exception as exc:
+                    logger.warning("Could not create item for media_id %s: %s", mid_str, exc)
+                    continue
+
+        if item:
+            items_to_add.append(item)
+
+    added_count = 0
+    already_count = 0
+
+    try:
+        with transaction.atomic():
+            CustomListItem.objects.lock_custom_lists([custom_list.id])
+            existing_item_ids = set(
+                custom_list.items.filter(
+                    id__in=[it.id for it in items_to_add],
+                ).values_list("id", flat=True),
+            )
+            for item in items_to_add:
+                if item.id in existing_item_ids:
+                    already_count += 1
+                else:
+                    CustomListItem.objects.create(
+                        custom_list=custom_list,
+                        item=item,
+                        added_by=request.user,
+                    )
+                    ListActivity.objects.create(
+                        custom_list=custom_list,
+                        user=request.user,
+                        activity_type=ListActivityType.ITEM_ADDED,
+                        item=item,
+                    )
+                    added_count += 1
+        logger.info(
+            "Added %d items from collection '%s' to %s (skipped %d existing).",
+            added_count,
+            collection_name,
+            custom_list,
+            already_count,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to add collection items to list (custom_list_id=%s, user_id=%s)",
+            custom_list.id,
+            request.user.id,
+        )
+        response = HttpResponse("")
+        response["HX-Trigger"] = json.dumps({
+            "showToast": {
+                "message": gettext("Couldn't add items to this list — please try again."),
+                "type": "error",
+            },
+        })
+        return response
+
+    if added_count > 0 and already_count == 0:
+        msg = ngettext(
+            "%(count)d item added to %(list)s.",
+            "%(count)d items added to %(list)s.",
+            added_count,
+        ) % {"count": added_count, "list": custom_list.name}
+    elif added_count > 0 and already_count > 0:
+        msg = ngettext(
+            "%(count)d item added to %(list)s (%(skipped)d already on list).",
+            "%(count)d items added to %(list)s (%(skipped)d already on list).",
+            added_count,
+        ) % {"count": added_count, "list": custom_list.name, "skipped": already_count}
+    else:
+        msg = gettext('All selected items are already in "%(list)s".') % {"list": custom_list.name}
+
+    response = HttpResponse("")
+    response["HX-Trigger"] = json.dumps({
+        "showToast": {
+            "message": msg,
+            "type": "success" if added_count > 0 else "info",
+        },
+    })
+    return response
+

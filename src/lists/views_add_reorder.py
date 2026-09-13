@@ -23,6 +23,7 @@ from app import helpers
 from app.discover import tab_cache as discover_tab_cache
 from app.models import Item, MediaTypes
 from app.providers import services
+from app.search_views import SEARCH_ALL_PRIORITY_ORDER
 from lists.models import (
     CustomList,
     CustomListItem,
@@ -68,9 +69,9 @@ def add_list_item_page(request, list_id):
     enabled_media_types = request.user.get_enabled_media_types()
 
     initial_query = request.GET.get("q", "").strip()
-    initial_media_type = request.GET.get("media_type") or enabled_media_types[0]
-    if initial_media_type not in enabled_media_types:
-        initial_media_type = enabled_media_types[0]
+    initial_media_type = request.GET.get("media_type") or "all"
+    if initial_media_type not in enabled_media_types and initial_media_type != "all":
+        initial_media_type = "all"
 
     try:
         initial_page = int(request.GET.get("page", 1))
@@ -176,14 +177,9 @@ def add_list_item_search(request, list_id):
         return render(request, "lists/components/add_item_preview_modal.html", context)
 
     query = request.GET.get("q", "").strip()
-    media_type = request.GET.get("media_type") or MediaTypes.TV.value
-    if media_type not in MediaTypes.values and media_type != "tv_with_seasons":
-        media_type = MediaTypes.TV.value
-
-    try:
-        page = int(request.GET.get("page", 1))
-    except (TypeError, ValueError):
-        page = 1
+    media_type = request.GET.get("media_type") or "all"
+    group = request.GET.get("group", "").strip()
+    enabled_media_types = request.user.get_enabled_media_types()
 
     if not query or len(query) < MIN_SEARCH_QUERY_LENGTH:
         return render(
@@ -192,12 +188,80 @@ def add_list_item_search(request, list_id):
             {"results": [], "custom_list": custom_list},
         )
 
+    # 1. Single group requested as part of progressive "all" search
+    if group:
+        if group not in enabled_media_types:
+            return HttpResponse("")
+
+        from app import config
+
+        source = config.get_default_source_name(group).value
+        try:
+            with services.interactive_request_scope():
+                data = services.search(group, query, 1, source, user=request.user)
+        except Exception as exc:
+            logger.debug(
+                "Quick add group search failed: list_id=%s group=%s query=%s error=%s",
+                custom_list.id,
+                group,
+                query,
+                exc,
+            )
+            return HttpResponse("")
+
+        results, _ = _extract_list_search_results(group, data)
+        if not results:
+            return HttpResponse("")
+
+        results = results[:6]
+        existing_items = set(
+            custom_list.items.values_list("media_id", "source"),
+        )
+        for result in results:
+            key = (str(result["media_id"]), result["source"])
+            result["already_in_list"] = key in existing_items
+
+        enriched_results = helpers.enrich_items_with_user_data(request, results)
+        preview_url = reverse("list_add_item_search", kwargs={"list_id": custom_list.id})
+        context = {
+            "results": enriched_results,
+            "custom_list": custom_list,
+            "media_type": group,
+            "query": query,
+            "total_count": len(enriched_results),
+            "search_preview_url": preview_url,
+        }
+        return render(request, "lists/components/add_item_search_group.html", context)
+
+    # 2. Multi-category progressive search when media_type == "all"
+    if media_type == "all":
+        prioritized_categories = [
+            {"value": mt, "trigger": trigger}
+            for mt, trigger in SEARCH_ALL_PRIORITY_ORDER
+            if mt in enabled_media_types
+        ]
+
+        context = {
+            "custom_list": custom_list,
+            "query": query,
+            "prioritized_categories": prioritized_categories,
+        }
+        return render(request, "lists/components/add_item_search_all.html", context)
+
+    if media_type not in MediaTypes.values and media_type != "tv_with_seasons":
+        media_type = MediaTypes.TV.value
+
+    try:
+        page = int(request.GET.get("page", 1))
+    except (TypeError, ValueError):
+        page = 1
+
     from app import config
 
     source = config.get_default_source_name(media_type).value
 
     try:
-        data = services.search(media_type, query, page, source)
+        data = services.search(media_type, query, page, source, user=request.user)
     except Exception as exc:
         logger.exception(
             "Quick add search failed: list_id=%s media_type=%s query=%s",

@@ -328,7 +328,20 @@
                        x-data="{ detailGridExpanded: false, detailGridVisibleCount: 0, syncDetailGrid() { this.$nextTick(() => { const grid = this.$refs.detailGrid; if (!grid) return; const templateColumns = window.getComputedStyle(grid).gridTemplateColumns || ''; const columnCount = templateColumns.split(' ').filter(Boolean).length || 1; this.detailGridVisibleCount = Math.max(columnCount, 1) * 2; }); }, shouldShowDetailCard(index) { return this.detailGridExpanded || index < this.detailGridVisibleCount; }, canToggleDetailGrid(total) { return this.detailGridVisibleCount > 0 && total > this.detailGridVisibleCount; } }"
                        x-init="syncDetailGrid()"
                        @resize.window.debounce.100ms="syncDetailGrid()">
-                <h2 class="text-xl font-bold mb-4">{{ name|no_underscore|title }}</h2>
+                <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+                  <h2 class="text-xl font-bold">{{ name|no_underscore|title }}</h2>
+                  {% if not public_view|default:False and user.is_authenticated %}
+                    <button type="button"
+                            hx-get="{% url 'collection_add_to_list_modal' %}?source={{ media.source|urlencode }}&media_type={{ media.media_type|urlencode }}&media_id={{ media.media_id|urlencode }}&collection_name={{ name|urlencode }}"
+                            hx-target="#collection-modal-container"
+                            hx-swap="innerHTML"
+                            title="{% translate "Add collection to list" %}"
+                            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-[var(--color-surface-border)] bg-[var(--color-surface)] text-[var(--color-text)] hover:bg-[var(--color-surface-muted)] transition-colors cursor-pointer">
+                      {% include "app/icons/list-add.svg" with classes="w-4 h-4" %}
+                      <span>{% translate "Add to list" %}</span>
+                    </button>
+                  {% endif %}
+                </div>
                 <div x-ref="detailGrid" class="detail-media-grid">
                   {% for result in related_items %}
                     <div x-show="shouldShowDetailCard({{ forloop.counter0 }})">
@@ -547,3 +560,4 @@
   {% include "app/components/_episode_scroll_restore.html" %}
 {% endif %}
 {% include "app/components/_scrollable_row_js.html" %}
+<div id="collection-modal-container"></div>

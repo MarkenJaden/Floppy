@@ -1,0 +1,22 @@
+{% load i18n %}
+{% load app_tags %}
+{# djlint:off #}
+<div class="mb-8" id="add-item-group-{{ media_type }}">
+  <div class="flex items-center justify-between mb-3 border-b border-[var(--color-border)] pb-2">
+    <h3 class="text-base font-semibold text-[var(--color-text)] flex items-center gap-2">
+      <span>{{ media_type|media_type_readable_plural }}</span>
+      <span class="text-xs px-2 py-0.5 rounded-full bg-[var(--color-surface-strong)] text-[var(--color-text-muted)]">{{ total_count }}</span>
+    </h3>
+    <button type="button"
+            @click="selectedType = mediaTypes.find(t => t.value === '{{ media_type }}') || selectedType; $nextTick(() => htmx.trigger('#add-item-search-form', 'submit'))"
+            class="text-xs text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer transition-colors">
+      {% blocktranslate trimmed with type=media_type|media_type_readable_plural %}View all {{ type }}{% endblocktranslate %}
+    </button>
+  </div>
+  <div class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-4">
+    {% for result in results %}
+      {% include "app/components/media_card.html" with item=result.item title=result.item.title media=result.media user=user is_recommend_mode=True secondary_color=True from_grid=True search_preview_url=search_preview_url search_modal_target="#add-item-modal-container" %}
+    {% endfor %}
+  </div>
+</div>
+{# djlint:on #}

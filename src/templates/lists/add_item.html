@@ -21,12 +21,24 @@
       <p class="text-[var(--color-text-muted)]">{% blocktranslate trimmed with value_1=custom_list.name %}Search for media to add directly to "{{ value_1 }}"{% endblocktranslate %}</p>
     </div>
 
-    {% translate "Search " as media_i18n_79 %}<div class="bg-[var(--color-surface)] rounded-lg p-6"
+    {% translate "Search " as media_i18n_79 %}
+    {% translate "Search across all media..." as search_all_placeholder %}
+    <div class="bg-[var(--color-surface)] rounded-lg p-6"
          x-data="{
-           selectedType: { display: '{{ initial_media_type|media_type_readable }}', value: '{{ initial_media_type }}' },
-           mediaTypes: [{% for media_type in media_types %}{ display: '{{ media_type|media_type_readable }}', value: '{{ media_type }}' }{% if not forloop.last %},{% endif %}{% endfor %}],
+           selectedType: {% if initial_media_type == 'all' %}{ display: '{% translate "All" %}', value: 'all' }{% else %}{ display: '{{ initial_media_type|media_type_readable_plural }}', value: '{{ initial_media_type }}' }{% endif %},
+           mediaTypes: [
+             { display: '{% translate "All" %}', value: 'all' },
+             {% for media_type in media_types %}
+               { display: '{{ media_type|media_type_readable_plural }}', value: '{{ media_type }}' }{% if not forloop.last %},{% endif %}
+             {% endfor %}
+           ],
            isOpen: false,
-           getPlaceholder() { return '{{ media_i18n_79|escapejs }}' + this.selectedType.display.toLowerCase() + '...'; }
+           getPlaceholder() {
+             if (this.selectedType.value === 'all') {
+               return '{{ search_all_placeholder|escapejs }}';
+             }
+             return '{{ media_i18n_79|escapejs }}' + this.selectedType.display.toLowerCase() + '...';
+           }
          }">
 
       <form id="add-item-search-form"

@@ -23,7 +23,7 @@ from app.models import (
 )
 from lists import smart_rules
 from lists.feeds import FloppyRssFeed
-from lists.models import CustomList, CustomListItem, ListActivity
+from lists.models import CustomList, CustomListItem, ListActivity, ListActivityType
 from users.models import DateFormatChoices
 
 
@@ -4135,3 +4135,254 @@ class QuickAddListItemTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Test Track - Test Artist")
         self.assertContains(response, "Showing page 1 of 3")
+
+    def test_add_list_item_page_defaults_to_all_media_type(self):
+        """Add item page should default to 'all' and include All in media choices."""
+        response = self.client.get(reverse("list_add_item", args=[self.custom_list.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["initial_media_type"], "all")
+        self.assertContains(response, "Search across all media...")
+
+    def test_add_list_item_search_all_renders_progressive_container(self):
+        """Searching with media_type=all should render the progressive loader."""
+        response = self.client.get(
+            reverse("list_add_item_search", args=[self.custom_list.id]),
+            {"q": "matrix", "media_type": "all"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "lists/components/add_item_search_all.html")
+        self.assertIn("prioritized_categories", response.context)
+        self.assertTrue(len(response.context["prioritized_categories"]) > 0)
+        self.assertContains(response, 'id="all-search-groups"')
+
+    @patch("lists.views_add_reorder.services.search")
+    def test_add_list_item_search_group_renders_results(self, mock_search):
+        """Single category group search should render add_item_search_group template."""
+        mock_search.return_value = {
+            "results": [
+                {
+                    "media_id": 603,
+                    "source": Sources.TMDB.value,
+                    "media_type": MediaTypes.MOVIE.value,
+                    "title": "The Matrix",
+                    "image": "https://example.com/matrix.jpg",
+                },
+            ],
+            "total_pages": 1,
+        }
+        response = self.client.get(
+            reverse("list_add_item_search", args=[self.custom_list.id]),
+            {"q": "matrix", "group": MediaTypes.MOVIE.value},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "lists/components/add_item_search_group.html")
+        self.assertContains(response, 'id="add-item-group-movie"')
+        self.assertContains(response, "The Matrix")
+        self.assertContains(response, "View all Movies")
+
+
+class CollectionAddToListTests(TestCase):
+    """Tests for the collection add-to-list modal and submit views."""
+
+    def setUp(self):
+        """Set up test data."""
+        self.client = Client()
+        self.user = get_user_model().objects.create_user(
+            username="collection_user",
+            password="password123",
+        )
+        self.other_user = get_user_model().objects.create_user(
+            username="other_user",
+            password="password123",
+        )
+        self.client.login(username="collection_user", password="password123")
+
+        self.custom_list = CustomList.objects.create(
+            name="My Movie List",
+            owner=self.user,
+        )
+        self.smart_list = CustomList.objects.create(
+            name="Smart List",
+            owner=self.user,
+            is_smart=True,
+        )
+        self.other_list = CustomList.objects.create(
+            name="Other User List",
+            owner=self.other_user,
+        )
+
+        self.mock_collection_parts = [
+            {
+                "source": Sources.TMDB.value,
+                "media_type": MediaTypes.MOVIE.value,
+                "media_id": "603",
+                "title": "The Matrix",
+                "original_title": "The Matrix",
+                "localized_title": "The Matrix",
+                "year": "1999",
+                "image": "http://example.com/matrix.jpg",
+            },
+            {
+                "source": Sources.TMDB.value,
+                "media_type": MediaTypes.MOVIE.value,
+                "media_id": "604",
+                "title": "The Matrix Reloaded",
+                "original_title": "The Matrix Reloaded",
+                "localized_title": "The Matrix Reloaded",
+                "year": "2003",
+                "image": "http://example.com/reloaded.jpg",
+            },
+            {
+                "source": Sources.TMDB.value,
+                "media_type": MediaTypes.MOVIE.value,
+                "media_id": "605",
+                "title": "The Matrix Revolutions",
+                "original_title": "The Matrix Revolutions",
+                "localized_title": "The Matrix Revolutions",
+                "year": "2003",
+                "image": "http://example.com/revolutions.jpg",
+            },
+        ]
+
+    def test_collection_modal_requires_login(self):
+        """Unauthenticated request to collection modal redirects to login."""
+        self.client.logout()
+        response = self.client.get(reverse("collection_add_to_list_modal"))
+        self.assertEqual(response.status_code, 302)
+
+    def test_collection_modal_missing_params(self):
+        """Request without required parameters returns 400."""
+        response = self.client.get(reverse("collection_add_to_list_modal"))
+        self.assertEqual(response.status_code, 400)
+
+    @patch("lists.views_list_actions.services.get_media_metadata")
+    def test_collection_modal_renders_items_and_lists(self, mock_get_metadata):
+        """Modal returns 200 with collection items and user's editable lists."""
+        mock_get_metadata.return_value = {
+            "related": {
+                "The Matrix Collection": self.mock_collection_parts,
+            },
+        }
+        response = self.client.get(
+            reverse("collection_add_to_list_modal"),
+            {
+                "source": Sources.TMDB.value,
+                "media_type": MediaTypes.MOVIE.value,
+                "media_id": "603",
+                "collection_name": "The Matrix Collection",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "lists/components/collection_add_modal.html")
+        self.assertEqual(len(response.context["collection_items"]), 3)
+        self.assertIn(self.custom_list, response.context["custom_lists"])
+        self.assertNotIn(self.smart_list, response.context["custom_lists"])
+        self.assertNotIn(self.other_list, response.context["custom_lists"])
+        self.assertContains(response, "The Matrix Reloaded")
+
+    def test_collection_submit_requires_login(self):
+        """Unauthenticated submission redirects to login."""
+        self.client.logout()
+        response = self.client.post(reverse("collection_add_to_list_submit"))
+        self.assertEqual(response.status_code, 302)
+
+    def test_collection_submit_empty_custom_list(self):
+        """Submitting without custom list returns error toast."""
+        response = self.client.post(
+            reverse("collection_add_to_list_submit"),
+            {"selected_media_ids": ["603"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("HX-Trigger", response.headers)
+        trigger = json.loads(response.headers["HX-Trigger"])
+        self.assertEqual(trigger["showToast"]["type"], "error")
+
+    def test_collection_submit_empty_selected_items(self):
+        """Submitting without selected items returns error toast."""
+        response = self.client.post(
+            reverse("collection_add_to_list_submit"),
+            {"custom_list_id": self.custom_list.id},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("HX-Trigger", response.headers)
+        trigger = json.loads(response.headers["HX-Trigger"])
+        self.assertEqual(trigger["showToast"]["type"], "error")
+
+    def test_collection_submit_smart_list_forbidden(self):
+        """Attempting to add to a smart list returns 403."""
+        response = self.client.post(
+            reverse("collection_add_to_list_submit"),
+            {
+                "custom_list_id": self.smart_list.id,
+                "selected_media_ids": ["603"],
+            },
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_collection_submit_other_user_list_404(self):
+        """Attempting to add to another user's list returns 404."""
+        response = self.client.post(
+            reverse("collection_add_to_list_submit"),
+            {
+                "custom_list_id": self.other_list.id,
+                "selected_media_ids": ["603"],
+            },
+        )
+        self.assertEqual(response.status_code, 404)
+
+    @patch("lists.views_list_actions.services.get_media_metadata")
+    def test_collection_submit_adds_items_and_handles_duplicates(self, mock_get_metadata):
+        """Submitting adds items to the custom list, creates Item objects, and ignores existing items."""
+        mock_get_metadata.return_value = {
+            "related": {
+                "The Matrix Collection": self.mock_collection_parts,
+            },
+        }
+
+        # Pre-create one item and add it to the list
+        existing_item = Item.objects.create(
+            media_id="603",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.MOVIE.value,
+            title="The Matrix",
+        )
+        CustomListItem.objects.create(
+            custom_list=self.custom_list,
+            item=existing_item,
+            added_by=self.user,
+        )
+
+        response = self.client.post(
+            reverse("collection_add_to_list_submit"),
+            {
+                "custom_list_id": self.custom_list.id,
+                "source": Sources.TMDB.value,
+                "media_type": MediaTypes.MOVIE.value,
+                "parent_media_id": "603",
+                "collection_name": "The Matrix Collection",
+                "selected_media_ids": ["603", "604", "605"],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("HX-Trigger", response.headers)
+        trigger = json.loads(response.headers["HX-Trigger"])
+        self.assertEqual(trigger["showToast"]["type"], "success")
+        self.assertIn("2", trigger["showToast"]["message"])
+        self.assertIn("1", trigger["showToast"]["message"])
+
+        # Check total items in custom list is 3 (1 existing + 2 newly added)
+        self.assertEqual(self.custom_list.items.count(), 3)
+        self.assertTrue(
+            self.custom_list.items.filter(media_id="604", title="The Matrix Reloaded").exists()
+        )
+        self.assertTrue(
+            self.custom_list.items.filter(media_id="605", title="The Matrix Revolutions").exists()
+        )
+
+        # Check ListActivity records
+        activities = ListActivity.objects.filter(
+            custom_list=self.custom_list,
+            activity_type=ListActivityType.ITEM_ADDED,
+        )
+        self.assertEqual(activities.count(), 2)
+

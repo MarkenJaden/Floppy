@@ -49,6 +49,16 @@ urlpatterns = [
     ),
     path("list/delete", views_list_actions.delete, name="list_delete"),
     path("list/import-csv", views_list_actions.import_list_csv, name="list_import_csv"),
+    path(
+        "list/collection-modal",
+        views_list_actions.collection_add_to_list_modal,
+        name="collection_add_to_list_modal",
+    ),
+    path(
+        "list/collection-submit",
+        views_list_actions.collection_add_to_list_submit,
+        name="collection_add_to_list_submit",
+    ),
     path("list/<slug:list_reference>", views.list_detail, name="list_detail"),
     path("list/<slug:list_reference>/rss", feeds.list_rss_feed, name="list_rss"),
     path("list/<slug:list_reference>/json", feeds.list_json, name="list_json"),

@@ -2006,6 +2006,7 @@ def get_collection(collection_response):
             "original_title": get_original_title(media),
             "localized_title": get_localized_title(media),
             "year": get_year(media),
+            "release_date": media.get("release_date"),
         }
         for media in parts
     ]

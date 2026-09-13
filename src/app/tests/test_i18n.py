@@ -29,6 +29,8 @@ class GermanPresentationTests(SimpleTestCase):
     def test_labels_are_localized_without_changing_status_values(self):
         with translation.override("de"):
             self.assertEqual(media_type_readable(MediaTypes.MOVIE), "Film")
+            self.assertEqual(media_type_readable("all"), "Alle")
+            self.assertEqual(media_type_readable_plural("all"), "Alle")
             self.assertEqual(media_type_readable_plural(MediaTypes.BOOK), "Bücher")
             self.assertEqual(media_status_readable(Status.PLANNING), "Geplant")
             choices = dict(MovieForm().fields["status"].choices)
@@ -53,7 +55,7 @@ class GermanPresentationTests(SimpleTestCase):
         engine = engines["django"].engine
         for path in (settings.BASE_DIR / "templates").rglob("*.html"):
             with self.subTest(template=str(path)):
-                engine.from_string(path.read_text())
+                engine.from_string(path.read_text(encoding="utf-8"))
 
     def test_language_does_not_leak_to_next_request(self):
         factory = RequestFactory()

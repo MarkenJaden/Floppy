@@ -338,6 +338,8 @@ def source_readable(source):
 @register.filter
 def media_type_readable(media_type):
     """Return the readable media type."""
+    if str(media_type).lower() == "all":
+        return _("All")
     return _(MediaTypes(media_type).label)
 
 

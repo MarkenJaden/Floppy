@@ -1,0 +1,43 @@
+{% load i18n %}
+{# djlint:off #}
+<div id="all-search-groups" class="space-y-6">
+  {% for group in prioritized_categories %}
+    <div id="add-item-group-{{ group.value }}"
+         hx-get="{% url 'list_add_item_search' custom_list.id %}?q={{ query|urlencode }}&group={{ group.value }}"
+         hx-trigger="{{ group.trigger }}"
+         hx-swap="outerHTML">
+      <div class="p-4 rounded-lg bg-[var(--color-surface-strong)] border border-[var(--color-border)] opacity-60 animate-pulse">
+        <div class="flex items-center justify-between mb-4">
+          <div class="h-5 w-28 bg-[var(--color-surface)] rounded"></div>
+          <div class="h-4 w-16 bg-[var(--color-surface)] rounded"></div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+          <div class="aspect-[2/3] bg-[var(--color-surface)] rounded-lg"></div>
+          <div class="aspect-[2/3] bg-[var(--color-surface)] rounded-lg"></div>
+          <div class="aspect-[2/3] bg-[var(--color-surface)] rounded-lg"></div>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+  <div id="add-item-all-empty" class="hidden text-center py-12 text-[var(--color-text-muted)]">
+    <div class="bg-[var(--color-surface-strong)] rounded-full p-4 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+      {% include "app/icons/magnifying-glass.svg" with classes="w-8 h-8 text-[var(--color-text-muted)]" %}
+    </div>
+    <p>{% blocktranslate trimmed with value_1=query %}No results found for "{{ value_1 }}"{% endblocktranslate %}</p>
+    <p class="text-sm mt-2">{% translate "Try a different search term" %}</p>
+  </div>
+</div>
+<script>
+  document.body.addEventListener('htmx:afterSettle', function() {
+    const c = document.getElementById('all-search-groups');
+    if (!c) return;
+    const stillLoading = c.querySelector('.animate-pulse');
+    if (stillLoading) return;
+    const cards = c.querySelectorAll('.media-card');
+    const empty = document.getElementById('add-item-all-empty');
+    if (empty && cards.length === 0) {
+      empty.classList.remove('hidden');
+    }
+  });
+</script>
+{# djlint:on #}

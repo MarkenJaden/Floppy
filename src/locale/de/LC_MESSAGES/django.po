@@ -12221,3 +12221,55 @@ msgstr "Filtern nach:"
 msgid "Enter a search term above to find media across all categories."
 msgstr "Gib oben einen Suchbegriff ein, um medienübergreifend zu suchen."
 
+msgid "Search across all media..."
+msgstr "Alle Medien durchsuchen..."
+
+msgid "Add Collection to List"
+msgstr "Collection zur Liste hinzufügen"
+
+msgid "Add collection to list"
+msgstr "Collection zur Liste hinzufügen"
+
+msgid "Add to list"
+msgstr "Zur Liste hinzufügen"
+
+msgid "Target List"
+msgstr "Zielliste"
+
+msgid "Select all"
+msgstr "Alle auswählen"
+
+msgid "selected"
+msgstr "ausgewählt"
+
+msgid "No items found in this collection."
+msgstr "Keine Einträge in dieser Collection gefunden."
+
+msgid "You haven't created any editable lists yet."
+msgstr "Du hast noch keine bearbeitbaren Listen erstellt."
+
+msgid "Go to Lists"
+msgstr "Zu den Listen"
+
+msgid "Please select a list."
+msgstr "Bitte wähle eine Liste aus."
+
+msgid "Please select at least one item."
+msgstr "Bitte wähle mindestens einen Eintrag aus."
+
+msgid "Couldn't add items to this list — please try again."
+msgstr "Einträge konnten nicht zur Liste hinzugefügt werden – bitte versuche es erneut."
+
+msgid "%(count)d item added to %(list)s."
+msgid_plural "%(count)d items added to %(list)s."
+msgstr[0] "%(count)d Eintrag zu %(list)s hinzugefügt."
+msgstr[1] "%(count)d Einträge zu %(list)s hinzugefügt."
+
+msgid "%(count)d item added to %(list)s (%(skipped)d already on list)."
+msgid_plural "%(count)d items added to %(list)s (%(skipped)d already on list)."
+msgstr[0] "%(count)d Eintrag zu %(list)s hinzugefügt (%(skipped)d bereits auf der Liste)."
+msgstr[1] "%(count)d Einträge zu %(list)s hinzugefügt (%(skipped)d bereits auf der Liste)."
+
+msgid "All selected items are already in \"%(list)s\"."
+msgstr "Alle ausgewählten Einträge sind bereits in „%(list)s“."
+

@@ -1,0 +1,136 @@
+{% load i18n %}
+{% load app_tags %}
+
+<div x-data="{
+       open: true,
+       selected: [{% for item in collection_items %}'{{ item.media_id }}'{% if not forloop.last %}, {% endif %}{% endfor %}],
+       allIds: [{% for item in collection_items %}'{{ item.media_id }}'{% if not forloop.last %}, {% endif %}{% endfor %}],
+       toggleAll() {
+         if (this.selected.length === this.allIds.length) {
+           this.selected = [];
+         } else {
+           this.selected = [...this.allIds];
+         }
+       }
+     }"
+     x-show="open"
+     x-cloak
+     class="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
+     @keydown.escape.window="open = false; document.getElementById('collection-modal-container').innerHTML = ''">
+  <div @click.outside="open = false; document.getElementById('collection-modal-container').innerHTML = ''"
+       class="bg-[var(--color-surface)] border border-[var(--color-surface-border)] rounded-xl max-w-lg w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl"
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0 scale-95"
+       x-transition:enter-end="opacity-100 scale-100"
+       x-transition:leave="transition ease-in duration-100"
+       x-transition:leave-start="opacity-100 scale-100"
+       x-transition:leave-end="opacity-0 scale-95">
+
+    {# Header #}
+    <div class="flex items-center justify-between p-4 border-b border-[var(--color-surface-border)]">
+      <div class="min-w-0 pr-2">
+        <h2 class="text-lg font-bold text-[var(--color-text)] truncate">{% translate "Add Collection to List" %}</h2>
+        <p class="text-xs text-[var(--color-text-muted)] truncate">{{ collection_name|no_underscore|title }}</p>
+      </div>
+      <button type="button"
+              @click="open = false; document.getElementById('collection-modal-container').innerHTML = ''"
+              class="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-strong)] rounded-lg transition-colors cursor-pointer">
+        {% include "app/icons/x.svg" with classes="w-5 h-5" %}
+      </button>
+    </div>
+
+    {% if not custom_lists %}
+      {# No lists available #}
+      <div class="p-6 text-center space-y-4">
+        <p class="text-[var(--color-text-muted)]">{% translate "You haven't created any editable lists yet." %}</p>
+        <a href="{% url 'lists' %}" class="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
+          {% translate "Go to Lists" %}
+        </a>
+      </div>
+    {% else %}
+      <form hx-post="{% url 'collection_add_to_list_submit' %}"
+            hx-target="#collection-modal-container"
+            hx-swap="innerHTML"
+            class="flex flex-col flex-1 min-h-0">
+        {% csrf_token %}
+        <input type="hidden" name="source" value="{{ source }}">
+        <input type="hidden" name="media_type" value="{{ media_type }}">
+        <input type="hidden" name="parent_media_id" value="{{ parent_media_id }}">
+        <input type="hidden" name="collection_name" value="{{ collection_name }}">
+
+        {# Body #}
+        <div class="p-4 space-y-4 flex-1 overflow-y-auto">
+          {# Target list select #}
+          <div>
+            <label for="collection-target-list" class="block text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5">
+              {% translate "Target List" %}
+            </label>
+            <select name="custom_list_id"
+                    id="collection-target-list"
+                    class="w-full px-3 py-2 bg-[var(--color-panel)] border border-[var(--color-surface-border)] rounded-lg text-[var(--color-text)] text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent cursor-pointer">
+              {% for cl in custom_lists %}
+                <option value="{{ cl.id }}">{{ cl.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          {# Select all toggle & counter #}
+          <div>
+            <div class="flex items-center justify-between pb-2 border-b border-[var(--color-surface-border)] mb-2">
+              <label class="inline-flex items-center gap-2 text-sm font-medium text-[var(--color-text)] cursor-pointer">
+                <input type="checkbox"
+                       class="rounded border-gray-600 text-indigo-600 focus:ring-indigo-500 bg-[var(--color-panel)]"
+                       :checked="selected.length === allIds.length && allIds.length > 0"
+                       @change="toggleAll()">
+                <span>{% translate "Select all" %}</span>
+              </label>
+              <span class="text-xs text-[var(--color-text-muted)]" x-text="selected.length + ' / ' + allIds.length + ' ' + '{% translate "selected"|escapejs %}'"></span>
+            </div>
+
+            {# Items list #}
+            <div class="space-y-1 max-h-64 overflow-y-auto pr-1">
+              {% for item in collection_items %}
+                <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-[var(--color-surface-strong)] transition-colors cursor-pointer border border-transparent hover:border-[var(--color-surface-border)]">
+                  <input type="checkbox"
+                         name="selected_media_ids"
+                         value="{{ item.media_id }}"
+                         x-model="selected"
+                         class="rounded border-gray-600 text-indigo-600 focus:ring-indigo-500 bg-[var(--color-panel)]">
+                  {% if item.image %}
+                    <img src="{{ item.image|image_url }}" alt="{{ item.title }}" class="w-8 h-12 object-cover rounded flex-shrink-0 bg-[var(--color-surface-alt)]">
+                  {% else %}
+                    <div class="w-8 h-12 rounded bg-[var(--color-surface-alt)] flex-shrink-0 flex items-center justify-center text-xs text-[var(--color-text-muted)]">?</div>
+                  {% endif %}
+                  <div class="min-w-0 flex-1">
+                    <div class="text-sm font-medium text-[var(--color-text)] truncate">{{ item.title }}</div>
+                    {% if item.year %}
+                      <div class="text-xs text-[var(--color-text-muted)]">{{ item.year }}</div>
+                    {% endif %}
+                  </div>
+                </label>
+              {% empty %}
+                <p class="text-xs text-[var(--color-text-muted)] py-4 text-center">{% translate "No items found in this collection." %}</p>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+
+        {# Footer #}
+        <div class="p-4 border-t border-[var(--color-surface-border)] flex items-center justify-end gap-2 bg-[var(--color-surface)]">
+          <button type="button"
+                  @click="open = false; document.getElementById('collection-modal-container').innerHTML = ''"
+                  class="px-4 py-2 text-sm font-medium rounded-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-strong)] transition-colors cursor-pointer">
+            {% translate "Cancel" %}
+          </button>
+          <button type="submit"
+                  :disabled="selected.length === 0"
+                  class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer">
+            {% include "app/icons/list-add.svg" with classes="w-4 h-4" %}
+            <span>{% translate "Add to list" %}</span>
+          </button>
+        </div>
+      </form>
+    {% endif %}
+
+  </div>
+</div>
