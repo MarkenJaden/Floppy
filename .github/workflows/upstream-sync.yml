@@ -28,6 +28,7 @@ permissions:
 jobs:
   sync-and-validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       UPSTREAM_REPO: ${{ inputs.upstream_repo || 'dannyvfilms/Floppy' }}
       UPSTREAM_BRANCH: ${{ inputs.upstream_branch || 'latest' }}
@@ -91,7 +92,8 @@ jobs:
             --head "${BRANCH_NAME}" || \
           gh issue create \
             --title "⚠️ Upstream Sync Conflict" \
-            --body "Merge conflict occurred when syncing from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\`. Check branch \`${BRANCH_NAME}\`."
+            --body "Merge conflict occurred when syncing from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\`. Check branch \`${BRANCH_NAME}\`." || \
+          echo "::warning::Could not create PR/Issue via GitHub CLI. Verify that 'Allow GitHub Actions to create and approve pull requests' is enabled in Settings -> Actions -> General -> Workflow permissions."
           exit 1
 
       - name: Set up Python
@@ -140,7 +142,8 @@ jobs:
             --head "${BRANCH_NAME}" || \
           gh issue create \
             --title "❌ Upstream Sync Validation Failed" \
-            --body "Upstream changes from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` caused test or lint failures. Check branch \`${BRANCH_NAME}\`."
+            --body "Upstream changes from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` caused test or lint failures. Check branch \`${BRANCH_NAME}\`." || \
+          echo "::warning::Could not create PR/Issue via GitHub CLI. Verify that 'Allow GitHub Actions to create and approve pull requests' is enabled in Settings -> Actions -> General -> Workflow permissions."
           exit 1
 
       - name: Push merged changes to target branch

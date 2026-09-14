@@ -121,26 +121,38 @@ class CeleryDispatchRoutingTests(SimpleTestCase):
             task_routes=settings.CELERY_TASK_ROUTES,
         )
 
-        def task_body():
+        def task_body(*args, **kwargs):
             return None
 
-        self.background_task = self.app.task(
-            name="Backfill item metadata",
-            ignore_result=True,
-        )(task_body)
-        self.followup_task = self.app.task(
-            name="Import from Radarr (Recurring)",
-            ignore_result=True,
-        )(task_body)
-        self.interactive_task = self.app.task(
-            name="Process media server webhook",
-            ignore_result=True,
-        )(task_body)
-        self.fallback_task = self.app.task(
-            name="Unclassified priority test task",
-            ignore_result=True,
-        )(task_body)
         self.app.finalize()
+        for task_name in (
+            "Backfill item metadata",
+            "Import from Radarr (Recurring)",
+            "Process media server webhook",
+            "Unclassified priority test task",
+        ):
+            self.app._tasks.pop(task_name, None)
+            self.app.task(
+                name=task_name,
+                ignore_result=True,
+                typing=False,
+            )(task_body)
+
+    @property
+    def background_task(self):
+        return self.app.tasks["Backfill item metadata"]
+
+    @property
+    def followup_task(self):
+        return self.app.tasks["Import from Radarr (Recurring)"]
+
+    @property
+    def interactive_task(self):
+        return self.app.tasks["Process media server webhook"]
+
+    @property
+    def fallback_task(self):
+        return self.app.tasks["Unclassified priority test task"]
 
     def _dispatch_and_capture(self, dispatch):
         with patch.object(self.app.amqp, "send_task_message") as publish:
