@@ -20,6 +20,7 @@ from django.views.decorators.http import require_POST
 
 from app import cache_utils, helpers, history_cache
 from app import statistics as stats
+from app.bulk_actions import build_bulk_action_data
 from app.columns import (
     resolve_column_config,
     resolve_columns,
@@ -2688,6 +2689,7 @@ def media_list(request, media_type):
             "is_album_list": False,
             "supports_critic_rating_sort": False,
         }
+        context["enable_bulk_select"] = False
 
     if media_type == MediaTypes.MUSIC.value:
         from app.models import AlbumTracker, Artist, ArtistTracker
@@ -3063,6 +3065,18 @@ def media_list(request, media_type):
             context["media_list"] = artist_page
             context["is_artist_list"] = True
             context["filter_data"] = filter_data
+
+        context["enable_bulk_select"] = music_subview == "tracks"
+
+    if context.get("enable_bulk_select"):
+        context["bulk_action_data"] = build_bulk_action_data(
+            request.user,
+            request=request,
+            status_url=reverse("bulk_status_update"),
+            list_url=reverse("bulk_list_add"),
+            collection_url=reverse("bulk_collection_quick_add"),
+            tag_url=reverse("tag_bulk_toggle"),
+        )
 
     if context.get("is_artist_list", False):
         table_type = "artist"

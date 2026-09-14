@@ -13,7 +13,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.utils import timezone
 
-from app import history_cache
+from app import cache_safety, history_cache
 from app.interactive_requests import interactive_request_active
 from app.models import MediaTypes
 from app.task_cooperation import CooperativeRun
@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Mirrors BACKGROUND_TASK_PRIORITY in tasks.py — both read from the same setting.
 BACKGROUND_TASK_PRIORITY = getattr(settings, "CELERY_TASK_PRIORITY_BACKGROUND", 9)
+DISCOVER_PROFILE_REFRESH_LOCK_SECONDS = 30 * 60
 
 
 @shared_task(name="Refresh Discover Rows")
@@ -249,8 +250,10 @@ def warm_history_day_cache_coverage(
 
 
 @shared_task(name="Refresh Discover Profile For User")
-def refresh_discover_profile_for_user(user_id: int, media_types: list[str]):
-    """Recompute one user's Discover taste profiles."""
+def refresh_discover_profile_for_user(
+    user_id: int, media_types: list[str], force: bool = False
+):
+    """Refresh stale profiles, allowing explicit callers to force recomputation."""
     from app.discover.profile import get_or_compute_taste_profile
 
     user_model = get_user_model()
@@ -259,15 +262,30 @@ def refresh_discover_profile_for_user(user_id: int, media_types: list[str]):
         return {"profiles_refreshed": 0, "reason": "missing_user"}
 
     refreshed = 0
+    skipped = 0
     for media_type in media_types:
-        get_or_compute_taste_profile(user, media_type, force=True)
-        refreshed += 1
-    return {"profiles_refreshed": refreshed}
+        lock_key = f"discover_profile_refresh:{user_id}:{media_type}"
+        if not force and not cache_safety.acquire_lock(
+            lock_key,
+            timeout=DISCOVER_PROFILE_REFRESH_LOCK_SECONDS,
+            on_error=cache_safety.ON_ERROR_SKIP,
+        ):
+            skipped += 1
+            continue
+        try:
+            get_or_compute_taste_profile(user, media_type, force=force)
+            refreshed += 1
+        finally:
+            if not force:
+                cache_safety.release_lock(lock_key)
+    return {"profiles_refreshed": refreshed, "profiles_skipped": skipped}
 
 
 @shared_task(name="Refresh Discover Profiles")
 def refresh_discover_profiles(
-    user_ids: list[int] | None = None, media_types: list[str] | None = None
+    user_ids: list[int] | None = None,
+    media_types: list[str] | None = None,
+    force: bool = False,
 ):
     """Fan out Discover taste profile refreshes, capped per run.
 
@@ -294,7 +312,11 @@ def refresh_discover_profiles(
 
     for index, user in enumerate(selected):
         refresh_discover_profile_for_user.apply_async(
-            kwargs={"user_id": user.id, "media_types": target_media_types},
+            kwargs={
+                "user_id": user.id,
+                "media_types": target_media_types,
+                "force": force,
+            },
             # Spread them out so a single beat tick doesn't become a burst.
             countdown=index * 5,
             priority=BACKGROUND_TASK_PRIORITY,

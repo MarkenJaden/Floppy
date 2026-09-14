@@ -12,9 +12,13 @@ ERROR_TITLE = "\n\n\n Couldn't import the following media: \n\n"
 IMPORT_COUNT_METRIC_KEYS = frozenset(
     {
         "created",
+        "failed",
+        "rejected",
         "updated",
         "skipped",
+        "skipped_ignored",
         "skipped_missing_ids",
+        "skipped_numbering_mismatch",
         "skipped_existing",
         "skipped_unknown_type",
         "skipped_other_user",
@@ -86,12 +90,7 @@ def import_run_counts(imported_counts):
 def has_imported_media(imported_counts):
     """Return whether an importer run changed any media rows."""
     created, updated = import_run_counts(imported_counts)
-    if (
-        imported_counts.get("created") is not None
-        or imported_counts.get("updated") is not None
-    ):
-        return created + updated > 0
-    return any(imported_counts.values())
+    return created + updated > 0
 
 
 def format_media_type_display(count, media_type):

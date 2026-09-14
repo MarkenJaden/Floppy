@@ -1,4 +1,10 @@
-from config.runtime_profile import PROFILE, by_tier, gunicorn_threads, web_concurrency
+from config.runtime_profile import (
+    PROFILE,
+    by_tier,
+    gunicorn_threads,
+    web_concurrency,
+    web_concurrency_warning,
+)
 
 bind = "localhost:8001"
 preload_app = True
@@ -25,6 +31,12 @@ print(  # noqa: T201  # gunicorn has no logger configured this early
     f"[gunicorn] {PROFILE.describe()} -> workers={workers} threads={threads} "
     f"max_requests={max_requests} timeout={timeout}",
 )
+
+# Repeated on every restart in `docker logs`, which is the only place an
+# override saved in an orchestrator's own template becomes visible.
+_override_warning = web_concurrency_warning()
+if _override_warning:
+    print(f"[gunicorn] {_override_warning}")  # noqa: T201  # see above
 
 # Nginx owns the request log. A second Gunicorn access line duplicates every
 # dynamic request and can include the raw query string. Keep Gunicorn errors.

@@ -7071,7 +7071,6 @@ class MediaDetailsViewTests(TestCase):
                     "season_number": 1,
                 },
             ),
-            {"fragment": "secondary"},
         )
 
         self.assertEqual(response.status_code, 200)

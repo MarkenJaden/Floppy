@@ -102,6 +102,8 @@ def check_complete_media_structure(test_case, item):
         "parent_id"
     ] else test_case.assertIsNone(item["parent_id"])
     test_case.assertIn("tracked", item)
+    test_case.assertIn("episodes_left", item)
+    test_case.assertIn("total_episodes_left", item)
     test_case.assertIn("consumptions_number", item)
     test_case.assertIn("consumptions", item)
     for consumption in item["consumptions"]:

@@ -181,6 +181,8 @@ class TrackedMediaResponseSerializer(serializers.Serializer):
     score = serializers.FloatField(allow_null=True)
     status = serializers.IntegerField(allow_null=True)
     progress = serializers.FloatField(allow_null=True)
+    episodes_left = serializers.IntegerField(allow_null=True)
+    total_episodes_left = serializers.IntegerField(allow_null=True)
     progress_scope = serializers.CharField(allow_null=True)
     progress_unit = serializers.CharField(allow_null=True)
     progressed_at = serializers.DateTimeField(allow_null=True)
@@ -223,6 +225,8 @@ class CompleteMediaResponseSerializer(serializers.Serializer):
     media_type = serializers.CharField()
     title = serializers.CharField(allow_blank=True, allow_null=True)
     max_progress = serializers.IntegerField()
+    episodes_left = serializers.IntegerField(allow_null=True)
+    total_episodes_left = serializers.IntegerField(allow_null=True)
     image = serializers.CharField(allow_blank=True, allow_null=True)
     # FORK: 16:9 artwork
     backdrop = serializers.CharField(allow_null=True)

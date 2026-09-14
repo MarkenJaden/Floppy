@@ -1,4 +1,5 @@
 import logging
+from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.utils import timezone
@@ -6,9 +7,10 @@ from django.utils.dateparse import parse_datetime
 
 from app import live_playback
 from app.log_safety import mapping_keys, presence_map
-from app.models import Item, ItemProviderLink, MediaTypes, Sources
+from app.models import TV, Item, ItemProviderLink, MediaTypes, Movie, Sources
 from app.providers import services
 from app.services import metadata_resolution
+from app.services.completion import select_preferred_activity_entry
 from integrations.imports.helpers import find_item_across_buckets
 from integrations.source_sync import (
     remove_collection_source_state,
@@ -26,6 +28,8 @@ JELLYFIN_EVENT_MAP = {
 }
 JELLYFIN_COLLECTION_EVENTS = {"ItemAdded", "ItemDeleted"}
 JELLYFIN_COLLECTION_SOURCE = "jellyfin"
+JELLYFIN_RATING_EVENT = "UserDataSaved"
+JELLYFIN_RATING_MAX = 10
 
 
 def _ticks_to_seconds(ticks) -> int | None:
@@ -45,6 +49,11 @@ def _ticks_to_seconds(ticks) -> int | None:
 
 class JellyfinWebhookProcessor(BaseWebhookProcessor):
     """Processor for Jellyfin webhook events."""
+
+    MEDIA_TYPE_MAPPING = {
+        **BaseWebhookProcessor.MEDIA_TYPE_MAPPING,
+        "Series": MediaTypes.TV.value,
+    }
 
     def process_payload(self, payload, user):
         """Process the incoming Jellyfin webhook payload."""
@@ -67,6 +76,10 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
 
         if event_type in JELLYFIN_COLLECTION_EVENTS:
             self._process_collection_event(event_type, payload, user, ids)
+            return
+
+        if event_type == JELLYFIN_RATING_EVENT:
+            self._process_rating(payload, user, ids)
             return
 
         # Update live playback state (before media tracking)
@@ -97,7 +110,13 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
             )
 
     def _is_supported_event(self, event_type, user=None):
-        if event_type in ("Play", "Pause", "Stop", *JELLYFIN_COLLECTION_EVENTS):
+        if event_type in (
+            "Play",
+            "Pause",
+            "Stop",
+            *JELLYFIN_COLLECTION_EVENTS,
+            JELLYFIN_RATING_EVENT,
+        ):
             return True
 
         if user is None:
@@ -193,21 +212,28 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
 
     def _get_media_title(self, payload):
         """Get media title from payload."""
-        title = None
+        item = payload.get("Item") or {}
+        media_type = self._get_media_type(payload)
 
-        if self._get_media_type(payload) == MediaTypes.TV.value:
-            series_name = payload["Item"].get("SeriesName")
-            season_number = payload["Item"].get("ParentIndexNumber")
-            episode_number = payload["Item"].get("IndexNumber")
-            title = f"{series_name} S{season_number:02d}E{episode_number:02d}"
+        if media_type == MediaTypes.TV.value:
+            series_name = item.get("SeriesName") or item.get("Name")
+            if item.get("Type") == "Series":
+                return series_name
 
-        elif self._get_media_type(payload) == MediaTypes.MOVIE.value:
-            movie_name = payload["Item"].get("Name")
-            year = payload["Item"].get("ProductionYear")
+            try:
+                season_number = int(item.get("ParentIndexNumber"))
+                episode_number = int(item.get("IndexNumber"))
+            except (TypeError, ValueError):
+                return series_name
+            return f"{series_name} S{season_number:02d}E{episode_number:02d}"
 
-            title = f"{movie_name} ({year})" if movie_name and year else movie_name
+        if media_type == MediaTypes.MOVIE.value:
+            movie_name = item.get("Name")
+            year = item.get("ProductionYear")
 
-        return title
+            return f"{movie_name} ({year})" if movie_name and year else movie_name
+
+        return None
 
     def _extract_external_ids(self, payload):
         provider_ids = (payload.get("Item") or {}).get("ProviderIds") or {}
@@ -552,8 +578,159 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
     def _extract_series_title(self, payload):
         """Extract TV series title from Jellyfin payload."""
         if self._get_media_type(payload) == MediaTypes.TV.value:
-            return payload.get("Item", {}).get("SeriesName")
+            item = payload.get("Item") or {}
+            return item.get("SeriesName") or item.get("Name")
         return None
+
+    def _extract_user_rating(self, payload):
+        """Extract a Jellyfin user rating from supported webhook payload shapes."""
+        item = payload.get("Item") or {}
+        user_data = item.get("UserData") or {}
+        if isinstance(user_data, dict) and "Rating" in user_data:
+            return user_data["Rating"], "Item.UserData.Rating"
+
+        payload_user_data = payload.get("UserData") or {}
+        if isinstance(payload_user_data, dict) and "Rating" in payload_user_data:
+            return payload_user_data["Rating"], "UserData.Rating"
+
+        for container, key in (
+            (item, "UserRating"),
+            (item, "Rating"),
+            (payload, "UserRating"),
+            (payload, "Rating"),
+        ):
+            if isinstance(container, dict) and key in container:
+                return container[key], key
+
+        return None, None
+
+    def _normalize_user_rating(self, rating):
+        """Return a finite Jellyfin rating on Floppy's internal 0-10 scale."""
+        if rating is None or isinstance(rating, bool):
+            return None
+        try:
+            rating = Decimal(str(rating))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        if not rating.is_finite() or rating < 0 or rating > JELLYFIN_RATING_MAX:
+            return None
+        try:
+            return rating.quantize(Decimal("0.1"))
+        except InvalidOperation:
+            return None
+
+    def _process_rating(self, payload, user, ids):
+        """Apply a Jellyfin UserDataSaved rating without changing watch state."""
+        raw_rating, rating_source = self._extract_user_rating(payload)
+        rating = self._normalize_user_rating(raw_rating)
+        if rating is None:
+            logger.debug(
+                "Ignoring Jellyfin UserDataSaved event without a valid rating "
+                "(source=%s)",
+                rating_source,
+            )
+            return None
+
+        media_type = self._get_media_type(payload)
+        if media_type == MediaTypes.MOVIE.value:
+            item = self._resolve_collection_movie(
+                payload,
+                ids,
+                allow_create=True,
+            )
+            model = Movie
+        elif media_type == MediaTypes.TV.value:
+            item = self._resolve_rating_tv_item(payload, ids)
+            model = TV
+        else:
+            logger.debug(
+                "Ignoring Jellyfin rating for unsupported media type: %s",
+                (payload.get("Item") or {}).get("Type"),
+            )
+            return None
+
+        if item is None:
+            logger.warning("Could not resolve Jellyfin rating target")
+            return None
+
+        instances = model.objects.filter(item=item, user=user)
+        instance = select_preferred_activity_entry(instances)
+        if instance is None:
+            model.objects.create(
+                item=item,
+                user=user,
+                status=None,
+                score=rating,
+            )
+            logger.info(
+                "Created statusless %s rating from Jellyfin: %s=%s",
+                model.__name__,
+                item.title,
+                rating,
+            )
+        elif instance.score != rating:
+            instance.score = rating
+            instance.save(update_fields=["score"])
+            logger.info(
+                "Updated %s rating from Jellyfin: %s=%s",
+                model.__name__,
+                item.title,
+                rating,
+            )
+        return rating
+
+    def _resolve_rating_tv_item(self, payload, ids):
+        """Resolve a TV item for a Jellyfin rating without creating watch rows."""
+        local_item = self._find_local_collection_item(ids, MediaTypes.TV.value)
+        if local_item:
+            return local_item
+
+        media_id, _, _ = self._find_tv_media_id(
+            ids,
+            series_title=self._extract_series_title(payload),
+            allow_title_fallback=True,
+        )
+        if not media_id:
+            logger.warning("Could not resolve Jellyfin TV rating to a TMDB ID")
+            return None
+
+        media_id = str(media_id)
+        local_item = self._find_local_collection_item(
+            {"tmdb_id": media_id},
+            MediaTypes.TV.value,
+        )
+        if local_item:
+            return local_item
+
+        metadata = services.get_media_metadata(
+            MediaTypes.TV.value,
+            media_id,
+            Sources.TMDB.value,
+        )
+        item = find_item_across_buckets(
+            media_id=media_id,
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.TV.value,
+        )
+        if item is None:
+            item, _ = Item.objects.get_or_create(
+                media_id=media_id,
+                source=Sources.TMDB.value,
+                media_type=MediaTypes.TV.value,
+                library_media_type="",
+                defaults=self._item_defaults(
+                    metadata,
+                    fallback_title=self._extract_series_title(payload),
+                ),
+            )
+
+        metadata_resolution.upsert_provider_links(
+            item,
+            self._metadata_with_payload_ids(metadata, ids),
+            provider=Sources.TMDB.value,
+            provider_media_type=MediaTypes.TV.value,
+        )
+        return item
 
     # -- Live playback --------------------------------------------------
 

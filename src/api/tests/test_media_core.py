@@ -8,6 +8,7 @@ from django.db.utils import OperationalError
 from django.utils import timezone
 
 from app.models import (
+    Episode,
     Item,
     MediaTypes,
     Movie,
@@ -38,6 +39,29 @@ class MediaCoreTests(FloppyApiTestCase):
     def setUp(self):
         """Set up."""
         super().setUp()
+
+    def _prepare_tv_progress_fixture(self, *, future_episode_number=None):
+        """Give the first seeded show provider totals and watched episodes."""
+        tv_item = self.items_by_type[MediaTypes.TV.value][0]
+        tv_item.provider_episode_count = 11
+        tv_item.save(update_fields=["provider_episode_count"])
+
+        now = timezone.now()
+        Episode.objects.filter(
+            pk__in=[episode_media.pk for episode_media in self.episode_medias],
+        ).update(status=Status.IN_PROGRESS.value)
+        for episode_media in self.episode_medias:
+            episode_item = episode_media.item
+            episode_item.release_datetime = now - timezone.timedelta(days=1)
+            if episode_item.episode_number == future_episode_number:
+                episode_item.release_datetime = now + timezone.timedelta(days=1)
+            episode_item.save(update_fields=["release_datetime"])
+
+        watched_episode = self.episode_medias[0]
+        Episode.objects.filter(pk=watched_episode.pk).update(
+            status=Status.COMPLETED.value,
+            end_date=now,
+        )
 
     def test_media_list_get_returns_paginated_payload(self):
         """Media list endpoint should return standard pagination payload."""
@@ -73,6 +97,8 @@ class MediaCoreTests(FloppyApiTestCase):
                     "score",
                     "status",
                     "progress",
+                    "episodes_left",
+                    "total_episodes_left",
                     "progress_scope",
                     "progress_unit",
                     "progressed_at",
@@ -84,6 +110,57 @@ class MediaCoreTests(FloppyApiTestCase):
                     "show",
                 },
             )
+
+    def test_tv_media_list_reports_released_and_total_remaining_episodes(self):
+        """TV list responses expose released and provider-total remaining counts."""
+        self._prepare_tv_progress_fixture(future_episode_number=3)
+        tv_item = self.items_by_type[MediaTypes.TV.value][0]
+
+        response = self.call_api(
+            "get",
+            "api_media_type_list",
+            args=(MediaTypes.TV.value,),
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = next(
+            result
+            for result in response.json()["results"]
+            if result["item"]["media_id"] == tv_item.media_id
+        )
+        self.assertEqual(result["progress"], 1)
+        self.assertEqual(result["episodes_left"], 1)
+        self.assertEqual(result["total_episodes_left"], 10)
+
+    def test_tv_media_list_excludes_dropped_seasons_from_remaining_total(self):
+        """Dropped seasons do not contribute to either remaining count."""
+        self._prepare_tv_progress_fixture()
+        tv_item = self.items_by_type[MediaTypes.TV.value][0]
+        for season_media, provider_count in zip(
+            self.season_medias,
+            (3, 4, 4),
+        ):
+            season_media.item.provider_episode_count = provider_count
+            season_media.item.save(update_fields=["provider_episode_count"])
+        self.season_medias[1].status = Status.DROPPED.value
+        self.season_medias[1].save(update_fields=["status"])
+
+        response = self.call_api(
+            "get",
+            "api_media_type_list",
+            args=(MediaTypes.TV.value,),
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = next(
+            result
+            for result in response.json()["results"]
+            if result["item"]["media_id"] == tv_item.media_id
+        )
+        self.assertEqual(result["episodes_left"], 2)
+        self.assertEqual(result["total_episodes_left"], 6)
 
     def test_media_list_get_with_type_filter_returns_filtered_results(self):
         """Media list endpoint should filter results by media type."""
@@ -559,6 +636,7 @@ class MediaCoreTests(FloppyApiTestCase):
     def test_media_detail_get_returns_expected_shape(self, mock_metadata):
         """Media detail GET should return a complete serialized payload."""
         # TODO: Use real mock data fixtures instead of hardcoding values
+        self._prepare_tv_progress_fixture()
         tv_item = self.items_by_type[MediaTypes.TV.value][0]
         mock_metadata.return_value = {
             "media_id": 1,
@@ -827,6 +905,8 @@ class MediaCoreTests(FloppyApiTestCase):
                 "media_type",
                 "title",
                 "max_progress",
+                "episodes_left",
+                "total_episodes_left",
                 "image",
                 "backdrop",
                 "synopsis",
@@ -847,8 +927,43 @@ class MediaCoreTests(FloppyApiTestCase):
                 "lists",
             },
         )
+        self.assertEqual(payload["episodes_left"], 2)
+        self.assertEqual(payload["total_episodes_left"], 10)
         self.assertEqual(payload["cast"], mock_metadata.return_value["cast"])
         self.assertEqual(payload["crew"], mock_metadata.return_value["crew"])
+
+    @patch("api.views.services.get_media_metadata")
+    def test_provider_tracking_persists_episode_count(self, mock_metadata):
+        """Provider-backed tracking stores the total used by later list calls."""
+        mock_metadata.return_value = {
+            "media_id": "9001",
+            "source": Sources.TMDB.value,
+            "media_type": MediaTypes.TV.value,
+            "title": "Tracked Provider Show",
+            "image": "https://example.com/provider-show.jpg",
+            "max_progress": 12,
+            "details": {"episodes": 12},
+            "related": {"seasons": []},
+        }
+
+        response = self.call_api(
+            "post",
+            "api_media_type_list",
+            args=(MediaTypes.TV.value,),
+            payload={"source": Sources.TMDB.value, "media_id": "9001"},
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 201)
+        item = Item.objects.get(
+            media_id="9001",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.TV.value,
+        )
+        self.assertEqual(item.provider_episode_count, 12)
+        payload = response.json()
+        self.assertEqual(payload["total_episodes_left"], 12)
+        self.assertIsNone(payload["episodes_left"])
 
     @patch("api.views.services.get_media_metadata")
     def test_tv_detail_reports_tracked_season(self, mock_metadata):

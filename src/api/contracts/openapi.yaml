@@ -2720,6 +2720,12 @@ components:
           nullable: true
         max_progress:
           type: integer
+        episodes_left:
+          type: integer
+          nullable: true
+        total_episodes_left:
+          type: integer
+          nullable: true
         image:
           type: string
           nullable: true
@@ -2789,6 +2795,7 @@ components:
       - consumptions_number
       - crew
       - details
+      - episodes_left
       - genres
       - id
       - image
@@ -2807,6 +2814,7 @@ components:
       - source_url
       - synopsis
       - title
+      - total_episodes_left
       - tracked
     CompleteGameResponse:
       type: object
@@ -2831,6 +2839,12 @@ components:
           nullable: true
         max_progress:
           type: integer
+        episodes_left:
+          type: integer
+          nullable: true
+        total_episodes_left:
+          type: integer
+          nullable: true
         image:
           type: string
           nullable: true
@@ -2900,6 +2914,7 @@ components:
       - consumptions_number
       - crew
       - details
+      - episodes_left
       - genres
       - id
       - image
@@ -2918,6 +2933,7 @@ components:
       - source_url
       - synopsis
       - title
+      - total_episodes_left
       - tracked
     CompleteMediaItemResponse:
       oneOf:
@@ -2946,6 +2962,12 @@ components:
           nullable: true
         max_progress:
           type: integer
+        episodes_left:
+          type: integer
+          nullable: true
+        total_episodes_left:
+          type: integer
+          nullable: true
         image:
           type: string
           nullable: true
@@ -3016,6 +3038,7 @@ components:
       - consumptions_number
       - crew
       - details
+      - episodes_left
       - genres
       - id
       - image
@@ -3034,6 +3057,7 @@ components:
       - source_url
       - synopsis
       - title
+      - total_episodes_left
       - tracked
     ConsumptionResponse:
       type: object
@@ -3555,6 +3579,12 @@ components:
           type: number
           format: double
           nullable: true
+        episodes_left:
+          type: integer
+          nullable: true
+        total_episodes_left:
+          type: integer
+          nullable: true
         progress_scope:
           type: string
           nullable: true
@@ -3593,6 +3623,7 @@ components:
       - consumption_id
       - created_at
       - end_date
+      - episodes_left
       - id
       - item
       - item_id
@@ -3608,6 +3639,7 @@ components:
       - show
       - start_date
       - status
+      - total_episodes_left
       - tracked
     TrackedMediaUpdateRequest:
       type: object

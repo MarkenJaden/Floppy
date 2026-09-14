@@ -1872,6 +1872,92 @@ class MediaManager(models.Manager):
                 continue
             media.max_progress = max_progress_dict.get(media.item.id)
 
+    def annotate_episode_progress(self, media_list, media_type=None):
+        """Annotate released and provider-total episode counts in bulk.
+
+        The API needs both the released count used by ``episodes_left`` and the
+        provider's full count.  Season max-progress historically performs a
+        provider lookup per row, which is appropriate for some web sorting
+        paths but not for an API page.  This method deliberately uses the
+        local release/event queries for seasons and the persisted provider
+        count for the full denominator.
+        """
+        media_list = list(media_list)
+        media_by_type = defaultdict(list)
+        for media in media_list:
+            item = getattr(media, "item", None)
+            item_type = getattr(item, "media_type", None)
+            if item_type in {
+                MediaTypes.TV.value,
+                MediaTypes.SEASON.value,
+                MediaTypes.ANIME.value,
+            }:
+                if item_type == MediaTypes.SEASON.value:
+                    route_type = MediaTypes.SEASON.value
+                elif media_type == MediaTypes.ANIME.value:
+                    route_type = MediaTypes.ANIME.value
+                else:
+                    route_type = media_type or item_type
+                if route_type == MediaTypes.ANIME.value:
+                    media_by_type[MediaTypes.ANIME.value].append(media)
+                else:
+                    media_by_type[item_type].append(media)
+
+        current_datetime = timezone.now()
+        for route_type, typed_media in media_by_type.items():
+            if route_type == MediaTypes.SEASON.value:
+                self._annotate_season_released_episodes(
+                    typed_media,
+                    current_datetime,
+                )
+            else:
+                self.annotate_max_progress(typed_media, route_type)
+            self._annotate_total_episode_count(typed_media, route_type)
+
+        return media_list
+
+    def _annotate_total_episode_count(self, media_list, media_type):
+        """Annotate provider totals, excluding dropped TV seasons."""
+        for media in media_list:
+            item = getattr(media, "item", None)
+            total = getattr(item, "provider_episode_count", None)
+
+            if media_type == MediaTypes.TV.value or (
+                media_type == MediaTypes.ANIME.value
+                and getattr(item, "media_type", None) == MediaTypes.TV.value
+            ):
+                seasons = list(media.seasons.all())
+                main_seasons = [
+                    season
+                    for season in seasons
+                    if getattr(season.item, "season_number", None) not in (None, 0)
+                ]
+                dropped_seasons = [
+                    season
+                    for season in main_seasons
+                    if season.status == Status.DROPPED.value
+                ]
+                if dropped_seasons:
+                    active_counts = [
+                        getattr(season.item, "provider_episode_count", None)
+                        for season in main_seasons
+                        if season.status != Status.DROPPED.value
+                    ]
+                    total = (
+                        sum(active_counts)
+                        if all(count is not None for count in active_counts)
+                        else None
+                    )
+                elif total is None:
+                    season_counts = [
+                        getattr(season.item, "provider_episode_count", None)
+                        for season in main_seasons
+                    ]
+                    if season_counts and all(count is not None for count in season_counts):
+                        total = sum(season_counts)
+
+            media.total_episode_count = total
+
     def _annotate_tv_released_episodes(self, tv_list, current_datetime):
         """Annotate TV shows with the number of released episodes."""
         if not tv_list:
@@ -2230,6 +2316,7 @@ class MediaManager(models.Manager):
         season_number=None,
         episode_number=None,
         library_media_type=None,
+        annotate_progress=True,
     ):
         """Filter user media object with prefetch_related applied."""
         queryset = self.filter_media(
@@ -2243,7 +2330,8 @@ class MediaManager(models.Manager):
         )
         queryset = self._apply_prefetch_related(queryset, media_type)
         queryset = queryset.select_related("item")
-        self.annotate_max_progress(queryset, media_type)
+        if annotate_progress:
+            self.annotate_max_progress(queryset, media_type)
 
         return queryset
 
@@ -2254,6 +2342,7 @@ class MediaManager(models.Manager):
         source,
         season_numbers=None,
         library_media_type=None,
+        annotate_progress=True,
     ):
         """Return tracked season consumptions for a show."""
         queryset = self.filter_media_prefetch(
@@ -2262,6 +2351,7 @@ class MediaManager(models.Manager):
             MediaTypes.SEASON.value,
             source,
             library_media_type=library_media_type,
+            annotate_progress=annotate_progress,
         )
 
         if season_numbers is not None:

@@ -177,7 +177,7 @@ def _build_prefetch_for_range(user, day_list):
     ):
         Episode = apps.get_model("app", "Episode")
         episode_rows = list(
-            Episode.objects.filter(
+            Episode.all_objects.filter(
                 related_season__user=user,
                 end_date__gte=range_start,
                 end_date__lt=range_end,
@@ -689,7 +689,7 @@ def build_stats_for_day(
         else:
             Episode = apps.get_model("app", "Episode")
             episodes = (
-                Episode.objects.filter(
+                Episode.all_objects.filter(
                     related_season__user=user,
                     end_date__gte=day_start,
                     end_date__lt=day_end,

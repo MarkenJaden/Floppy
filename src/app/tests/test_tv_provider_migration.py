@@ -65,14 +65,21 @@ class TvProviderMigrationTests(TestCase):
             end_date=None,
         )
 
-    def _tvdb_payload(self, episode_numbers=(1, 2)):
+    def _tvdb_payload(self, episode_numbers=(1, 2), episode_titles=None):
+        episode_titles = episode_titles or {}
         return {
             "media_id": "81189",
             "title": "Breaking Bad",
             "image": "https://example.com/tvdb-show.jpg",
             "season/1": {
                 "image": "https://example.com/tvdb-season1.jpg",
-                "episodes": [{"episode_number": n} for n in episode_numbers],
+                "episodes": [
+                    {
+                        "episode_number": n,
+                        **({"name": episode_titles[n]} if n in episode_titles else {}),
+                    }
+                    for n in episode_numbers
+                ],
             },
         }
 
@@ -97,6 +104,54 @@ class TvProviderMigrationTests(TestCase):
         self.assertTrue(
             Episode.objects.filter(item=self.episode_item).exists(),
         )
+
+    @patch("app.services.tv_provider_migration.history_cache.invalidate_history_cache")
+    @patch("app.services.tv_provider_migration.tvdb.tv_with_seasons")
+    def test_migration_repairs_episode_title_and_history_cache(
+        self,
+        mock_tv_with_seasons,
+        mock_invalidate_history_cache,
+    ):
+        """TVDB's episode title replaces a stale show title after rekeying."""
+        mock_tv_with_seasons.return_value = self._tvdb_payload(
+            episode_titles={1: "Pilot from TVDB"},
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            result = migrate_tv_item_to_tvdb(self.show_item)
+
+        self.assertTrue(result.migrated)
+        self.episode_item.refresh_from_db()
+        self.assertEqual(self.episode_item.title, "Pilot from TVDB")
+        self.assertIsNone(self.episode_item.original_title)
+        self.assertEqual(self.episode_item.localized_title, "Pilot from TVDB")
+        mock_invalidate_history_cache.assert_called_once_with(
+            self.user.id,
+            force=True,
+        )
+
+    @patch("app.services.tv_provider_migration.tvdb.tv_with_seasons")
+    def test_migration_preserves_episode_title_without_provider_title(
+        self,
+        mock_tv_with_seasons,
+    ):
+        """Missing TVDB episode names do not erase existing title fields."""
+        self.episode_item.original_title = "Pilot Original"
+        self.episode_item.localized_title = "Pilot Localized"
+        self.episode_item.save(
+            update_fields=["original_title", "localized_title"],
+        )
+        mock_tv_with_seasons.return_value = self._tvdb_payload(
+            episode_titles={1: ""},
+        )
+
+        result = migrate_tv_item_to_tvdb(self.show_item)
+
+        self.assertTrue(result.migrated)
+        self.episode_item.refresh_from_db()
+        self.assertEqual(self.episode_item.title, "Pilot")
+        self.assertEqual(self.episode_item.original_title, "Pilot Original")
+        self.assertEqual(self.episode_item.localized_title, "Pilot Localized")
 
     @patch("app.services.tv_provider_migration.tvdb.tv_with_seasons")
     def test_pins_instead_of_migrating_when_episode_missing_on_tvdb(
@@ -167,6 +222,40 @@ class TvProviderMigrationTests(TestCase):
         self.assertEqual(self.season_item.source, Sources.TVDB.value)
         self.assertEqual(self.episode_item.source, Sources.TVDB.value)
         self.assertTrue(Episode.objects.filter(item=self.episode_item).exists())
+
+    @patch("app.services.tv_provider_migration.tvdb.tv_with_seasons")
+    def test_collision_merge_repairs_surviving_episode_title(
+        self,
+        mock_tv_with_seasons,
+    ):
+        """A TVDB episode keeper also receives the canonical provider title."""
+        mock_tv_with_seasons.return_value = self._tvdb_payload(
+            episode_titles={1: "Pilot from TVDB"},
+        )
+
+        existing_show = Item.objects.create(
+            media_id="81189",
+            source=Sources.TVDB.value,
+            media_type=MediaTypes.TV.value,
+            title="Breaking Bad",
+            image="",
+        )
+        existing_episode = Item.objects.create(
+            media_id="81189",
+            source=Sources.TVDB.value,
+            media_type=MediaTypes.EPISODE.value,
+            season_number=1,
+            episode_number=1,
+            title="Breaking Bad",
+            image="",
+        )
+
+        result = migrate_tv_item_to_tvdb(self.show_item)
+
+        self.assertTrue(result.migrated)
+        existing_episode.refresh_from_db()
+        self.assertEqual(existing_episode.title, "Pilot from TVDB")
+        self.assertTrue(Episode.objects.filter(item=existing_episode).exists())
 
     @patch("app.services.tv_provider_migration.tvdb.tv_with_seasons")
     def test_merge_folds_colliding_season_onto_its_tvdb_counterpart(

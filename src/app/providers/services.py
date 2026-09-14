@@ -1009,8 +1009,22 @@ def get_media_metadata(
     language=None,
     edition_id=None,
     user=None,
+    episode_order=None,
 ):
     """Return the metadata for the selected media."""
+    if media_type in {"tv", "anime", "tv_with_seasons", "season", "episode"}:
+        from app.services.order_resolution import active_order, order_from_media_id
+
+        order = episode_order or order_from_media_id(media_id, source)
+        if order is None and user is not None:
+            order = active_order(user, media_id, source)
+        if order is not None:
+            from app.services.episode_ordering import metadata_for_order
+
+            return _ensure_title_fields(metadata_for_order(
+                media_type, order, season_numbers=season_numbers,
+                episode_number=episode_number,
+            ))
     if media_type == MediaTypes.MUSIC.value and source == Sources.MANUAL.value:
         item = Item.objects.filter(
             media_id=media_id,

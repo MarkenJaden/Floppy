@@ -290,7 +290,27 @@ class QueryCountTests(TestCase):
     def setUp(self):
         """Reset cache state and log in."""
         cache.clear()
+        self._warm_instance_caches(self.user)
         self.client.force_login(self.user)
+
+    @staticmethod
+    def _warm_instance_caches(user):
+        """Populate the instance-wide caches a running deployment already has.
+
+        These budgets guard how list rendering scales with the library, so the
+        constant per-instance lookups must not be counted. ``cache.clear()``
+        above drops all three, and the image-caching one additionally creates
+        its singleton row on first read, adding a savepoint and an insert.
+        """
+        from app import image_cache
+        from app.providers import credentials, services
+
+        image_cache.is_enabled()
+        # Credentials are cached per member as well as instance-wide, and a
+        # request runs as the logged-in user, so both maps have to be warm.
+        credentials.is_configured("tmdb")
+        credentials.is_configured("tmdb", user)
+        services._get_tmdb_proxy_url()  # no public warm entry point
 
     def _assert_query_budget(self, url, budget, label):
         with CaptureQueriesContext(connection) as context:

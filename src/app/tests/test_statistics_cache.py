@@ -1,5 +1,6 @@
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import call, patch
 from zoneinfo import ZoneInfo
 
@@ -13,11 +14,29 @@ from django.utils import timezone
 from app import statistics_cache
 from app.models import Item, MediaTypes, Movie, Sources, Status
 from app.statistics_aggregator import (
+    _aggregate_minutes_per_media_type_from_days,
     _build_combined_hours_charts,
     _build_platform_breakdown,
     _build_weekday_hour_charts,
 )
 from app.statistics_day_cache import _normalize_day_value
+
+
+class StatisticsDayBatchingTests(SimpleTestCase):
+    @patch("app.statistics_aggregator.cache.get_many", return_value={})
+    def test_thousands_of_days_are_fetched_in_fixed_batches(self, get_many):
+        days = [date(2020, 1, 1) + timedelta(days=index) for index in range(1000)]
+
+        result = _aggregate_minutes_per_media_type_from_days(
+            SimpleNamespace(id=42),
+            days,
+        )
+
+        self.assertEqual(result, {})
+        self.assertEqual(get_many.call_count, 20)
+        self.assertTrue(
+            all(len(call_args.args[0]) <= 50 for call_args in get_many.call_args_list)
+        )
 
 
 class StatisticsRefreshSchedulingTests(TestCase):

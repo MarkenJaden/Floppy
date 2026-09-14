@@ -3,6 +3,7 @@
 {% load app_tags %}
 {% load user_tags %}
 
+{% with card_return_url=return_url|default:request.get_full_path %}
 {% with current_sort|default_if_none:'' as current_sort_value %}
   {% with is_recommend_mode|default:False as recommend_mode %}
     {% with search_preview_url|default:'' as resolved_search_preview_url %}
@@ -20,6 +21,8 @@
            @media-card-revealed.window="if ($event.detail !== $root) revealed = false"
            @click.window="if (revealed && !$root.contains($event.target)) revealed = false"
            :class="revealed ? 'media-card-revealed' : ''">
+        {% comment %}Kometa's parser only recognizes TVDB-shaped episode anchors.{% endcomment %}
+        {% if item.kometa_episode_url %}<a href="{{ item.kometa_episode_url }}" class="hidden" aria-hidden="true" tabindex="-1"></a>{% endif %}
         <div class="media-card-visual relative">
           {% if recommend_mode %}
             <div class="cursor-pointer">
@@ -212,7 +215,7 @@
                   <button class="p-2.5 bg-emerald-600 text-white rounded-full hover:bg-emerald-500 hover:scale-110 hover:shadow-[0_0_15px_rgba(16,185,129,0.5)] transition-all duration-200 cursor-pointer"
                           title="{% translate "Add to custom lists" %}"
                           hx-get="{% media_view_url 'lists_modal' item %}"
-                          hx-vals='{"return_url": "{{ request.get_full_path|urlencode }}"}'
+                          hx-vals='{"return_url": "{{ card_return_url|urlencode }}"}'
                           hx-target="#{% component_id 'lists' item %}"
                           hx-trigger="click once"
                           @click="listsOpen = true">
@@ -232,7 +235,7 @@
                   <button class="p-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full hover:scale-110 hover:shadow-[0_0_15px_rgba(99,102,241,0.5)] transition-all duration-200 cursor-pointer"
                           title="{% if media %}Watched{% else %}Mark watched{% endif %}"
                           hx-get="{% url 'track_modal' source=item.source media_type='episode' media_id=item.media_id season_number=item.season_number %}"
-                          hx-vals='{"return_url": "{{ request.get_full_path|urlencode }}", "episode_number": "{{ item.episode_number }}"{% if media %}, "instance_id": "{{ media.id }}"{% else %}, "is_create": "1"{% endif %}}'
+                          hx-vals='{"return_url": "{{ card_return_url|urlencode }}", "episode_number": "{{ item.episode_number }}"{% if media %}, "instance_id": "{{ media.id }}"{% else %}, "is_create": "1"{% endif %}}'
                           hx-target="#{% component_id 'track' item media.id %}"
                           hx-trigger="click once"
                           @click="trackOpen = true">
@@ -247,7 +250,7 @@
                   <button class="p-2.5 bg-emerald-600 text-white rounded-full hover:bg-emerald-500 hover:scale-110 hover:shadow-[0_0_15px_rgba(16,185,129,0.5)] transition-all duration-200 cursor-pointer"
                           title="{% translate "Add to custom lists" %}"
                           hx-get="{% media_view_url 'lists_modal' item %}"
-                          hx-vals='{"return_url": "{{ request.get_full_path|urlencode }}"}'
+                          hx-vals='{"return_url": "{{ card_return_url|urlencode }}"}'
                           hx-target="#{% component_id 'lists' item %}"
                           hx-trigger="click once"
                           @click="listsOpen = true">
@@ -266,7 +269,7 @@
                     <button class="p-2.5 bg-indigo-600 text-white rounded-full hover:bg-indigo-500 hover:scale-110 hover:shadow-[0_0_15px_rgba(99,102,241,0.5)] transition-all duration-200 cursor-pointer"
                             title="{% translate "Edit tracking" %}"
                             hx-get="{% url 'podcast_show_track_modal' podcast_show.id %}"
-                            hx-vals='{"return_url": "{{ request.get_full_path|urlencode }}"{% if home_row_id %}, "home_row_id": "{{ home_row_id }}"{% endif %}}'
+                            hx-vals='{"return_url": "{{ card_return_url|urlencode }}"{% if home_row_id %}, "home_row_id": "{{ home_row_id }}"{% endif %}}'
                             hx-target="#podcast-show-track-modal-{{ podcast_show.id }}-{{ media.id }}"
                             hx-trigger="click once"
                             @click="trackOpen = true">
@@ -276,7 +279,7 @@
                     <button class="p-2.5 bg-indigo-600 text-white rounded-full hover:bg-indigo-500 hover:scale-110 hover:shadow-[0_0_15px_rgba(99,102,241,0.5)] transition-all duration-200 cursor-pointer"
                             title="{% translate "Edit tracking" %}"
                             hx-get="{% url 'album_track_modal' media.album.id %}"
-                            hx-vals='{"return_url": "{{ request.get_full_path|urlencode }}"{% if home_row_id %}, "home_row_id": "{{ home_row_id }}"{% endif %}}'
+                            hx-vals='{"return_url": "{{ card_return_url|urlencode }}"{% if home_row_id %}, "home_row_id": "{{ home_row_id }}"{% endif %}}'
                             hx-target="#album-track-modal-{{ media.album.id }}"
                             hx-trigger="click once"
                             @click="trackOpen = true">
@@ -286,7 +289,7 @@
                     <button class="p-2.5 bg-indigo-600 text-white rounded-full hover:bg-indigo-500 hover:scale-110 hover:shadow-[0_0_15px_rgba(99,102,241,0.5)] transition-all duration-200 cursor-pointer"
                             title="{% translate "Edit tracking" %}"
                             hx-get="{% url 'artist_track_modal' media.artist.id %}"
-                            hx-vals='{"return_url": "{{ request.get_full_path|urlencode }}"{% if home_row_id %}, "home_row_id": "{{ home_row_id }}"{% endif %}}'
+                            hx-vals='{"return_url": "{{ card_return_url|urlencode }}"{% if home_row_id %}, "home_row_id": "{{ home_row_id }}"{% endif %}}'
                             hx-target="#artist-track-modal-{{ media.artist.id }}"
                             hx-trigger="click once"
                             @click="trackOpen = true">
@@ -296,7 +299,7 @@
                     <button class="p-2.5 bg-indigo-600 text-white rounded-full hover:bg-indigo-500 hover:scale-110 hover:shadow-[0_0_15px_rgba(99,102,241,0.5)] transition-all duration-200 cursor-pointer"
                             title="{% translate "Add to tracker" %}"
                             hx-get="{% media_view_url 'track_modal' item %}"
-                            hx-vals='{"return_url": "{{ request.get_full_path|urlencode }}", "instance_id": "{{ media.id }}"{% if home_row_id %}, "home_row_id": "{{ home_row_id }}"{% endif %}}'
+                            hx-vals='{"return_url": "{{ card_return_url|urlencode }}", "instance_id": "{{ media.id }}"{% if home_row_id %}, "home_row_id": "{{ home_row_id }}"{% endif %}}'
                             hx-target="#{% component_id 'track' item media.id %}"
                             hx-trigger="click once"
                             @click="trackOpen = true">
@@ -307,7 +310,7 @@
                   <button class="p-2.5 bg-emerald-600 text-white rounded-full hover:bg-emerald-500 hover:scale-110 hover:shadow-[0_0_15px_rgba(16,185,129,0.5)] transition-all duration-200 cursor-pointer"
                           title="{% translate "Add to custom lists" %}"
                           hx-get="{% media_view_url 'lists_modal' item %}"
-                          hx-vals='{"return_url": "{{ request.get_full_path|urlencode }}"}'
+                          hx-vals='{"return_url": "{{ card_return_url|urlencode }}"}'
                           hx-target="#{% component_id 'lists' item %}"
                           hx-trigger="click once"
                           @click="listsOpen = true">
@@ -706,4 +709,5 @@
       {% endwith %}
     {% endwith %}
   {% endwith %}
+{% endwith %}
 {% endwith %}

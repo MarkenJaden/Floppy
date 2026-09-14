@@ -268,7 +268,7 @@ def _get_activity_bounds(user):
             bounds.append(stats._localize_datetime(max_value).date())
 
     Episode = apps.get_model("app", "Episode")
-    episode_bounds = Episode.objects.filter(
+    episode_bounds = Episode.all_objects.filter(
         related_season__user=user,
         end_date__isnull=False,
     ).aggregate(min_date=Min("end_date"), max_date=Max("end_date"))
@@ -355,7 +355,7 @@ def _get_sparse_activity_days(user):
         or MediaTypes.SEASON.value in active_media_types
     ):
         Episode = apps.get_model("app", "Episode")
-        episode_qs = Episode.objects.filter(related_season__user=user)
+        episode_qs = Episode.all_objects.filter(related_season__user=user)
         episode_end_days = (
             episode_qs.filter(
                 end_date__isnull=False,
@@ -735,7 +735,7 @@ def schedule_statistics_refresh(
             return False
 
     try:
-        from app.tasks import refresh_statistics_cache_task
+        from app.tasks_interactive import refresh_statistics_cache_task
 
         refresh_statistics_cache_task.apply_async(
             args=[user_id, range_name],

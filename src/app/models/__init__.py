@@ -35,6 +35,7 @@ from app.models.discovery import (
     ItemTag,
     Tag,
 )
+from app.models.episode_order import EpisodeOrder, EpisodeOrderChange
 from app.models.episode_runtimes import (
     build_episode_runtime_index,
     prefill_episode_runtime_index,
@@ -133,6 +134,8 @@ __all__ = [
     "DiscoverRowCache",
     "DiscoverTasteProfile",
     "Episode",
+    "EpisodeOrder",
+    "EpisodeOrderChange",
     "Game",
     "HardcoverEditionPreference",
     "InstanceProviderCredential",

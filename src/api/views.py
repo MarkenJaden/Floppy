@@ -23,7 +23,7 @@ from health_check.mixins import CheckMixin
 from rest_framework import views as drf_views
 from rest_framework.response import Response
 
-from app import metadata_utils
+from app import history_cache, metadata_utils
 from app.activity_builders import (
     _get_game_lengths_refresh_lock,
     _queue_game_lengths_refresh,
@@ -37,7 +37,7 @@ from app.media_list_filters import (
     get_next_episode_map,
     parse_media_list_filters,
 )
-from app.models import BasicMedia, Item, MediaTypes, Sources
+from app.models import BasicMedia, Episode, Item, MediaTypes, Sources
 from app.providers import services, tmdb
 from app.services import metadata_resolution
 from app.services.metadata_sync import enrich_synced_item, sync_podcast_show_from_rss
@@ -503,7 +503,10 @@ class ListDetailView(drf_views.APIView):
                 status=HTTP.FORBIDDEN,
             )
 
-        items = user_list.items.all()
+        items = user_list.items.order_by(
+            "customlistitem__date_added",
+            "customlistitem__pk",
+        )
 
         search_query = request.GET.get("search", "")
         sort_filter = request.GET.get("sort", "")
@@ -525,9 +528,14 @@ class ListDetailView(drf_views.APIView):
                 item.source,
                 season_number=item.season_number,
                 episode_number=item.episode_number,
+                annotate_progress=False,
             ).first()
 
             media_objects.append(media if media is not None else item)
+
+        BasicMedia.objects.annotate_episode_progress(
+            [media for media in media_objects if getattr(media, "item", None) is not None],
+        )
 
         if sort_filter:
             sort, sort_order = parse_sort_filter(sort_filter)
@@ -666,7 +674,10 @@ class ListItemsView(drf_views.APIView):
                 status=HTTP.FORBIDDEN,
             )
 
-        items = user_list.items.all()
+        items = user_list.items.order_by(
+            "customlistitem__date_added",
+            "customlistitem__pk",
+        )
 
         search_query = request.GET.get("search", "")
         sort_filter = request.GET.get("sort", "")
@@ -688,9 +699,14 @@ class ListItemsView(drf_views.APIView):
                 item.source,
                 season_number=item.season_number,
                 episode_number=item.episode_number,
+                annotate_progress=False,
             ).first()
 
             media_objects.append(media if media is not None else item)
+
+        BasicMedia.objects.annotate_episode_progress(
+            [media for media in media_objects if getattr(media, "item", None) is not None],
+        )
 
         if sort_filter:
             sort, sort_order = parse_sort_filter(sort_filter)
@@ -884,6 +900,10 @@ def _media_list_response(request, media_type=None):
     _rehydrate_deferred_items(page_entries)
     lists_by_item_id = build_lists_by_item_id(request.user, page_entries)
     next_episode_by_item_id = get_next_episode_map(page_entries)
+    BasicMedia.objects.annotate_episode_progress(
+        [entry.media for entry in page_entries if entry.media is not None],
+        media_type,
+    )
     serializer_context = {
         "request": request,
         "lists_by_item_id": lists_by_item_id,
@@ -1043,6 +1063,10 @@ class MediaTypeListView(drf_views.APIView):
 
             media_form.save()
             apply_image_url(item, media_form.cleaned_data.get("image_url"))
+            BasicMedia.objects.annotate_episode_progress(
+                [media_form.instance],
+                media_type,
+            )
             serialized_data = serialize_data(media_form.instance)
             return Response(serialized_data, status=HTTP.CREATED)
 
@@ -1132,6 +1156,13 @@ class MediaTypeListView(drf_views.APIView):
 
         media_form.save()
         apply_image_url(item, media_form.cleaned_data.get("image_url"))
+        episode_count_fields = metadata_utils.apply_provider_episode_count(item, metadata)
+        if episode_count_fields:
+            item.save(update_fields=episode_count_fields)
+        BasicMedia.objects.annotate_episode_progress(
+            [media_form.instance],
+            media_type,
+        )
         serialized_data = serialize_data(media_form.instance)
         return Response(serialized_data, status=HTTP.CREATED)
 
@@ -1264,6 +1295,7 @@ class MediaDetailView(drf_views.APIView):
                 media_type,
                 source,
                 library_media_type=library_media_type,
+                annotate_progress=False,
             )
         except Exception:
             logger.exception(HTTP.INTERNAL_SERVER_ERROR.phrase)
@@ -1273,6 +1305,8 @@ class MediaDetailView(drf_views.APIView):
                 },
                 status=HTTP.INTERNAL_SERVER_ERROR,
             )
+
+        BasicMedia.objects.annotate_episode_progress(user_medias, media_type)
 
         if (
             "related" in media_metadata
@@ -1289,7 +1323,12 @@ class MediaDetailView(drf_views.APIView):
                     media_id,
                     source,
                     library_media_type=library_media_type,
+                    annotate_progress=False,
                 ),
+            )
+            BasicMedia.objects.annotate_episode_progress(
+                serie_seasons,
+                MediaTypes.SEASON.value,
             )
             season_lists_by_number = (
                 BasicMedia.objects.get_serie_season_lists_by_number(
@@ -1494,6 +1533,7 @@ class MediaDetailView(drf_views.APIView):
 
         apply_image_url(media.item, image_url)
         media.refresh_from_db()
+        BasicMedia.objects.annotate_episode_progress(user_medias, media_type)
 
         try:
             media_metadata = services.get_media_metadata(
@@ -2191,6 +2231,7 @@ class MediaSeasonsView(drf_views.APIView):
                 source,
                 season_numbers=season_numbers,
                 library_media_type=season_bucket,
+                annotate_progress=False,
             )
             for tracked in tracked_seasons:
                 item = getattr(tracked, "item", None)
@@ -2245,6 +2286,11 @@ class MediaSeasonsView(drf_views.APIView):
                     },
                 )(),
             )
+
+        BasicMedia.objects.annotate_episode_progress(
+            [entry for entry in season_media_entries if getattr(entry, "id", None)],
+            MediaTypes.SEASON.value,
+        )
 
         paginated_data["results"] = serialize_data(
             season_media_entries,
@@ -2518,6 +2564,7 @@ class MediaSeasonDetailView(drf_views.APIView):
                 source,
                 season_number=season_number,
                 library_media_type=library_media_type,
+                annotate_progress=False,
             )
         except Exception:
             logger.exception(HTTP.INTERNAL_SERVER_ERROR.phrase)
@@ -2527,6 +2574,11 @@ class MediaSeasonDetailView(drf_views.APIView):
                 },
                 status=HTTP.INTERNAL_SERVER_ERROR,
             )
+
+        BasicMedia.objects.annotate_episode_progress(
+            user_medias,
+            MediaTypes.SEASON.value,
+        )
 
         season_episodes = list(
             BasicMedia.objects.get_season_episodes(
@@ -2682,6 +2734,11 @@ class MediaSeasonDetailView(drf_views.APIView):
                 },
                 status=HTTP.INTERNAL_SERVER_ERROR,
             )
+
+        BasicMedia.objects.annotate_episode_progress(
+            user_medias,
+            MediaTypes.SEASON.value,
+        )
 
         lists = get_item_lists(
             user,
@@ -3511,6 +3568,7 @@ class MediaSeasonSyncView(drf_views.APIView):
             }
 
             episodes_to_update = []
+            episode_item_ids_with_title_changes = set()
 
             for episode_data in metadata["episodes"]:
                 episode_number = episode_data["episode_number"]
@@ -3518,10 +3576,15 @@ class MediaSeasonSyncView(drf_views.APIView):
                     episode_item = existing_episodes[episode_number]
                     episode_title_fields = Item.title_fields_from_episode_metadata(
                         episode_data,
-                        fallback_title=item.title,
                     )
-                    for field, value in episode_title_fields.items():
-                        setattr(episode_item, field, value)
+                    if episode_title_fields["title"]:
+                        if any(
+                            getattr(episode_item, field) != value
+                            for field, value in episode_title_fields.items()
+                        ):
+                            episode_item_ids_with_title_changes.add(episode_item.pk)
+                        for field, value in episode_title_fields.items():
+                            setattr(episode_item, field, value)
                     episode_item.image = episode_data["image"]
                     episodes_to_update.append(episode_item)
 
@@ -3531,6 +3594,17 @@ class MediaSeasonSyncView(drf_views.APIView):
                     ["title", "original_title", "localized_title", "image"],
                     batch_size=100,
                 )
+
+            if episode_item_ids_with_title_changes:
+                history_user_ids = (
+                    Episode.objects.filter(
+                        item_id__in=episode_item_ids_with_title_changes,
+                    )
+                    .values_list("related_season__user_id", flat=True)
+                    .distinct()
+                )
+                for user_id in history_user_ids:
+                    history_cache.invalidate_history_cache(user_id, force=True)
 
             item.fetch_releases(delay=False)
 
@@ -3697,6 +3771,7 @@ class MediaEpisodeDetailView(drf_views.APIView):
                 season_number=season_number,
                 episode_number=episode_number,
                 library_media_type=request.query_params.get("library_media_type"),
+                annotate_progress=False,
             )
         except Exception:
             logger.exception("An error occurred while fetching user media.")

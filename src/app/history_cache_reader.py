@@ -51,7 +51,14 @@ from app.history_cache_utils import (
 logger = logging.getLogger(__name__)
 
 
-def get_month_history(user, year: int, month: int, logging_style_override=None):
+def get_month_history(
+    user,
+    year: int,
+    month: int,
+    logging_style_override=None,
+    *,
+    entry_filter=None,
+):
     """Get history days for a specific calendar month.
 
     Reads the month from the cached history index plus indexed per-day payloads
@@ -141,13 +148,19 @@ def get_month_history(user, year: int, month: int, logging_style_override=None):
 
     history_days = []
     missing_days = []
+    cached_days = {}
     for day_key in month_day_keys:
         payload_key = _day_cache_key(user.id, logging_style, day_key)
-        payload = day_payloads.get(payload_key)
+        payload = day_payloads.pop(payload_key, None)
         if payload is None:
             missing_days.append(day_key)
         else:
-            history_days.append(_deserialize_history_day(payload))
+            cached_days[day_key] = _deserialize_history_day(
+                payload,
+                max_entries=HISTORY_ENTRIES_PER_DAY_PAGE,
+                entry_filter=entry_filter,
+            )
+            history_days.append(cached_days[day_key])
 
     if missing_days:
         logger.warning(
@@ -163,12 +176,15 @@ def get_month_history(user, year: int, month: int, logging_style_override=None):
         )
         history_days = []
         for day_key in month_day_keys:
-            payload = day_payloads.get(_day_cache_key(user.id, logging_style, day_key))
-            if payload is not None:
-                history_days.append(_deserialize_history_day(payload))
+            if day_key in cached_days:
+                history_days.append(cached_days[day_key])
                 continue
             history_days.append(
-                _build_and_cache_history_day(user, day_key, logging_style)
+                _window_history_day(
+                    _build_and_cache_history_day(user, day_key, logging_style),
+                    max_entries=HISTORY_ENTRIES_PER_DAY_PAGE,
+                    entry_filter=entry_filter,
+                )
             )
         schedule_history_day_cache_coverage(
             user.id,
@@ -189,7 +205,15 @@ def get_month_history(user, year: int, month: int, logging_style_override=None):
     return history_days, cache_meta
 
 
-def get_cached_history_day(user, day_key, logging_style_override=None):
+def get_cached_history_day(
+    user,
+    day_key,
+    logging_style_override=None,
+    *,
+    entry_offset=0,
+    max_entries=None,
+    entry_filter=None,
+):
     """Read one cached history day, repairing only that day on a miss."""
     normalized_day_key = _day_key_from_value(day_key)
     if not normalized_day_key:
@@ -199,7 +223,12 @@ def get_cached_history_day(user, day_key, logging_style_override=None):
     cache_key = _day_cache_key(user.id, logging_style, normalized_day_key)
     payload = cache.get(cache_key)
     if payload is not None:
-        return _deserialize_history_day(payload)
+        return _deserialize_history_day(
+            payload,
+            entry_offset=entry_offset,
+            max_entries=max_entries,
+            entry_filter=entry_filter,
+        )
 
     logger.warning(
         "history_day_fragment_cache_miss user_id=%s logging_style=%s day_key=%s",
@@ -214,7 +243,14 @@ def get_cached_history_day(user, day_key, logging_style_override=None):
     )
     if day_payload is None:
         return None
-    return day_payload
+    if max_entries is None and not entry_offset:
+        return day_payload
+    return _window_history_day(
+        day_payload,
+        entry_offset,
+        max_entries,
+        entry_filter=entry_filter,
+    )
 
 
 def get_history_days(
@@ -271,26 +307,48 @@ def get_history_days(
     return history_days
 
 
-def _filter_cached_history_days_by_media_type(history_days, media_types):
-    """Filter cached day payloads and recalculate their aggregate totals."""
-    filtered_days = []
-    for day in history_days:
-        entries = [
-            entry
-            for entry in day.get("entries", [])
-            if entry.get("media_type") in media_types
-        ]
-        if not entries:
+def _window_history_day(
+    day,
+    entry_offset=0,
+    max_entries=None,
+    media_types=None,
+    entry_filter=None,
+):
+    """Copy only one entry window while retaining full-day summary metadata."""
+    if not day:
+        return day
+    entry_offset = max(int(entry_offset or 0), 0)
+    stop = None if max_entries is None else entry_offset + max(int(max_entries), 0)
+    entries = []
+    entry_count = 0
+    total_minutes = 0
+    filtering = media_types is not None or entry_filter is not None
+    for entry in day.get("entries", []):
+        if media_types is not None and entry.get("media_type") not in media_types:
             continue
-        filtered_day = dict(day)
-        filtered_day["entries"] = entries
-        total_minutes = sum(entry.get("runtime_minutes") or 0 for entry in entries)
-        filtered_day["total_minutes"] = total_minutes
-        filtered_day["total_runtime_display"] = helpers.minutes_to_hhmm(
-            total_minutes,
-        ) if total_minutes else "0min"
-        filtered_days.append(filtered_day)
-    return filtered_days
+        if entry_filter is not None and not entry_filter(entry):
+            continue
+        if filtering:
+            total_minutes += entry.get("runtime_minutes") or 0
+        if entry_count >= entry_offset and (stop is None or entry_count < stop):
+            entries.append(entry)
+        entry_count += 1
+    result = dict(day)
+    result.update(
+        {
+            "entries": entries,
+            "entry_count": entry_count,
+            "entries_truncated": len(entries) < entry_count,
+            "_entry_window_offset": entry_offset,
+            "_entries_filtered": filtering,
+        }
+    )
+    if filtering:
+        result["total_minutes"] = total_minutes
+        result["total_runtime_display"] = (
+            helpers.minutes_to_hhmm(total_minutes) if total_minutes else "0min"
+        )
+    return result
 
 
 def get_cached_history_window(
@@ -371,23 +429,27 @@ def get_cached_history_window(
         for day_key in page_day_keys
     ]
     payloads = cache.get_many(payload_keys) if payload_keys else {}
+    cache_hits = len(payloads)
     history_days = []
     missing_day_keys = []
     for day_key in page_day_keys:
-        payload = payloads.get(_day_cache_key(user.id, logging_style, day_key))
+        payload = payloads.pop(_day_cache_key(user.id, logging_style, day_key), None)
         if payload is None:
             missing_day_keys.append(day_key)
             continue
-        day_payload = _deserialize_history_day(payload)
+        day_payload = _deserialize_history_day(
+            payload,
+            max_entries=entry_cap,
+            media_types=requested_media_types,
+        )
         if requested_media_types is not None:
-            filtered_days = _filter_cached_history_days_by_media_type(
-                [day_payload],
-                requested_media_types,
-            )
-            if not filtered_days:
+            if not day_payload["entry_count"]:
                 missing_day_keys.append(day_key)
                 continue
-            day_payload = filtered_days[0]
+            total_minutes = day_payload["total_minutes"]
+            day_payload["total_runtime_display"] = (
+                helpers.minutes_to_hhmm(total_minutes) if total_minutes else "0min"
+            )
         history_days.append(day_payload)
 
     for day_key in missing_day_keys:
@@ -399,7 +461,13 @@ def get_cached_history_window(
         )
         if day_payload is None:
             continue
-        history_days.append(day_payload)
+        history_days.append(
+            _window_history_day(
+                day_payload,
+                max_entries=entry_cap,
+                media_types=requested_media_types,
+            )
+        )
         if requested_media_types is None:
             cache.set(
                 _day_cache_key(user.id, logging_style, day_key),
@@ -413,6 +481,9 @@ def get_cached_history_window(
     # entries within a day — cap those separately or a single busy day could
     # blow up the response to megabytes even for `limit=1`.
     total_entries = apply_history_entry_cap(history_days, entry_cap)
+    for day_payload in history_days:
+        day_payload.pop("_entry_window_offset", None)
+        day_payload.pop("_entries_filtered", None)
 
     logger.info(
         "history_cached_window user_id=%s logging_style=%s filters=%s indexed=%s offset=%s limit=%s cached=%s missing=%s returned=%s entries=%s",
@@ -422,7 +493,7 @@ def get_cached_history_window(
         total_days,
         offset,
         limit,
-        len(payloads),
+        cache_hits,
         len(missing_day_keys),
         len(history_days),
         total_entries,
@@ -538,15 +609,21 @@ def get_cached_history_page(user, page_number: int = 1, logging_style_override=N
     )
     history_days = []
     missing_days = []
+    cached_days = {}
+    cache_hits = len(day_payloads)
     for day_key in page_day_keys:
         payload_key = _day_cache_key(user.id, logging_style, day_key)
-        payload = day_payloads.get(payload_key)
+        payload = day_payloads.pop(payload_key, None)
         if payload is None:
             missing_days.append(day_key)
             continue
-        history_days.append(_deserialize_history_day(payload))
+        cached_days[day_key] = _deserialize_history_day(
+            payload,
+            max_entries=HISTORY_ENTRIES_PER_DAY_PAGE,
+        )
+        history_days.append(cached_days[day_key])
 
-    if missing_days and len(day_payloads) == 0:
+    if missing_days and cache_hits == 0:
         refresh_lock = _clean_refresh_lock(lock_key)
         scheduled = False
         if refresh_lock is None:
@@ -582,7 +659,10 @@ def get_cached_history_page(user, page_number: int = 1, logging_style_override=N
                 user, day_key, logging_style_override=logging_style
             )
             if day_payload:
-                built_days[day_key] = day_payload
+                built_days[day_key] = _window_history_day(
+                    day_payload,
+                    max_entries=HISTORY_ENTRIES_PER_DAY_PAGE,
+                )
                 cache.set(
                     _day_cache_key(user.id, logging_style, day_key),
                     _serialize_history_day(day_payload),
@@ -608,10 +688,8 @@ def get_cached_history_page(user, page_number: int = 1, logging_style_override=N
         if built_days:
             history_days = []
             for day_key in page_day_keys:
-                payload_key = _day_cache_key(user.id, logging_style, day_key)
-                payload = day_payloads.get(payload_key)
-                if payload:
-                    history_days.append(_deserialize_history_day(payload))
+                if day_key in cached_days:
+                    history_days.append(cached_days[day_key])
                     continue
                 day_payload = built_days.get(day_key)
                 if day_payload:
