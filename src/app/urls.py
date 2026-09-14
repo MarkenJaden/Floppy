@@ -1,6 +1,6 @@
 from django.urls import path, register_converter
 
-from app import converters, views
+from app import converters, episode_order_views, views
 from app.discover import feeds as discover_feeds
 
 register_converter(converters.MediaTypeChecker, "media_type")
@@ -8,6 +8,11 @@ register_converter(converters.SourceChecker, "source")
 
 
 urlpatterns = [
+    path(
+        "tv/<int:tv_id>/episode-ordering/",
+        episode_order_views.episode_ordering_settings,
+        name="episode_ordering_settings",
+    ),
     path(
         "image-cache/<str:token>",
         views.serve_image_cache,
@@ -517,6 +522,16 @@ urlpatterns = [
     ),
     path("tag_item_toggle", views.tag_item_toggle, name="tag_item_toggle"),
     path("tag_bulk_toggle", views.tag_bulk_toggle, name="tag_bulk_toggle"),
+    path(
+        "bulk/status",
+        views.bulk_status_update,
+        name="bulk_status_update",
+    ),
+    path(
+        "bulk/collection",
+        views.bulk_collection_quick_add,
+        name="bulk_collection_quick_add",
+    ),
     path("tag_create", views.tag_create, name="tag_create"),
     path("tag_delete", views.tag_delete, name="tag_delete"),
 ]

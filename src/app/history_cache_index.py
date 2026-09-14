@@ -55,7 +55,7 @@ def build_history_index(
     days = set()
 
     episode_days = (
-        Episode.objects.filter(
+        Episode.all_objects.filter(
             related_season__user=user,
             end_date__isnull=False,
         )

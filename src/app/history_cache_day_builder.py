@@ -92,7 +92,7 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
 
     # Episodes
     episodes = (
-        Episode.objects.filter(
+        Episode.all_objects.filter(
             related_season__user=user,
             end_date__gte=day_start,
             end_date__lt=day_end,
@@ -104,7 +104,7 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
         )
         .order_by("-end_date")
         if include_episode
-        else Episode.objects.none()
+        else Episode.all_objects.none()
     )
     episodes = list(episodes)
     episode_title_map = {}
@@ -144,7 +144,7 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
                 .exclude(title__isnull=True)
                 .exclude(title="")
             )
-            for item in titles_qs:
+            for item in titles_qs.iterator(chunk_size=500):
                 key = (
                     item.media_id,
                     item.source,
@@ -158,6 +158,9 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
         entry = _build_episode_entry(episode, episode_title_map)
         if entry:
             entries.append(entry)
+    # Entries contain serialized data; release the episode model graph before
+    # building the other media sections of a busy day.
+    del episodes, episode_title_map
 
     # Movies
     movies_qs = (
@@ -188,7 +191,7 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
         ),
     ).order_by("-end_date")
 
-    for movie in movies:
+    for movie in movies.iterator(chunk_size=500):
         entry = _build_movie_entry(movie)
         if not entry:
             continue
@@ -223,7 +226,7 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
             )
             .select_related("item")
         )
-        for record in records:
+        for record in records.iterator(chunk_size=500):
             item = getattr(record, "item", None)
             if not item:
                 continue
@@ -303,7 +306,7 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
                 album_id__in=album_ids,
                 duration_ms__isnull=False,
             ).values("album_id", "title", "duration_ms", "musicbrainz_recording_id")
-            for track_data in tracks_qs:
+            for track_data in tracks_qs.iterator(chunk_size=500):
                 title_key = (track_data["album_id"], track_data["title"])
                 track_duration_cache[title_key] = track_data["duration_ms"]
                 if track_data["musicbrainz_recording_id"]:
@@ -319,7 +322,7 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
                 user=user,
                 album_id__in=album_ids,
             ).values("album_id", "score")
-            for tracker in album_trackers:
+            for tracker in album_trackers.iterator(chunk_size=500):
                 if tracker["score"] is not None:
                     album_scores[tracker["album_id"]] = tracker["score"]
 
@@ -427,6 +430,8 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
                 end_date__gte=day_start,
                 end_date__lt=day_end,
             )
+            .values_list("id", "end_date", "history_id", named=True)
+            .iterator(chunk_size=500)
         )
     if podcast_history_records:
         podcast_ids = list({record.id for record in podcast_history_records})
@@ -540,7 +545,7 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
             if include_game
             else Game.objects.none()
         )
-        for game in games:
+        for game in games.iterator(chunk_size=500):
             activity_dt = game.end_date or game.start_date or game.created_at
             played_at_local = _localize_datetime(activity_dt)
             if not played_at_local:
@@ -601,7 +606,7 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
             if include_boardgame
             else BoardGame.objects.none()
         )
-        for boardgame in boardgames:
+        for boardgame in boardgames.iterator(chunk_size=500):
             activity_dt = (
                 boardgame.end_date or boardgame.start_date or boardgame.created_at
             )
@@ -650,7 +655,7 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
             if include_game
             else Game.objects.none()
         )
-        for game in games:
+        for game in games.iterator(chunk_size=500):
             total_minutes = game.progress or 0
             if total_minutes <= 0:
                 continue
@@ -708,7 +713,7 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
             if include_boardgame
             else BoardGame.objects.none()
         )
-        for boardgame in boardgames:
+        for boardgame in boardgames.iterator(chunk_size=500):
             total_plays = boardgame.progress or 0
             if total_plays <= 0:
                 continue

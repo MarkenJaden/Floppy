@@ -570,7 +570,22 @@ scripts/benchmark_memory.sh \
 
 The report distinguishes cgroup usage from summed process PSS/RSS and Redis usage, so shared
 preloaded pages and the separate Redis container are visible instead of being counted as a
-single opaque number. Build the candidate image locally before running the comparison.
+single opaque number. It also splits each process's proportional memory into anonymous,
+file-backed and shared parts, which is what separates private heap a process is really using
+from page cache and preloaded pages it merely shares. Build the candidate image locally
+before running the comparison.
+
+To measure a running container instead of a disposable one, pipe the sampler into it:
+
+```bash
+docker exec -i floppy python - < scripts/container_memory_sample.py
+```
+
+`scripts/` is not part of the image, so the script is fed over standard input. Outside the
+benchmark stack the container has no `CAP_SYS_PTRACE`, so `/proc/<pid>/smaps_rollup` is
+unreadable and those processes are reported with `"measurement": "rss-only"` — RSS only, with
+the proportional counters null and `process_pss_complete` false. The sampler reports the
+command name of each process but never its arguments, which can carry connection details.
 
 If an existing deployment has `WEB_CONCURRENCY` or `GUNICORN_THREADS` set from an
 older fixed-size configuration, remove those overrides before upgrading on a

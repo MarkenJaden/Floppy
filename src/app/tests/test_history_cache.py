@@ -62,6 +62,57 @@ class HistoryMonthCacheTests(TestCase):
         index_days = history_cache.build_history_index(self.user, self.logging_style)
         return [day_key for day_key in index_days if day_key.startswith(month_prefix)]
 
+    def test_dense_cached_day_deserializes_only_visible_entries(self):
+        from app import history_cache_serialization
+
+        day = timezone.localdate()
+        day_key = day.strftime("%Y%m%d")
+        cache.set(
+            history_cache._cache_key(self.user.id, self.logging_style),
+            {"days": [day_key], "built_at": timezone.now()},
+        )
+        cache.set(
+            history_cache._day_cache_key(
+                self.user.id,
+                self.logging_style,
+                day_key,
+            ),
+            {
+                "date": day.isoformat(),
+                "entries": [
+                    {
+                        "media_type": MediaTypes.MOVIE.value,
+                        "title": f"Dense entry {index}",
+                        "runtime_minutes": 90,
+                    }
+                    for index in range(1000)
+                ],
+                "total_minutes": 90000,
+                "total_runtime_display": "1500h",
+            },
+        )
+
+        with patch.object(
+            history_cache_serialization,
+            "_deserialize_history_entry",
+            wraps=history_cache_serialization._deserialize_history_entry,
+        ) as deserialize_entry:
+            days, _meta = history_cache.get_month_history(
+                self.user,
+                day.year,
+                day.month,
+            )
+
+        self.assertEqual(days[0]["entry_count"], 1000)
+        self.assertEqual(
+            len(days[0]["entries"]),
+            history_cache.HISTORY_ENTRIES_PER_DAY_PAGE,
+        )
+        self.assertEqual(
+            deserialize_entry.call_count,
+            history_cache.HISTORY_ENTRIES_PER_DAY_PAGE,
+        )
+
     @patch("app.history_cache_reader.schedule_history_day_cache_coverage")
     @patch("app.history_cache_reader.schedule_history_refresh")
     def test_history_view_repairs_cold_month_inline_without_scheduling_refresh(
@@ -152,6 +203,58 @@ class HistoryMonthCacheTests(TestCase):
             self.user.id,
             self.logging_style,
             countdown=15,
+        )
+
+    def test_partial_month_deserializes_cached_days_only_once(self):
+        from app import history_cache_reader
+
+        day_key = "20260902"
+        payload = {"date": "2026-09-02", "entries": []}
+        payload_key = history_cache._day_cache_key(
+            self.user.id,
+            self.logging_style,
+            day_key,
+        )
+        with (
+            patch.object(
+                history_cache_reader, "_clean_refresh_lock", return_value=None
+            ),
+            patch.object(
+                history_cache_reader.cache,
+                "get",
+                return_value={
+                    "days": [day_key, "20260901"],
+                    "built_at": timezone.now(),
+                },
+            ),
+            patch.object(
+                history_cache_reader.cache,
+                "get_many",
+                return_value={
+                    payload_key: payload,
+                },
+            ),
+            patch.object(
+                history_cache_reader,
+                "_deserialize_history_day",
+                wraps=history_cache_reader._deserialize_history_day,
+            ) as deserialize,
+            patch.object(
+                history_cache_reader,
+                "_build_and_cache_history_day",
+                return_value={"date": "2026-09-01", "entries": []},
+            ),
+            patch.object(history_cache_reader, "schedule_history_day_cache_coverage"),
+        ):
+            days, _ = history_cache_reader.get_month_history(self.user, 2026, 9)
+        self.assertEqual(len(days), 2)
+        deserialize.assert_called_once()
+        self.assertEqual(deserialize.call_args.args[0], payload)
+        # The reader materializes only the requested window rather than the
+        # whole day; an unbounded call here would undo that.
+        self.assertEqual(
+            deserialize.call_args.kwargs["max_entries"],
+            history_cache_reader.HISTORY_ENTRIES_PER_DAY_PAGE,
         )
 
     def test_refresh_history_cache_repairs_missing_index_day_payloads(self):

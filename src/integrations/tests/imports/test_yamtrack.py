@@ -902,3 +902,114 @@ class ImportYamtrackPodcastReferences(TestCase):
         self.assertIsNone(podcast.show)
         self.assertIsNone(podcast.episode)
         self.assertEqual(podcast.status, Status.COMPLETED.value)
+
+
+class ImportYamtrackSourceValidation(TestCase):
+    """Test that invalid source values are rejected during Yamtrack import."""
+
+    def setUp(self):
+        """Create user for the tests."""
+        self.credentials = {"username": "test", "password": "12345"}
+        self.user = get_user_model().objects.create_user(**self.credentials)
+        self.importer = yamtrack.YamtrackImporter(None, self.user, "new")
+
+    def _media_row(self, source):
+        """Return a minimal media row with a given source."""
+        return {
+            "media_id": "123",
+            "source": source,
+            "media_type": "movie",
+            "title": "Some Movie",
+            "image": "https://example.com/poster.jpg",
+            "season_number": "",
+            "episode_number": "",
+            "progress": "",
+            "status": "Completed",
+        }
+
+    def test_normalize_source_lowercases_and_strips(self):
+        """Source normalization mirrors the previous inline behavior."""
+        row = self._media_row("  TMDB  ")
+        self.assertEqual(self.importer._normalize_source(row), "tmdb")
+
+    def test_is_valid_source_accepts_enum_value(self):
+        """A valid enum source is accepted."""
+        row = self._media_row("tmdb")
+        self.assertTrue(self.importer.is_valid_source(row))
+
+    def test_is_valid_source_accepts_tvdb(self):
+        """TVDB is a valid enum source and must not be rejected."""
+        row = self._media_row("tvdb")
+        self.assertTrue(self.importer.is_valid_source(row))
+
+    def test_is_valid_source_rejects_garbage(self):
+        """A non-enum source is rejected and records a warning."""
+        row = self._media_row("not_a_real_source")
+        self.assertFalse(self.importer.is_valid_source(row))
+        self.assertTrue(
+            any("not_a_real_source" in w for w in self.importer.warnings),
+        )
+
+    def test_is_valid_source_allows_empty(self):
+        """An empty source is valid (resolved by title/ISBN) with no warning."""
+        row = self._media_row("")
+        self.assertTrue(self.importer.is_valid_source(row))
+        self.assertEqual(self.importer.warnings, [])
+
+    def test_invalid_source_media_row_skipped(self):
+        """A media row with an invalid source is skipped and creates no item."""
+        row = self._media_row("garbage")
+        self.importer._process_row(row)
+        self.assertEqual(Movie.objects.filter(user=self.user).count(), 0)
+        self.assertTrue(any("garbage" in w for w in self.importer.warnings))
+
+    def test_invalid_source_list_item_row_skipped(self):
+        """A list_item row with an invalid source is skipped."""
+        custom_list = CustomList.objects.create(name="Rejected", owner=self.user)
+        self.importer.list_map["rejected"] = custom_list
+        row = {
+            "row_type": "list_item",
+            "list_name": "Rejected",
+            "media_id": "123",
+            "source": "garbage",
+            "media_type": "movie",
+            "title": "Some Movie",
+            "image": "https://example.com/poster.jpg",
+            "season_number": "",
+            "episode_number": "",
+        }
+        self.importer._process_row(row)
+        self.assertEqual(
+            CustomListItem.objects.filter(custom_list=custom_list).count(),
+            0,
+        )
+        self.assertTrue(any("garbage" in w for w in self.importer.warnings))
+
+    def test_invalid_source_collection_row_skipped(self):
+        """A collection row with an invalid source is skipped, not aborting."""
+        row = self._media_row("garbage")
+        row["row_type"] = "collection"
+        self.importer._process_row(row)
+        self.assertEqual(Movie.objects.filter(user=self.user).count(), 0)
+        self.assertEqual(CollectionEntry.objects.filter(user=self.user).count(), 0)
+        self.assertTrue(any("garbage" in w for w in self.importer.warnings))
+
+    def test_invalid_source_list_item_leaves_no_list(self):
+        """A rejected list item does not provision its fallback list."""
+        row = {
+            "row_type": "list_item",
+            "list_name": "Orphan",
+            "media_id": "123",
+            "source": "garbage",
+            "media_type": "movie",
+            "title": "Some Movie",
+            "image": "https://example.com/poster.jpg",
+            "season_number": "",
+            "episode_number": "",
+        }
+        self.importer._process_row(row)
+        self.assertFalse(
+            CustomList.objects.filter(owner=self.user, name="Orphan").exists(),
+        )
+        self.assertTrue(any("garbage" in w for w in self.importer.warnings))
+

@@ -81,12 +81,12 @@ def apply_history_entry_cap(history_days, cap):
     total_entries = 0
     for day_payload in history_days:
         entries = day_payload.get("entries", [])
-        entry_count = len(entries)
+        entry_count = day_payload.get("entry_count", len(entries))
         total_entries += entry_count
         if entry_count > cap:
             day_payload["entries"] = entries[:cap]
         day_payload["entry_count"] = entry_count
-        day_payload["entries_truncated"] = entry_count > cap
+        day_payload["entries_truncated"] = entry_count > len(day_payload["entries"])
     return total_entries
 
 

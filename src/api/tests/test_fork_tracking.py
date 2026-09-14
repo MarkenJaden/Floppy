@@ -861,6 +861,45 @@ class HistoryTimelineTests(FloppyApiTestCase):
                 self.assertEqual(history_entry["title"], "Pilot")
                 self.assertEqual(history_entry["show"]["title"], "TV Show 1")
 
+    def test_flat_episode_history_uses_episode_title_in_item_and_url(self):
+        """Flattened history keeps the repaired episode title in its item and URL."""
+        episode = self.episode_medias[0]
+        episode.related_season.related_tv.item.source = Sources.TVDB.value
+        episode.related_season.related_tv.item.media_id = "81189"
+        episode.related_season.related_tv.item.save(
+            update_fields=["source", "media_id"],
+        )
+        episode.related_season.item.source = Sources.TVDB.value
+        episode.related_season.item.media_id = "81189"
+        episode.related_season.item.save(update_fields=["source", "media_id"])
+        episode.item.title = "Pilot"
+        episode.item.source = Sources.TVDB.value
+        episode.item.media_id = "81189"
+        episode.item.save(update_fields=["title", "source", "media_id"])
+        episode.end_date = datetime.datetime(2024, 5, 11, tzinfo=datetime.UTC)
+        episode.save(update_fields=["end_date"])
+        cache.clear()
+
+        response = self.call_api(
+            "get",
+            "api_history",
+            params={"flat": "1"},
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, HTTP.OK)
+        history_entry = next(
+            entry
+            for entry in response.json()["results"]
+            if entry["instance_id"] == episode.id
+        )
+        self.assertEqual(history_entry["title"], "Pilot")
+        self.assertEqual(history_entry["item"]["title"], "Pilot")
+        self.assertIn(
+            "/details/tvdb/tv/81189/pilot/season/1/episode/1",
+            history_entry["url"],
+        )
+
     def test_history_types_alias_filters_categories_before_querying(self):
         """The issue's plural types parameter excludes unrelated categories."""
         episode = self.episode_medias[0]

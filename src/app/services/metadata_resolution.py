@@ -626,6 +626,22 @@ def get_or_create_tracked_season_item(
     of) the resolved item, so corruption repairs itself the next time any
     caller touches that show/season, with no manual command required.
     """
+    from app.services.order_resolution import order_from_media_id
+
+    order = order_from_media_id(media_id, source)
+    if order is not None:
+        item, _ = Item.objects.get_or_create(
+            episode_order=order,
+            media_id=order.media_id,
+            source=order.provider,
+            media_type=MediaTypes.SEASON.value,
+            season_number=season_number,
+            episode_number=None,
+            library_media_type=library_media_type,
+            defaults=defaults or {},
+        )
+        return item
+
     link = (
         ItemProviderLink.objects.filter(
             provider=provider,

@@ -1,4 +1,5 @@
 import datetime
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -89,6 +90,59 @@ class GamesInTopTalentAggregationTests(TestCase):
             role_type=CreditRoleType.CAST.value,
             role="Hero",
         )
+
+    def test_talent_does_not_materialize_credit_models(self):
+        # A person can have thousands of credits and a large biography. Only
+        # scalar credit rows and display fields for the winners are needed.
+        with (
+            patch.object(ItemPersonCredit, "from_db", side_effect=AssertionError),
+            patch.object(ItemStudioCredit, "from_db", side_effect=AssertionError),
+        ):
+            result = _aggregate_top_talent(
+                self.user,
+                None,
+                None,
+                limit=1,
+                schedule_missing_backfill=False,
+            )
+        self.assertEqual(result["top_actors"][0]["name"], "Bob Movie Star")
+        self.assertEqual(result["top_actresses"][0]["name"], "Alice Actor")
+        self.assertEqual(result["top_studios"][0]["name"], "Dispatch Studio")
+
+    def test_limited_rankings_preserve_ties_and_duplicate_credit_counts(self):
+        for index in range(4):
+            person = Person.objects.create(
+                source=Sources.TMDB.value,
+                source_person_id=f"tie-{index}",
+                name="Same Name",
+                gender=PersonGender.MALE.value,
+            )
+            for role in ("First character", "Second character"):
+                ItemPersonCredit.objects.create(
+                    item=self.movie_item,
+                    person=person,
+                    role_type=CreditRoleType.CAST.value,
+                    role=role,
+                )
+        complete = _aggregate_top_talent(
+            self.user,
+            None,
+            None,
+            schedule_missing_backfill=False,
+        )
+        limited = _aggregate_top_talent(
+            self.user,
+            None,
+            None,
+            limit=3,
+            schedule_missing_backfill=False,
+        )
+        for mode in ("plays", "time", "titles"):
+            expected = complete["by_sort"][mode]["top_actors"][:3]
+            self.assertEqual(limited["by_sort"][mode]["top_actors"], expected)
+            for row in expected:
+                self.assertEqual(row["plays"], 1)
+                self.assertEqual(row["unique_movies"], 1)
 
     def test_game_cast_appears_in_top_actors(self):
         result = _aggregate_top_talent(

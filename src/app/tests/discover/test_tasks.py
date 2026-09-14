@@ -4,6 +4,10 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from app.tasks import refresh_discover_rows, refresh_discover_tab_cache
+from app.tasks_discover import (
+    refresh_discover_profile_for_user,
+    refresh_discover_profiles,
+)
 
 
 class DiscoverTaskTests(TestCase):
@@ -12,6 +16,68 @@ class DiscoverTaskTests(TestCase):
             username="discover-task-user",
             password="secret123",
         )
+
+    @patch("app.discover.profile.get_or_compute_taste_profile")
+    def test_profile_refresh_respects_freshness(self, compute):
+        refresh_discover_profile_for_user(self.user.id, ["all"])
+        compute.assert_called_once_with(self.user, "all", force=False)
+
+    @patch("app.tasks_discover.cache_safety.acquire_lock")
+    @patch("app.discover.profile.get_or_compute_taste_profile")
+    def test_explicit_profile_refresh_can_force_recomputation(self, compute, acquire):
+        refresh_discover_profile_for_user(self.user.id, ["all"], force=True)
+        compute.assert_called_once_with(self.user, "all", force=True)
+        acquire.assert_not_called()
+
+    @patch("app.tasks_discover.cache_safety.release_lock")
+    @patch("app.tasks_discover.cache_safety.acquire_lock", return_value=False)
+    @patch("app.discover.profile.get_or_compute_taste_profile")
+    def test_overlapping_scheduled_profile_refresh_is_skipped(
+        self,
+        compute,
+        acquire,
+        release,
+    ):
+        result = refresh_discover_profile_for_user(self.user.id, ["all"])
+        self.assertEqual(result, {"profiles_refreshed": 0, "profiles_skipped": 1})
+        acquire.assert_called_once()
+        compute.assert_not_called()
+        release.assert_not_called()
+
+    @patch("app.tasks_discover.cache_safety.release_lock")
+    @patch("app.tasks_discover.cache_safety.acquire_lock", return_value=True)
+    @patch(
+        "app.discover.profile.get_or_compute_taste_profile",
+        side_effect=RuntimeError("boom"),
+    )
+    def test_failed_scheduled_profile_refresh_releases_lock(
+        self,
+        compute,
+        acquire,
+        release,
+    ):
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            refresh_discover_profile_for_user(self.user.id, ["all"])
+        compute.assert_called_once()
+        acquire.assert_called_once()
+        release.assert_called_once()
+
+    @patch("app.tasks_discover.refresh_discover_profile_for_user.apply_async")
+    def test_profile_fanout_preserves_force(self, dispatch):
+        for force in (False, True):
+            with self.subTest(force=force):
+                refresh_discover_profiles([self.user.id], ["all"], force=force)
+                self.assertEqual(dispatch.call_args.kwargs["kwargs"]["force"], force)
+
+    @patch("app.discover.profile.get_or_compute_taste_profile")
+    def test_deleted_profile_user_is_skipped(self, compute):
+        user_id = self.user.id
+        self.user.delete()
+        self.assertEqual(
+            refresh_discover_profile_for_user(user_id, ["all"]),
+            {"profiles_refreshed": 0, "reason": "missing_user"},
+        )
+        compute.assert_not_called()
 
     @patch("app.discover.service.refresh_rows_for_user")
     @patch("app.discover.tab_cache.refresh_tab_cache")

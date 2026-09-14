@@ -17,7 +17,6 @@ from django.core.cache import cache
 from django.core.signing import BadSignature, Signer
 from django.http import FileResponse, HttpResponse, HttpResponseNotFound
 from django.urls import reverse
-from PIL import Image, UnidentifiedImageError
 
 from app.models.application_settings import ApplicationSettings
 
@@ -259,6 +258,11 @@ def _fetch_to_disk(url):
                 if total > MAX_IMAGE_BYTES:
                     return False
                 data_file.write(chunk)
+
+        # Imported here, not at module scope: Pillow is a C extension that
+        # every process importing this module would otherwise carry resident,
+        # while only this download path ever decodes an image.
+        from PIL import Image, UnidentifiedImageError
 
         try:
             with Image.open(temporary_data) as image:

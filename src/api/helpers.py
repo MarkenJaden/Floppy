@@ -270,6 +270,38 @@ def check_source_type(media_type, source):
     return False
 
 
+# Pairs of media types that can represent the same underlying show/library
+# (e.g. a TV series tracked under the "anime" bucket instead of "tv").
+_ALTERNATE_LIBRARY_TYPE = {"anime": "tv", "tv": "anime"}
+
+
+def get_media_type_availability(user, media_type):
+    """Report whether media_type is enabled for user, with a redirect hint.
+
+    Lets callers (notably automated agents) see, at the point they're about
+    to act, whether the media type they're browsing is disabled for this
+    user -- and if so, whether the same content is likely tracked under a
+    different, enabled media type instead.
+    """
+    if not user or not getattr(user, "is_authenticated", False):
+        return {"media_type": media_type, "enabled": True, "message": None}
+
+    enabled = getattr(user, f"{media_type}_enabled", True)
+    message = None
+    if not enabled:
+        message = (
+            f"{media_type.capitalize()} tracking is disabled in your account "
+            "settings."
+        )
+        alt = _ALTERNATE_LIBRARY_TYPE.get(media_type)
+        if alt and getattr(user, f"{alt}_enabled", True):
+            message += (
+                f" This title may also be available under '{alt}' -- "
+                f"consider searching or logging it there instead."
+            )
+    return {"media_type": media_type, "enabled": enabled, "message": message}
+
+
 def fetch_media_list(user, media_type, status, sort_filter, search):
     """Return a plain list of the requested media."""
     if media_type == MediaTypes.EPISODE.value:

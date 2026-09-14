@@ -353,9 +353,6 @@ class IntegrationTest(StaticLiveServerTestCase):
         # Episode 1 air date is 2008-01-20
         fixed_date = date(2008, 1, 20)
         modal = self.page.locator("[data-track-modal-root]:visible").first
-        first_watch_operation_id = modal.locator(
-            'input[name="watch_operation_id"]',
-        ).input_value()
         self.set_date_input(
             modal.locator('input[name="end_date"]'),
             f"{fixed_date.isoformat()}T12:00",
@@ -383,17 +380,13 @@ class IntegrationTest(StaticLiveServerTestCase):
         expect(tracked_button).to_be_visible()
         tracked_button.click()
         modal = self.page.locator("[data-track-modal-root]:visible").first
-        add_new_entry = modal.get_by_role("button", name="Add new entry")
-        expect(add_new_entry).to_be_visible()
-        add_new_entry.click()
-        expect(modal.locator('input[name="watch_operation_id"]')).not_to_have_value(
-            first_watch_operation_id,
-        )
+        save_as_new_entry = modal.get_by_role("button", name="Save as new entry")
+        expect(save_as_new_entry).to_be_visible()
         self.set_date_input(modal.locator('input[name="end_date"]'), f"{today}T12:00")
         with self.page.expect_request(
             lambda request: request.method == "POST" and "/episode_save" in request.url,
         ) as save_request:
-            self.page.get_by_role("button", name="Add", exact=True).click()
+            save_as_new_entry.click()
         save_request.value.response()
         expect(self.page.get_by_role("main")).to_contain_text(f"Ended: {today}")
 
