@@ -34,6 +34,8 @@ jobs:
       UPSTREAM_BRANCH: ${{ inputs.upstream_branch || 'latest' }}
       TARGET_BRANCH: ${{ inputs.target_branch || 'latest' }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -73,56 +75,84 @@ jobs:
             echo "merge_status=clean" >> $GITHUB_OUTPUT
           else
             echo "Merge conflict detected!"
-            git merge --abort || true
             echo "merge_status=conflict" >> $GITHUB_OUTPUT
           fi
 
-      - name: Handle merge conflict
+      - name: Auto-resolve conflicts with Gemini
+        id: gemini_resolve
         if: steps.attempt_merge.outputs.merge_status == 'conflict'
         run: |
+          if [ -z "${GEMINI_API_KEY}" ]; then
+            echo "No GEMINI_API_KEY configured. Skipping AI conflict resolution."
+            echo "resolve_status=skipped" >> $GITHUB_OUTPUT
+          else
+            echo "Attempting automated conflict resolution with Gemini..."
+            if python3 .github/scripts/gemini_conflict_resolver.py; then
+              echo "Gemini successfully resolved all merge conflicts!"
+              echo "resolve_status=success" >> $GITHUB_OUTPUT
+            else
+              echo "Gemini could not resolve all conflicts cleanly."
+              echo "resolve_status=failed" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Handle unresolved merge conflict
+        if: steps.attempt_merge.outputs.merge_status == 'conflict' && steps.gemini_resolve.outputs.resolve_status != 'success'
+        run: |
+          echo "Aborting in-progress merge..."
+          git merge --abort || true
           BRANCH_NAME="upstream-sync/conflict-${{ github.run_id }}"
-          echo "Creating conflict branch ${BRANCH_NAME}..."
-          git checkout -b "${BRANCH_NAME}"
-          git merge -X ours --no-edit upstream/${UPSTREAM_BRANCH} || true
-          git push origin "${BRANCH_NAME}"
+          echo "Creating sync branch ${BRANCH_NAME} from upstream..."
+          git checkout -B "${BRANCH_NAME}" "upstream/${UPSTREAM_BRANCH}"
+          git push origin "${BRANCH_NAME}" --force
           gh pr create \
             --repo "${{ github.repository }}" \
             --title "⚠️ Upstream Sync Conflict - Manual Resolution Required" \
-            --body "Automated sync from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` into \`${TARGET_BRANCH}\` failed due to merge conflicts. Please inspect and resolve manually on branch \`${BRANCH_NAME}\`." \
+            --body "Automated sync from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` into \`${TARGET_BRANCH}\` encountered merge conflicts. Gemini auto-resolution was either unavailable or could not resolve all conflicts cleanly. Please inspect and resolve conflicts manually on branch \`${BRANCH_NAME}\`." \
             --base "${TARGET_BRANCH}" \
             --head "${BRANCH_NAME}" || \
           gh issue create \
             --repo "${{ github.repository }}" \
             --title "⚠️ Upstream Sync Conflict" \
             --body "Merge conflict occurred when syncing from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\`. Check branch \`${BRANCH_NAME}\`." || \
-          echo "::warning::Could not create PR/Issue via GitHub CLI. Verify that 'Allow GitHub Actions to create and approve pull requests' is enabled in Settings -> Actions -> General -> Workflow permissions."
+          echo "::warning::Could not create PR/Issue via GitHub CLI."
           exit 1
 
       - name: Set up Python
-        if: steps.attempt_merge.outputs.merge_status == 'clean'
+        if: steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success'
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Set up uv
-        if: steps.attempt_merge.outputs.merge_status == 'clean'
+        if: steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success'
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.12.3"
 
       - name: Install dependencies
-        if: steps.attempt_merge.outputs.merge_status == 'clean'
+        if: steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success'
         run: |
           uv sync --locked --no-default-groups --group test --group lint
 
+      - name: Auto-format resolved code
+        if: steps.gemini_resolve.outputs.resolve_status == 'success'
+        run: |
+          echo "Running ruff check --fix and ruff format on resolved code..."
+          uv run --no-sync ruff check --fix src || true
+          uv run --no-sync ruff format src || true
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -am "style: format auto-resolved conflicts with ruff" || true
+          fi
+
       - name: Run lint and preflight checks
-        if: steps.attempt_merge.outputs.merge_status == 'clean'
+        if: steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success'
         id: run_checks
         run: |
           uv run --no-sync ruff check src
 
       - name: Run test suite
-        if: steps.attempt_merge.outputs.merge_status == 'clean'
+        if: steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success'
         id: run_tests
         run: |
           export SECRET="$(uv run --no-sync python -c 'import secrets; print(secrets.token_urlsafe(50))')"
@@ -131,7 +161,7 @@ jobs:
             --parallel --buffer --exclude-tag network --exclude-tag slow
 
       - name: Handle test/validation failure
-        if: failure() && steps.attempt_merge.outputs.merge_status == 'clean'
+        if: failure() && (steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success')
         run: |
           BRANCH_NAME="upstream-sync/test-failure-${{ github.run_id }}"
           echo "Automated tests or lint checks failed on merged code. Creating branch ${BRANCH_NAME}..."
@@ -140,18 +170,18 @@ jobs:
           gh pr create \
             --repo "${{ github.repository }}" \
             --title "❌ Upstream Sync Validation Failed" \
-            --body "Upstream changes from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` were merged cleanly, but automated linting or test suite checks failed. Please review branch \`${BRANCH_NAME}\` before merging into \`${TARGET_BRANCH}\`." \
+            --body "Upstream changes from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` were merged, but automated linting or test suite checks failed. Please review branch \`${BRANCH_NAME}\` before merging into \`${TARGET_BRANCH}\`." \
             --base "${TARGET_BRANCH}" \
             --head "${BRANCH_NAME}" || \
           gh issue create \
             --repo "${{ github.repository }}" \
             --title "❌ Upstream Sync Validation Failed" \
             --body "Upstream changes from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` caused test or lint failures. Check branch \`${BRANCH_NAME}\`." || \
-          echo "::warning::Could not create PR/Issue via GitHub CLI. Verify that 'Allow GitHub Actions to create and approve pull requests' is enabled in Settings -> Actions -> General -> Workflow permissions."
+          echo "::warning::Could not create PR/Issue via GitHub CLI."
           exit 1
 
       - name: Push merged changes to target branch
-        if: steps.attempt_merge.outputs.merge_status == 'clean'
+        if: steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success'
         run: |
           echo "All validation checks passed! Pushing to ${TARGET_BRANCH}..."
           git push origin "${TARGET_BRANCH}"
