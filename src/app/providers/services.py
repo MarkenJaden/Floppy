@@ -17,6 +17,7 @@ from django.conf import settings
 from django.core.cache import cache
 from pyrate_limiter import RedisBucket
 from redis import ConnectionPool
+from redis.exceptions import RedisError
 from requests.adapters import HTTPAdapter
 from requests_ratelimiter import LimiterAdapter, LimiterSession
 
@@ -374,6 +375,12 @@ else:
 
 session = build_limiter_session()
 
+# Built once and reused for every Redis-outage fallback (#1166) so the
+# fallback's own rate limit persists across calls instead of resetting on
+# each request - the same in-memory shape build_limiter_session() already
+# falls back to at construction time, just kept alive for request-time use.
+_fallback_session = LimiterSession(per_second=_GLOBAL_PER_SECOND)
+
 # Shared across every per-host adapter below: one Redis pool and one bucket
 # namespace, so nine hosts don't each open their own connection pool.
 try:
@@ -433,6 +440,39 @@ session.mount(
     "https://api.tvmaze.com",
     _build_host_limiter_adapter(per_second=2),
 )
+
+
+def resilient_request(method, url, **kwargs):
+    """GET/POST through the shared rate-limited session.
+
+    Falls back to a per-process limited session if Redis breaks the shared
+    bucket mid-run, instead of raising RedisError. Construction-time Redis
+    failures already degrade this way (build_limiter_session()), but a
+    bucket built while Redis was up still does live Redis I/O on every
+    later call - without this, that surfaced as a 500 on every page and
+    import that made an outbound provider call (#1166). The fallback session
+    is built once and reused so its own limit persists across calls instead
+    of resetting on each request.
+
+    Used by api_request() below, and directly by callers that need a
+    provider response without api_request()'s retry/cooldown handling
+    (e.g. Trakt device-code polling, HowLongToBeat scraping).
+    """
+    request_func = session.get if method == "GET" else session.post
+    try:
+        return request_func(url=url, **kwargs)
+    except RedisError as error:
+        logger.warning(
+            "%s %s skipped the shared rate limiter: Redis is unavailable "
+            "(%s); falling back to a per-process limited request.",
+            method,
+            url,
+            error,
+        )
+        fallback_func = (
+            _fallback_session.get if method == "GET" else _fallback_session.post
+        )
+        return fallback_func(url=url, **kwargs)
 
 
 class ProviderAPIError(Exception):
@@ -702,13 +742,11 @@ def api_request(
 
         if method == "GET":
             request_kwargs["params"] = params
-            request_func = session.get
         elif method == "POST":
             request_kwargs["data"] = data
             request_kwargs["json"] = params
-            request_func = session.post
 
-        response = request_func(**request_kwargs)
+        response = resilient_request(method, **request_kwargs)
         response.raise_for_status()
 
         if response_format == "xml":
@@ -1009,8 +1047,22 @@ def get_media_metadata(
     language=None,
     edition_id=None,
     user=None,
+    episode_order=None,
 ):
     """Return the metadata for the selected media."""
+    if media_type in {"tv", "anime", "tv_with_seasons", "season", "episode"}:
+        from app.services.order_resolution import active_order, order_from_media_id
+
+        order = episode_order or order_from_media_id(media_id, source)
+        if order is None and user is not None:
+            order = active_order(user, media_id, source)
+        if order is not None:
+            from app.services.episode_ordering import metadata_for_order
+
+            return _ensure_title_fields(metadata_for_order(
+                media_type, order, season_numbers=season_numbers,
+                episode_number=episode_number,
+            ))
     if media_type == MediaTypes.MUSIC.value and source == Sources.MANUAL.value:
         item = Item.objects.filter(
             media_id=media_id,

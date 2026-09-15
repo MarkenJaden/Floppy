@@ -125,13 +125,6 @@ HOME_ONLY_SORTS = {
     HomeSortChoices.COMPLETION,
     HomeSortChoices.EPISODES_LEFT,
 }
-HOME_SCREEN_FILTER_KEYS = tuple(
-    dict.fromkeys(
-        key
-        for key in (*smart_rules.SMART_FILTER_KEYS, "progress", "subview")
-        if key != "search"
-    ),
-)
 STATUS_FILTER_VALUES = {"all", *Status.values}
 STATUS_FILTER_ALIASES = {"all": "all"}
 for _status_choice in Status:
@@ -161,6 +154,15 @@ HOME_QUERY_DEFAULT_FILTERS = {
     "tag": [],
     "tag_mode": "or",
 }
+# Home Screen only ever supports the query filters above, plus "subview"
+# (music-only). It must NOT be derived from smart_rules.SMART_FILTER_KEYS:
+# that set includes smart-list-only fields (completed_date_within_unit,
+# release_date_from, rating_min, sort, ...) which have no Home Screen UI and
+# would otherwise round-trip back from the browser and fail validation in
+# validate_library_row_filters() for every media type.
+HOME_SCREEN_FILTER_KEYS = tuple(
+    dict.fromkeys((*HOME_QUERY_DEFAULT_FILTERS.keys(), "subview")),
+)
 SUPPORTED_FILTERS_BY_MEDIA_TYPE = {
     MediaTypes.TV.value: {
         "status",

@@ -92,6 +92,26 @@ class CLZParsingTests(TestCase):
         with self.assertRaises(MediaImportError):
             clz.parse_csv("")
 
+    def test_disk_staging_preserves_late_encoding_fallback(self):
+        """A non-UTF8 value beyond the read buffer survives complete validation."""
+        file = BytesIO(("Title,Notes\nA," + "a" * 70000 + "é\n").encode("cp1252"))
+        instance = clz.CLZImporter(file, None, "new")
+        with instance._parse_staged() as (records, columns, total):
+            self.assertEqual(total, 1)
+            self.assertEqual(columns, ["Title", "Notes"])
+            self.assertTrue(next(clz._read_records(records))["Notes"].endswith("é"))
+
+    def test_disk_xml_preserves_multivalued_columns(self):
+        """The streamed XML import has the same row shape as public parsing."""
+        instance = clz.CLZImporter(upload("export.xml", MOVIES_XML), None, "new")
+        with instance._parse_staged() as (records, columns, total):
+            self.assertEqual(total, 1)
+            self.assertIn("genres genre", columns)
+            self.assertEqual(
+                next(clz._read_records(records))["genres genre"],
+                ["Animation", "Thriller"],
+            )
+
 
 class CLZImportTests(TestCase):
     """End-to-end import behaviour for owned copies and wishlist rows."""

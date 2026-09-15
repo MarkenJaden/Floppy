@@ -348,8 +348,8 @@ class TrackModalViewTests(TestCase):
         add_form = content[form_start : content.index("</form>", form_start)]
         self.assertRegex(add_form, r'name="csrfmiddlewaretoken" value="[^"]+"')
 
-        # Bound to a real watch, so Delete is live and a rewatch is still one
-        # click away via "Add new entry".
+        # Bound to a real watch, so Delete is live and the current values can be
+        # saved as a new entry in one submission.
         self.assertEqual(response.context["general_existing_instance"], episode)
         delete_start = content.index('hx-post="/media_delete')
         delete_button = content[delete_start : content.index("</button>", delete_start)]
@@ -357,8 +357,9 @@ class TrackModalViewTests(TestCase):
         self.assertNotIn("disabled", delete_button)
         self.assertIn('hx-post="/media_delete', content)
         self.assertIn('hx-include="closest form"', content)
-        self.assertIn("is_create=1", response.context["episode_create_url"])
-        self.assertContains(response, "Add new entry")
+        self.assertTrue(response.context["episode_save_as_new"])
+        self.assertContains(response, "Save as new entry")
+        self.assertContains(response, 'name="save_as_new_entry"', html=False)
 
     def _create_tracked_episode(self):
         """Create a show/season/episode chain and return the tracked episode."""

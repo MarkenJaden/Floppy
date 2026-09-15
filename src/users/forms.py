@@ -1,4 +1,3 @@
-import apprise
 from allauth.account.adapter import get_adapter
 from allauth.account.forms import LoginForm, SignupForm
 from allauth.socialaccount.forms import SignupForm as SocialSignupForm
@@ -137,6 +136,11 @@ class NotificationSettingsForm(forms.ModelForm):
 
     def clean_notification_urls(self):
         """Validate that each URL is a valid Apprise URL."""
+        # Imported here, not at module scope: apprise loads its whole notification
+        # plugin registry on import, and that cost lands in every long-lived
+        # process that merely imports this module.
+        import apprise
+
         notification_urls = self.cleaned_data.get("notification_urls", "")
 
         if not notification_urls.strip():

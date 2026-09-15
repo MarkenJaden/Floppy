@@ -8,7 +8,6 @@ from io import BytesIO
 from itertools import batched
 from pathlib import Path
 
-import apprise
 from allauth.account.views import SignupView
 from allauth.socialaccount.views import SignupView as SocialSignupView
 from django.apps import apps
@@ -105,12 +104,6 @@ from users.models import (
     User,
     WeekStartDayChoices,
 )
-
-try:
-    import qrcode
-except ModuleNotFoundError:  # pragma: no cover - optional dependency guard
-    qrcode = None
-
 
 logger = logging.getLogger(__name__)
 
@@ -292,7 +285,12 @@ def _build_qr_data_uri(provisioning_uri: str) -> str:
     if not provisioning_uri:
         return ""
 
-    if qrcode is None:
+    # Imported here, not at module scope: qrcode pulls in Pillow, so importing
+    # it at module scope keeps a C extension resident in every web process for
+    # the sake of one authenticator screen.
+    try:
+        import qrcode
+    except ModuleNotFoundError:  # pragma: no cover - optional dependency guard
         logger.warning(
             "qrcode package is unavailable; skipping authenticator QR rendering"
         )
@@ -613,6 +611,11 @@ def include_item(request):
 @require_GET
 def test_notification(request):
     """Send a test notification to the user."""
+    # Imported here, not at module scope: apprise loads its whole notification
+    # plugin registry on import, and that cost lands in every long-lived
+    # process that merely imports this module.
+    import apprise
+
     try:
         # Create Apprise instance
         apobj = apprise.Apprise()

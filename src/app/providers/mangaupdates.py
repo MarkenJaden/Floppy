@@ -2,7 +2,6 @@ import asyncio
 import logging
 import re
 
-import aiohttp
 import requests
 from django.conf import settings
 from django.core.cache import cache
@@ -241,6 +240,11 @@ def get_score(score):
 
 async def get_related_series(related):
     """Return list of related media for the selected media asynchronously."""
+    # Imported here, not at module scope: aiohttp is the single heaviest
+    # import in the provider set, and only this async path needs it. An
+    # install that tracks no manga or books never loads it at all.
+    import aiohttp
+
     async with aiohttp.ClientSession() as session:
         tasks = [
             fetch_series_data(
@@ -257,6 +261,11 @@ async def get_related_series(related):
 
 async def get_recommendations(recommendations):
     """Return list of recommended media for the selected media asynchronously."""
+    # Imported here, not at module scope: aiohttp is the single heaviest
+    # import in the provider set, and only this async path needs it. An
+    # install that tracks no manga or books never loads it at all.
+    import aiohttp
+
     async with aiohttp.ClientSession() as session:
         tasks = [
             fetch_series_data(session, f"{base_url}/series/{item['series_id']}", item)

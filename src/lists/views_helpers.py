@@ -12,11 +12,20 @@ from itertools import islice
 from django.apps import apps
 from django.conf import settings
 from django.core.paginator import Paginator
-from django.db.models import Count, Exists, F, OuterRef, Q
+from django.db.models import Count, Exists, F, Max, OuterRef, Q
 from django.urls import reverse
+from django.utils.text import slugify
 from django.utils.translation import ngettext
 
-from app.models import CollectionEntry, Item, MediaManager, MediaTypes, Status
+from app.models import (
+    CollectionEntry,
+    Item,
+    ItemProviderLink,
+    MediaManager,
+    MediaTypes,
+    Sources,
+    Status,
+)
 from app.providers import services
 from integrations.imports import helpers as import_helpers
 from integrations.models import TraktAccount
@@ -219,33 +228,81 @@ def _get_item_last_watched_dates(user, item_ids):
     return item_last_watched
 
 
+def _get_list_completed_counts(user, list_ids):
+    """Count completed memberships in SQL without loading the list contents."""
+    completed = Q(pk__in=[])
+    for media_type in MediaTypes.values:
+        if media_type == MediaTypes.EPISODE.value:
+            continue
+        try:
+            model = apps.get_model("app", media_type)
+        except LookupError:
+            continue
+        completed |= Q(
+            item_id__in=model.objects.filter(
+                user=user,
+                status=Status.COMPLETED.value,
+            ).values("item_id"),
+        )
+    return dict(
+        CustomListItem.objects.filter(completed, custom_list_id__in=list_ids)
+        .order_by()
+        .values("custom_list_id")
+        .annotate(completed_count=Count("item_id", distinct=True))
+        .values_list("custom_list_id", "completed_count"),
+    )
+
+
 def _get_list_last_watched_dates(user, list_ids):
-    """Return the latest watched timestamp for each list ID."""
+    """Aggregate watch dates per list in SQL, retaining only one date per list."""
     if not list_ids:
         return {}
 
-    item_ids_by_list = {}
-    all_item_ids = set()
-    for list_id, item_id in CustomListItem.objects.filter(
-        custom_list_id__in=list_ids,
-    ).values_list("custom_list_id", "item_id"):
-        item_ids_by_list.setdefault(list_id, set()).add(item_id)
-        all_item_ids.add(item_id)
-
-    item_last_watched = _get_item_last_watched_dates(user, all_item_ids)
-
-    list_last_watched = {}
-    for list_id, item_ids in item_ids_by_list.items():
-        latest_watch = None
-        for item_id in item_ids:
-            watched_at = item_last_watched.get(item_id)
-            if watched_at is not None and (
-                latest_watch is None or watched_at > latest_watch
+    latest_by_list = {}
+    for media_type in MediaTypes.values:
+        try:
+            model = apps.get_model("app", media_type)
+        except LookupError:
+            continue
+        if media_type in {
+            MediaTypes.TV.value,
+            MediaTypes.SEASON.value,
+            MediaTypes.EPISODE.value,
+        }:
+            model = apps.get_model("app", MediaTypes.EPISODE.value)
+            item_path = {
+                MediaTypes.TV.value: "related_season__related_tv__item",
+                MediaTypes.SEASON.value: "related_season__item",
+                MediaTypes.EPISODE.value: "item",
+            }[media_type]
+            user_path = "related_season__user"
+        else:
+            if not {"item", "user", "end_date"}.issubset(
+                field.name for field in model._meta.fields
             ):
-                latest_watch = watched_at
-        list_last_watched[list_id] = latest_watch
-
-    return list_last_watched
+                continue
+            item_path = "item"
+            user_path = "user"
+        list_path = f"{item_path}__customlistitem__custom_list_id"
+        rows = (
+            model.objects.filter(
+                **{
+                    user_path: user,
+                    f"{item_path}__media_type": media_type,
+                    f"{list_path}__in": list_ids,
+                    "end_date__isnull": False,
+                },
+            )
+            .order_by()
+            .values(list_path)
+            .annotate(latest=Max("end_date"))
+            .values_list(list_path, "latest")
+        )
+        for list_id, watched_at in rows.iterator(chunk_size=500):
+            previous = latest_by_list.get(list_id)
+            if previous is None or watched_at > previous:
+                latest_by_list[list_id] = watched_at
+    return latest_by_list
 
 
 # ---------------------------------------------------------------------------
@@ -679,6 +736,82 @@ def _attach_media_with_aggregation(item_list, media_user):
     for item in item_list:
         item.media = media_by_item_id.get(item.id)
     _attach_list_card_overrides(item_list)
+
+
+def _attach_kometa_episode_urls(items_page):
+    """Attach TVDB-shaped episode links for Kometa list-page discovery.
+
+    Kometa's Floppy/Yamtrack builder extracts IDs from detail-page anchors. Its
+    episode-aware parser recognises TVDB paths, while a TMDB episode path is
+    reduced to the parent show. Keep Floppy's normal link as the visible target
+    and add a parser-compatible link only when the local library already knows
+    the show's numeric TVDB ID.
+    """
+    items = list(getattr(items_page, "object_list", items_page) or [])
+    episode_items = [
+        item
+        for item in items
+        if item.media_type == MediaTypes.EPISODE.value
+        and item.source == Sources.TMDB.value
+    ]
+    if not episode_items:
+        return
+
+    parent_keys = {(item.source, item.media_id) for item in episode_items}
+    parent_items = Item.objects.filter(
+        source__in={source for source, _media_id in parent_keys},
+        media_id__in={media_id for _source, media_id in parent_keys},
+        media_type__in=(MediaTypes.TV.value, MediaTypes.ANIME.value),
+        season_number__isnull=True,
+        episode_number__isnull=True,
+    ).only("id", "source", "media_id", "title", "provider_external_ids")
+
+    tvdb_by_parent_key = {}
+    parent_item_ids = []
+    parent_key_by_id = {}
+    parent_title_by_key = {}
+    for parent in parent_items:
+        parent_item_ids.append(parent.id)
+        parent_key = (parent.source, parent.media_id)
+        parent_key_by_id[parent.id] = parent_key
+        parent_title_by_key[parent_key] = parent.title
+        tvdb_id = (parent.provider_external_ids or {}).get("tvdb_id")
+        if str(tvdb_id or "").isdigit():
+            tvdb_by_parent_key.setdefault(parent_key, (str(tvdb_id), parent.title))
+
+    if parent_item_ids:
+        provider_links = ItemProviderLink.objects.filter(
+            item_id__in=parent_item_ids,
+            provider=Sources.TVDB.value,
+            provider_media_type=MediaTypes.TV.value,
+            season_number__isnull=True,
+        ).values_list("item_id", "provider_media_id")
+        for parent_id, provider_media_id in provider_links:
+            parent_key = parent_key_by_id.get(parent_id)
+            if parent_key and str(provider_media_id or "").isdigit():
+                tvdb_by_parent_key.setdefault(
+                    parent_key,
+                    (str(provider_media_id), parent_title_by_key.get(parent_key)),
+                )
+
+    for item in episode_items:
+        tvdb_id, parent_title = tvdb_by_parent_key.get(
+            (item.source, item.media_id),
+            ("", None),
+        )
+        if not tvdb_id.isdigit():
+            continue
+
+        item.kometa_episode_url = reverse(
+            "episode_details",
+            kwargs={
+                "source": Sources.TVDB.value,
+                "media_id": tvdb_id,
+                "title": slugify(parent_title or "") or tvdb_id,
+                "season_number": item.season_number,
+                "episode_number": item.episode_number,
+            },
+        )
 
 
 def _paginate_python_sorted_items(

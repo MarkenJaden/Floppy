@@ -19,6 +19,7 @@ import events
 from app import cache_utils, providers
 from app.models.choices import MediaTypes, Sources, Status
 from app.models.item import Item
+from app.models.manager import MediaManager
 from app.models.media import Media
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,21 @@ def _runtime_minutes(value):
 
 class TV(Media):
     """Model for TV shows."""
+
+    active_episode_order = models.ForeignKey(
+        "app.EpisodeOrder", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="trackers",
+    )
+
+    @property
+    def tracking_media_id(self):
+        """Return the identity of the selected episode catalogue."""
+        return self.active_episode_order.media_id if self.active_episode_order_id else self.item.media_id
+
+    @property
+    def tracking_source(self):
+        """Return the provider of the selected episode catalogue."""
+        return self.active_episode_order.provider if self.active_episode_order_id else self.item.source
 
     tracker = FieldTracker()
 
@@ -88,7 +104,7 @@ class TV(Media):
                     logger.warning(
                         "Skipping completion fan-out due to missing metadata"
                         " for %s: %s",
-                        self.item.media_id,
+                        self.tracking_media_id,
                         error,
                     )
 
@@ -452,8 +468,8 @@ class TV(Media):
         """Create remaining seasons and episodes for a TV show."""
         tv_metadata = providers.services.get_media_metadata(
             self.item.media_type,
-            self.item.media_id,
-            self.item.source,
+            self.tracking_media_id,
+            self.tracking_source,
         )
         max_progress = tv_metadata["max_progress"]
 
@@ -471,8 +487,8 @@ class TV(Media):
         ]
         tv_with_seasons_metadata = providers.services.get_media_metadata(
             "tv_with_seasons",
-            self.item.media_id,
-            self.item.source,
+            self.tracking_media_id,
+            self.tracking_source,
             season_numbers,
         )
         for season_number in season_numbers:
@@ -491,10 +507,11 @@ class TV(Media):
                 allowed_buckets.append(target_bucket)
 
             season_identity = {
-                "media_id": self.item.media_id,
-                "source": self.item.source,
+                "media_id": self.tracking_media_id,
+                "source": self.tracking_source,
                 "media_type": MediaTypes.SEASON.value,
                 "season_number": season_number,
+                "episode_order": self.active_episode_order,
             }
             item = None
             for bucket in allowed_buckets:
@@ -595,8 +612,8 @@ class TV(Media):
             # If all existing seasons are watched, get the next available season
             tv_metadata = providers.services.get_media_metadata(
                 self.item.media_type,
-                self.item.media_id,
-                self.item.source,
+                self.tracking_media_id,
+                self.tracking_source,
             )
             related_seasons = tv_metadata.get("related", {}).get("seasons", [])
 
@@ -614,9 +631,10 @@ class TV(Media):
                     season_image = season_data.get("image") or self.item.image
 
                     item, _ = Item.objects.get_or_create(
-                        media_id=self.item.media_id,
-                        source=self.item.source,
+                        media_id=self.tracking_media_id,
+                        source=self.tracking_source,
                         media_type=MediaTypes.SEASON.value,
+                        episode_order=self.active_episode_order,
                         library_media_type=(
                             MediaTypes.ANIME.value
                             if self.item.library_media_type == MediaTypes.ANIME.value
@@ -692,6 +710,14 @@ class TV(Media):
             )
 
 
+class ActiveSeasonManager(MediaManager):
+    """Keep archived order history out of active season projections."""
+
+    def get_queryset(self):
+        """Return seasons belonging to the active tracking history."""
+        return super().get_queryset().filter(order_archived=False)
+
+
 class Season(Media):
     """Model for seasons of TV shows."""
 
@@ -700,6 +726,9 @@ class Season(Media):
         on_delete=models.CASCADE,
         related_name="seasons",
     )
+    order_archived = models.BooleanField(default=False)
+    objects = ActiveSeasonManager()
+    all_objects = models.Manager()
     rewatch_started_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -1388,6 +1417,8 @@ class Season(Media):
 
     def get_tv(self):
         """Get related TV instance for a season and create it if it doesn't exist."""
+        if self.item.episode_order_id:
+            return TV.objects.get(user=self.user, item_id=self.item.episode_order.show_id)
         # Scope to the season's own bucket (anime vs. non-anime) so a season
         # is never silently attached to a TV row from the show's other
         # identity when both exist — see #623.
@@ -1543,6 +1574,20 @@ class Season(Media):
 
     def get_episode_item(self, episode_number, season_metadata=None):
         """Get the episode item instance, create it if it doesn't exist."""
+        if self.item.episode_order_id:
+            from app.services.episode_coordinates import InvalidEpisodeCoordinateError
+
+            item = Item.objects.filter(
+                episode_order_id=self.item.episode_order_id,
+                media_type=MediaTypes.EPISODE.value,
+                season_number=self.item.season_number,
+                episode_number=int(episode_number),
+            ).first()
+            if item is None:
+                raise InvalidEpisodeCoordinateError(  # noqa: TRY003
+                    "Episode is absent from this order.",  # noqa: EM101
+                )
+            return item
         if not season_metadata:
             season_metadata = providers.services.get_media_metadata(
                 MediaTypes.SEASON.value,
@@ -1749,10 +1794,21 @@ class Season(Media):
         return item
 
 
+class ActiveEpisodeManager(models.Manager):
+    """Exclude retained migration records from watch projections."""
+
+    def get_queryset(self):
+        """Return active watches only; all_objects retains archived history."""
+        return super().get_queryset().filter(order_archived=False)
+
+
 class Episode(models.Model):
     """Model for episodes of a season."""
 
     tracker = FieldTracker(fields=["status", "dropped"])
+    order_archived = models.BooleanField(default=False)
+    objects = ActiveEpisodeManager()
+    all_objects = models.Manager()  # noqa: DJ012
     history = HistoricalRecords(
         cascade_delete_history=True,
         excluded_fields=[

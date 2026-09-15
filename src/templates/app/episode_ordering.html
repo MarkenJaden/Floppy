@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% load i18n %}
+{% block title %}{% translate "Episode ordering" %} - {{ tv.item.title }}{% endblock title %}
+{% block content %}
+  <div class="mx-auto max-w-4xl space-y-6">
+    <header>
+      <h1 class="text-3xl font-bold">{% translate "Episode ordering" %}</h1>
+      <p class="mt-2 text-lg">{{ tv.item.title }}</p>
+      <p class="text-[var(--color-text-muted)]">{% translate "Current order:" %} {{ tv.active_episode_order.label|default:"Original numbering" }}</p>
+      <p class="mt-2">{% translate "Choose how this series is numbered in your library. Review your viewing history before applying a change." %}</p>
+    </header>
+    {% if error %}<p role="alert" class="rounded-lg border p-4">{{ error }}</p>{% endif %}
+    {% for provider_error in provider_errors %}<p role="status">{{ provider_error }}</p>{% endfor %}
+    {% if not preview %}
+      <div class="space-y-3">
+        {% for choice in orders %}
+          <form method="post" class="flex items-center justify-between gap-4 rounded-lg border p-4">
+            {% csrf_token %}
+            <input type="hidden" name="provider" value="{{ choice.provider }}">
+            <input type="hidden" name="key" value="{{ choice.key }}">
+            <span>{{ choice.label }}</span>
+            <button type="submit" class="rounded-lg border px-4 py-2">{% translate "Preview" %}</button>
+          </form>
+        {% empty %}
+          <p>{% translate "No episode orders are available. Configure a provider credential and a verified series provider identity in metadata settings." %}</p>
+        {% endfor %}
+      </div>
+    {% else %}
+      <h2 class="text-xl font-semibold">{{ order.label }}</h2>
+      <details class="rounded-lg border p-4">
+        <summary>{% translate "Preview episodes" %} ({{ episodes|length }})</summary>
+        <ol class="mt-4 space-y-2">
+          {% for episode in episodes %}<li>S{{ episode.season_number }} E{{ episode.episode_number }} — {{ episode.title }}</li>{% endfor %}
+        </ol>
+      </details>
+      <form method="post" class="space-y-6">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="apply">
+        <input type="hidden" name="order_id" value="{{ order.pk }}">
+        <input type="hidden" name="token" value="{{ preview.token }}">
+        <p>{% translate "Select the destination episode for each viewing. Select multiple episodes for a split. A combined viewing uses the destination and metadata of the viewing selected below; select that viewing only when the records represent the same play." %}</p>
+        {% for watch in watches %}
+          <fieldset class="space-y-3 rounded-lg border p-4">
+            <legend class="px-2 font-semibold">{{ watch.title }} — {% translate "Viewing" %} #{{ watch.id }}</legend>
+            <p>{% translate "Dates:" %} {{ watch.start_date|default:"—" }} – {{ watch.end_date|default:"—" }} · {% translate "Score:" %} {{ watch.score|default_if_none:"—" }} · {{ watch.status }}</p>
+            {% if watch.notes %}<p>{{ watch.notes }}</p>{% endif %}
+            <label class="block" for="episodes_{{ watch.id }}">{% translate "Destination episodes (hold Ctrl or Command to select several)" %}</label>
+            <select id="episodes_{{ watch.id }}" name="episodes_{{ watch.id }}" multiple size="5" class="w-full rounded-lg border p-2">
+              {% for episode in episodes %}
+                <option value="{{ episode.provider_episode_id }}" {% if episode.provider_episode_id in watch.proposed %}selected{% endif %}>S{{ episode.season_number }} E{{ episode.episode_number }} — {{ episode.title }}</option>
+              {% endfor %}
+            </select>
+            <label class="block" for="combine_{{ watch.id }}">{% translate "Combine with viewing and use its dates, score, notes and status" %}</label>
+            <select id="combine_{{ watch.id }}" name="combine_{{ watch.id }}" class="w-full rounded-lg border p-2">
+              <option value="{{ watch.id }}">{% translate "Keep as a separate viewing" %}</option>
+              {% for other in watches %}
+                {% if other.id != watch.id %}<option value="{{ other.id }}">#{{ other.id }} — {{ other.title }} ({{ other.end_date|default:"undated" }})</option>{% endif %}
+              {% endfor %}
+            </select>
+            <label class="flex items-center gap-2"><input type="checkbox" name="archive_{{ watch.id }}">{% translate "Archive this viewing under the original order, excluding it from active progress" %}</label>
+          </fieldset>
+        {% empty %}
+          <p>{% translate "There is no episode viewing history to reconcile." %}</p>
+        {% endfor %}
+        <div class="flex gap-4">
+          <button type="submit" class="rounded-lg border px-4 py-2 font-semibold">{% translate "Apply episode ordering" %}</button>
+          <a href="{% url 'episode_ordering_settings' tv.pk %}" class="px-4 py-2">{% translate "Cancel" %}</a>
+        </div>
+      </form>
+    {% endif %}
+  </div>
+{% endblock content %}

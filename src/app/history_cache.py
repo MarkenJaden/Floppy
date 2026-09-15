@@ -151,7 +151,7 @@ def _fetch_episode_data(
     ):
         return []
 
-    episodes = Episode.objects.filter(related_season__user=user)
+    episodes = Episode.all_objects.filter(related_season__user=user)
     if not include_undated:
         episodes = episodes.filter(end_date__isnull=False)
     episodes = episodes.select_related(

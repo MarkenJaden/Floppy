@@ -5,6 +5,7 @@ import json
 import logging
 import time
 from collections import defaultdict
+from copy import copy
 
 from cryptography.fernet import Fernet, InvalidToken
 from django.apps import apps
@@ -492,6 +493,46 @@ def bulk_create_media(bulk_media_list, user, *, backfill_completed=True):
     Returns warning messages for any seasons whose Completed-status
     episode backfill failed, for callers that want to surface them.
     """
+    from integrations.episode_orders import resolve_incoming, season_for_target
+
+    # Importers build rows using their source provider's numbering. Resolve
+    # before persistence so those numbers never become active-order numbers.
+    ordered_episodes = []
+    for episode in bulk_media_list.get(MediaTypes.EPISODE.value, []):
+        item = episode.item
+        if item.episode_order_id:
+            ordered_episodes.append(episode)
+            continue
+        targets = resolve_incoming(
+            user, item.media_id, item.source, item.season_number,
+            item.episode_number, integration="import",
+        )
+        if targets is None:
+            ordered_episodes.append(episode)
+            continue
+        for target in targets:
+            mapped = copy(episode)
+            mapped.pk = None
+            mapped.item = target
+            mapped.related_season = season_for_target(user, target)
+            ordered_episodes.append(mapped)
+    if MediaTypes.EPISODE.value in bulk_media_list:
+        bulk_media_list[MediaTypes.EPISODE.value] = ordered_episodes
+
+    # A source season's aggregate status is not a destination season status:
+    # alternate orders may split or combine those groups.
+    active_shows = set(
+        app.models.TV.objects.filter(
+            user=user, active_episode_order__isnull=False,
+        ).values_list("item__source", "item__media_id"),
+    )
+    if MediaTypes.SEASON.value in bulk_media_list:
+        bulk_media_list[MediaTypes.SEASON.value] = [
+            season for season in bulk_media_list[MediaTypes.SEASON.value]
+            if season.item.episode_order_id
+            or (season.item.source, season.item.media_id) not in active_shows
+        ]
+
     for media_type in _ordered_media_types(bulk_media_list):
         bulk_media = bulk_media_list[media_type]
         if not bulk_media:

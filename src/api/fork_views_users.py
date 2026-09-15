@@ -3,7 +3,6 @@
 import logging
 from http import HTTPStatus as HTTP  # noqa: N814
 
-import apprise
 from rest_framework import views as drf_views
 from rest_framework.response import Response
 
@@ -303,6 +302,11 @@ class UserNotificationTestView(drf_views.APIView):
 
     def post(self, request):
         """Send the test message to all configured Apprise URLs."""
+        # Imported here, not at module scope: apprise loads its whole notification
+        # plugin registry on import, and that cost lands in every long-lived
+        # process that merely imports this module.
+        import apprise
+
         notification_urls = [
             url.strip()
             for url in request.user.notification_urls.splitlines()

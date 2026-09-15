@@ -183,7 +183,8 @@ def poll_device_token(device_code, client_id=None, client_secret=None):
         client_secret = credentials.get("trakt", "client_secret")
 
     try:
-        response = services.session.post(
+        response = services.resilient_request(
+            "POST",
             f"{TRAKT_API_BASE_URL}/oauth/device/token",
             json={
                 "code": device_code,
@@ -630,6 +631,12 @@ class TraktImporter(TraktMetadataResolverMixin):
         self.tv_created_this_run: set = set()
         self.season_created_this_run: set = set()
 
+        # watched_at of the history entry that triggered a full-show
+        # completion, keyed by tv_key. Used so the episode/season fan-out
+        # in TV._completed() dates fabricated rows from that real watch
+        # event instead of falling back to "now".
+        self.tv_completion_dates: dict = {}
+
         logger.info(
             "Initialized Trakt importer for user %s with mode %s",
             username,
@@ -723,6 +730,9 @@ class TraktImporter(TraktMetadataResolverMixin):
         }
         for tv_obj in touched_tvs.values():
             if tv_obj.status == Status.COMPLETED.value:
+                pending_date = self.tv_completion_dates.get(f"{tv_obj.item.media_id}")
+                if pending_date is not None:
+                    tv_obj._pending_end_date = pending_date
                 try:
                     tv_obj._completed()
                 except (
@@ -1168,6 +1178,7 @@ class TraktImporter(TraktMetadataResolverMixin):
                 season_metadata,
                 tv_metadata,
                 tv_key,
+                watched_at_dt,
             )
 
     def _update_completion_status(
@@ -1179,6 +1190,7 @@ class TraktImporter(TraktMetadataResolverMixin):
         season_metadata,
         tv_metadata,
         tv_key,
+        watched_at_dt,
     ):
         """Update completion status for season and TV show if applicable."""
         if episode_number == season_metadata["max_progress"]:
@@ -1187,13 +1199,24 @@ class TraktImporter(TraktMetadataResolverMixin):
                 self.completed_seasons.append(season_obj)
 
             last_season = tv_metadata.get("last_episode_season")
-            tv_eligible = (
-                self.mode == "overwrite" or tv_key in self.tv_created_this_run
+            # Cascading full-show completion fabricates every missing
+            # season/episode via TV._completed(). That's safe for an
+            # explicit overwrite re-sync (already reconciling a show Floppy
+            # tracks against its current Trakt state, per #985). For a show
+            # created fresh this run, it's only safe when the finale we just
+            # saw is in season 1 — i.e. the show has no earlier season the
+            # fan-out could fabricate. Otherwise, seeing one finale watch
+            # (e.g. a rewatch, or a partial history export) would wrongly
+            # backfill every earlier season/episode as watched (issue #1178).
+            tv_eligible = self.mode == "overwrite" or (
+                tv_key in self.tv_created_this_run and season_number == 1
             )
             if last_season and last_season == season_number and tv_eligible:
                 tv_obj.status = Status.COMPLETED.value
                 if tv_obj.pk:
                     self.completed_tvs.append(tv_obj)
+                if watched_at_dt is not None:
+                    self.tv_completion_dates[tv_key] = watched_at_dt
 
     def process_watchlist(self):
         """Process watchlist from Trakt."""

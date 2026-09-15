@@ -310,7 +310,7 @@ def person_detail(request, source, person_id, name):
             )
 
         if watched_tv_media_ids:
-            watched_tv = Episode.objects.filter(
+            watched_tv = Episode.all_objects.filter(
                 related_season__user=request.user,
                 end_date__isnull=False,
                 related_season__related_tv__item__source=source,
