@@ -47,6 +47,52 @@ HISTORY_STALE_AFTER = _coerce_timedelta(
 )
 HISTORY_DAYS_PER_PAGE = 30
 HISTORY_ENTRIES_PER_DAY_PAGE = 30
+
+HISTORY_UNREAD_ITEM_FIELDS = (
+    "watch_providers",
+    "synopsis",
+    "provider_keywords",
+    "provider_game_lengths",
+    "themes",
+    "studios",
+    "languages",
+    "creators",
+    "authors",
+    "isbn",
+    "platforms",
+    "manual_metadata",
+    "provider_collection_name",
+    "source_url",
+    "publishers",
+    "series_name",
+    "source_material",
+)
+
+
+def history_deferred_item_fields(*relations):
+    """Return the item columns history never reads, per select_related path.
+
+    History builds cards from a handful of item columns (title, image, genres,
+    numbers, runtime). It reads none of these. ``watch_providers`` is the one
+    that matters: TMDB's availability for every region it knows, around 146 KiB
+    a title. An episode row select_relates three items -- the episode, its
+    season and its show -- so a filtered history request decoded it three times
+    per play. On a 6,454-play filtered request that cost a web worker ~790 MiB
+    of anonymous memory to return a 56 KiB response (#1180 follow-up).
+
+    Deferring rather than ``only()`` is the safe direction: an unforeseen
+    reader loads the column late instead of seeing it missing.
+
+    Pass the select_related paths that reach an item ("item",
+    "related_season__item", ...); pass "" for the item model itself.
+    """
+    return tuple(
+        f"{relation}__{field}" if relation else field
+        for relation in relations
+        for field in HISTORY_UNREAD_ITEM_FIELDS
+    )
+
+
 HISTORY_WARM_DAYS = getattr(settings, "HISTORY_CACHE_WARM_DAYS", 0)
 HISTORY_COLD_MISS_WARM_DAYS = getattr(
     settings,
@@ -81,12 +127,12 @@ def apply_history_entry_cap(history_days, cap):
     total_entries = 0
     for day_payload in history_days:
         entries = day_payload.get("entries", [])
-        entry_count = len(entries)
+        entry_count = day_payload.get("entry_count", len(entries))
         total_entries += entry_count
         if entry_count > cap:
             day_payload["entries"] = entries[:cap]
         day_payload["entry_count"] = entry_count
-        day_payload["entries_truncated"] = entry_count > cap
+        day_payload["entries_truncated"] = entry_count > len(day_payload["entries"])
     return total_entries
 
 

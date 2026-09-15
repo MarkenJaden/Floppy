@@ -15,7 +15,6 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 from celery.schedules import crontab
-from debug_toolbar.settings import PANELS_DEFAULTS
 from decouple import (
     Csv,
     Undefined,
@@ -244,38 +243,58 @@ USE_X_FORWARDED_PORT = config(
 
 # Application definition
 
-INSTALLED_APPS = [
-    "django.contrib.auth",
-    "django.contrib.admin",
-    "django.contrib.contenttypes",
-    "django.contrib.sessions",
-    "django.contrib.messages",
-    "django.contrib.staticfiles",
-    "app",
-    "events",
-    "integrations",
-    "lists",
-    "users",
-    "django_celery_beat",
-    "django_celery_results",
-    "django_select2",
-    "simple_history",
-    "widget_tweaks",
-    "health_check",
-    "health_check.cache",
-    "health_check.storage",
-    "health_check.contrib.migrations",
-    "health_check.contrib.celery_ping",
-    "health_check.contrib.redis",
-    "health_check.contrib.db_heartbeat",
-    "allauth",
-    "allauth.account",
-    "allauth.socialaccount",
-    "django.contrib.humanize",
-    "rest_framework",
-    "api",
-    "drf_spectacular",
-]
+_CELERY_PROCESS = os.environ.get("FLOPPY_PROCESS_ROLE") in {
+    "background",
+    "combined",
+    "interactive",
+}
+
+if _CELERY_PROCESS:
+    INSTALLED_APPS = [
+        "django.contrib.auth",
+        "django.contrib.contenttypes",
+        "app",
+        "events",
+        "integrations",
+        "lists",
+        "users",
+        "django_celery_beat",
+        "django_celery_results",
+        "simple_history",
+    ]
+else:
+    INSTALLED_APPS = [
+        "django.contrib.auth",
+        "django.contrib.admin",
+        "django.contrib.contenttypes",
+        "django.contrib.sessions",
+        "django.contrib.messages",
+        "django.contrib.staticfiles",
+        "app",
+        "events",
+        "integrations",
+        "lists",
+        "users",
+        "django_celery_beat",
+        "django_celery_results",
+        "django_select2",
+        "simple_history",
+        "widget_tweaks",
+        "health_check",
+        "health_check.cache",
+        "health_check.storage",
+        "health_check.contrib.migrations",
+        "health_check.contrib.celery_ping",
+        "health_check.contrib.redis",
+        "health_check.contrib.db_heartbeat",
+        "allauth",
+        "allauth.account",
+        "allauth.socialaccount",
+        "django.contrib.humanize",
+        "rest_framework",
+        "api",
+        "drf_spectacular",
+    ]
 
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
@@ -362,7 +381,7 @@ if FLOPPY_AUTO_LOGIN_USERNAME:
     _index = MIDDLEWARE.index("django.contrib.auth.middleware.AuthenticationMiddleware")
     MIDDLEWARE.insert(_index + 1, "app.middleware.AutoLoginMiddleware")
 
-ROOT_URLCONF = "config.urls"
+ROOT_URLCONF = "config.celery_urls" if _CELERY_PROCESS else "config.urls"
 
 TEMPLATES = [
     {
@@ -1308,14 +1327,21 @@ DEBUG_TOOLBAR_CONFIG = {
     ),
     "ROOT_TAG_EXTRA_ATTRS": "hx-preserve",
 }
-DEBUG_TOOLBAR_PANELS = [
-    panel
-    for panel in PANELS_DEFAULTS
-    if (
-        DEBUG_TOOLBAR_INCLUDE_TEMPLATES_PANEL
-        or panel != "debug_toolbar.panels.templates.TemplatesPanel"
-    )
-]
+if ENABLE_DEBUG_TOOLBAR:
+    # Imported here rather than at module scope: debug_toolbar is a runtime
+    # dependency, so a top-level import loads it into every long-lived process
+    # -- gunicorn and all three Celery roles -- even though the toolbar only
+    # ever runs with DEBUG on.
+    from debug_toolbar.settings import PANELS_DEFAULTS
+
+    DEBUG_TOOLBAR_PANELS = [
+        panel
+        for panel in PANELS_DEFAULTS
+        if (
+            DEBUG_TOOLBAR_INCLUDE_TEMPLATES_PANEL
+            or panel != "debug_toolbar.panels.templates.TemplatesPanel"
+        )
+    ]
 
 SELECT2_CACHE_BACKEND = "default"
 SELECT2_JS = [
@@ -1370,6 +1396,29 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 # Retry forever rather than exit: the container restarts into the same
 # situation, so giving up only turns a slow Redis into a crash loop.
 CELERY_BROKER_CONNECTION_MAX_RETRIES = 0
+
+# ``integrations.tasks`` keeps its historical public re-exports lazy so web
+# workers do not load every importer while resolving URLs. Celery workers still
+# import every task implementation explicitly and retain the same task names.
+if os.environ.get("FLOPPY_PROCESS_ROLE") == "interactive":
+    CELERY_IMPORTS = (
+        "app.tasks_interactive",
+        "integrations.tasks._plex_sections",
+        "integrations.tasks._webhook",
+    )
+else:
+    CELERY_IMPORTS = (
+        "integrations.tasks._change_log",
+        "integrations.tasks._jellyfin_pull",
+        "integrations.tasks._koito",
+        "integrations.tasks._lastfm",
+        "integrations.tasks._media_imports",
+        "integrations.tasks._plex_collection",
+        "integrations.tasks._plex_sections",
+        "integrations.tasks._receipts",
+        "integrations.tasks._state_sync",
+        "integrations.tasks._webhook",
+    )
 CELERY_REDIS_RETRY_ON_TIMEOUT = True
 
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
@@ -1387,11 +1436,36 @@ CELERY_WORKER_MAX_TASKS_PER_CHILD = config(
     cast=int,
 )
 # A hard RSS ceiling per child: Celery retires the child after the task that
-# crosses it finishes. Unset on standard hosts, where a large import legitimately
-# needs the headroom and there is memory to spare.
+# crosses it finishes, so no task is lost to it.
+#
+# Standard hosts had no ceiling at all, on the reasoning that a large import
+# needs the headroom and there is memory to spare. The second half of that has
+# stopped being the goal: a child that grew during one import then stays
+# resident until max_tasks_per_child recycles it, which on a warm-idle install
+# can be days. The ceiling here is several times a freshly started child (~100
+# MiB of imports) so an import still has room to work, while the creep an idle
+# instance accumulates is returned to the OS.
+#
+# The interactive worker gets its own, much lower ceiling. One number cannot
+# serve both: the background ceiling has to clear a large import, and a child
+# that only runs webhooks and cache refreshes never comes close to it, so it
+# is never retired and its creep is never returned. Production showed exactly
+# that -- an interactive child at 215 MiB after three hours, still under the
+# 400 MiB background ceiling and still climbing. Retiring this child is cheap:
+# Celery retires it after the task that crossed the ceiling finishes, and its
+# tasks are short. Sized at roughly three times a fresh interactive child
+# (~50 MiB; its CELERY_IMPORTS are a third of the background worker's). A
+# statistics rebuild large enough to cross it will retire the child every time
+# it runs -- which is the right trade: that rebuild's memory is then returned
+# rather than held against the next webhook.
+_INTERACTIVE_ROLE = os.environ.get("FLOPPY_PROCESS_ROLE") == "interactive"
 CELERY_WORKER_MAX_MEMORY_PER_CHILD = config(
     "CELERY_WORKER_MAX_MEMORY_PER_CHILD",
-    default=by_tier(180 * 1024, 250 * 1024, 0),
+    default=(
+        by_tier(120 * 1024, 140 * 1024, 160 * 1024)
+        if _INTERACTIVE_ROLE
+        else by_tier(180 * 1024, 250 * 1024, 400 * 1024)
+    ),
     cast=int,
 )
 if not CELERY_WORKER_MAX_MEMORY_PER_CHILD:

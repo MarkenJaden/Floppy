@@ -31,9 +31,61 @@ GENRE_BACKFILL_VERSION = 4
 # Bumped when MAL anime became eligible for TMDB watch-provider enrichment.
 WATCH_PROVIDERS_BACKFILL_VERSION = 3
 EXTERNAL_IDS_BACKFILL_VERSION = 1
+# Bump either to re-open every item whose release/status backfill was given up
+# on or backed off - e.g. when the fetch strategy for those fields changes.
+RELEASE_BACKFILL_VERSION = 1
+STATUS_BACKFILL_VERSION = 1
+
+# Provider responses that mean "this identifier will never resolve", as opposed
+# to "the provider is having a bad day". A 401/403 is deliberately absent: those
+# are usually a missing or expired API key, which a retry can recover from.
+TERMINAL_PROVIDER_STATUS_CODES = frozenset({400, 404, 410, 422})
 
 
-def _apply_backfill_state_filters(queryset, field: str, *, for_reconcile: bool = False):
+class MalformedItemIdentityError(ValueError):
+    """An item cannot be fetched because its own identity is incomplete.
+
+    A season row with no season number can never be fetched, no matter how
+    healthy the provider is. This is deliberately its own type rather than a
+    bare ``ValueError``: the fetch path raises ``ValueError`` for transient
+    reasons too - ``tvdb._request`` raises one when TVDB credentials are not
+    configured - and retiring every TVDB item because a key lapsed is exactly
+    the failure this classification exists to avoid.
+    """
+
+
+def is_terminal_backfill_error(exc: BaseException) -> bool:
+    """Report whether re-fetching this item could plausibly change the answer.
+
+    Production evidence (2026-09-14): a single backfill pass processed 150
+    items in 144 seconds and 148 of them failed, overwhelmingly MusicBrainz
+    400/404 for recording ids that do not exist. Treating those the same as a
+    provider outage meant the same dead ids were fetched on every cycle.
+
+    Only two things are terminal: a provider that answered "this identifier is
+    wrong", and an item whose own identity is unusable. Everything else -
+    including an unconfigured provider, and any exception this code did not
+    anticipate - stays retryable, because the cost of wrongly retrying is one
+    request and the cost of wrongly retiring is silent permanent data loss.
+    """
+    from app.providers.services import ProviderAPIError
+
+    if isinstance(exc, MalformedItemIdentityError):
+        return True
+    if isinstance(exc, ProviderAPIError):
+        # ProviderNotConfiguredError carries no response, so status_code is
+        # None and it correctly lands here as transient.
+        return exc.status_code in TERMINAL_PROVIDER_STATUS_CODES
+    return False
+
+
+def _apply_backfill_state_filters(
+    queryset,
+    field: str,
+    *,
+    for_reconcile: bool = False,
+    strategy_version: int | None = None,
+):
     """Exclude items that shouldn't be attempted right now.
 
     ``for_reconcile`` additionally excludes items that have *ever* failed. A
@@ -43,16 +95,19 @@ def _apply_backfill_state_filters(queryset, field: str, *, for_reconcile: bool =
     item's ``next_retry_at`` caps at one day, so it re-enters the sweep daily -
     which meant the reconcile could never be marked complete and polled the
     whole library forever (issue #521).
+
+    ``strategy_version`` makes a block version-aware: a row recorded under an
+    older strategy stops blocking, so bumping the version re-opens everything
+    it had given up on.
     """
     now = timezone.now()
     blocked_filter = Q(give_up=True) | Q(next_retry_at__gt=now)
     if for_reconcile:
         blocked_filter |= Q(fail_count__gt=0)
-    blocked = (
-        MetadataBackfillState.objects.filter(field=field)
-        .filter(blocked_filter)
-        .values("item_id")
-    )
+    states = MetadataBackfillState.objects.filter(field=field)
+    if strategy_version is not None:
+        states = states.filter(strategy_version__gte=strategy_version)
+    blocked = states.filter(blocked_filter).values("item_id")
     return queryset.exclude(id__in=blocked)
 
 
@@ -69,6 +124,7 @@ def _record_backfill_failure(
     error_message: str | None = None,
     *,
     terminal: bool = False,
+    strategy_version: int | None = None,
 ) -> bool:
     now = timezone.now()
     state, _ = MetadataBackfillState.objects.get_or_create(item=item, field=field)
@@ -88,15 +144,17 @@ def _record_backfill_failure(
         state.next_retry_at = now + timedelta(
             seconds=_backfill_delay_seconds(state.fail_count)
         )
-    state.save(
-        update_fields=[
-            "fail_count",
-            "last_attempt_at",
-            "next_retry_at",
-            "last_error",
-            "give_up",
-        ]
-    )
+    update_fields = [
+        "fail_count",
+        "last_attempt_at",
+        "next_retry_at",
+        "last_error",
+        "give_up",
+    ]
+    if strategy_version is not None:
+        state.strategy_version = int(strategy_version)
+        update_fields.append("strategy_version")
+    state.save(update_fields=update_fields)
     if state.give_up:
         logger.warning(
             "metadata_backfill_give_up item_id=%s media_type=%s field=%s fail_count=%s has_reason=%s",
@@ -125,6 +183,7 @@ def _record_backfill_pending(
     reason: str | None = None,
     *,
     strategy_version: int | None = None,
+    min_delay_seconds: int | None = None,
 ) -> None:
     """Record a successful fetch that still needs another look later.
 
@@ -132,6 +191,13 @@ def _record_backfill_pending(
     watch-provider payload can become populated months later. ``fail_count``
     still advances so the whole-library reconcile can exclude the item
     (issue #521), while ``next_retry_at`` drives a bounded retry queue.
+
+    ``min_delay_seconds`` is a floor for callers whose own schedule outruns the
+    default backoff. That backoff caps at one day, so a task on a nightly beat
+    finds every one of its misses due again on its very next run - the backoff
+    never actually defers anything. A caller whose retry is expensive (one
+    candidate can pull a multi-hundred-MB dataset) must set a floor longer than
+    the interval it runs on, or it has not deferred the work at all.
     """
     now = timezone.now()
     state, _ = MetadataBackfillState.objects.get_or_create(item=item, field=field)
@@ -139,9 +205,10 @@ def _record_backfill_pending(
     state.last_attempt_at = now
     state.last_success_at = None
     state.give_up = False
-    state.next_retry_at = now + timedelta(
-        seconds=_backfill_delay_seconds(state.fail_count)
-    )
+    delay_seconds = _backfill_delay_seconds(state.fail_count)
+    if min_delay_seconds is not None:
+        delay_seconds = max(delay_seconds, int(min_delay_seconds))
+    state.next_retry_at = now + timedelta(seconds=delay_seconds)
     if reason:
         state.last_error = str(reason)[:500]
     update_fields = [
@@ -200,6 +267,25 @@ def _reset_genre_backfill_state(item: Item) -> None:
         item=item,
         field=MetadataBackfillField.GENRES,
     ).update(
+        give_up=False,
+        fail_count=0,
+        next_retry_at=None,
+        last_success_at=None,
+        last_error="",
+    )
+
+
+def reset_backfill_state_for_identity_change(items) -> None:
+    """Clear every backfill verdict for items whose provider identity changed.
+
+    A terminal "this id does not exist" verdict is about the id, not the row.
+    When something re-points rows at a different provider id (the TVDB
+    migration rewrites ``media_id`` in place), the old verdict no longer
+    describes anything true, so those items become candidates again.
+
+    Accepts anything the ORM can filter on: a queryset, or a list of items.
+    """
+    MetadataBackfillState.objects.filter(item__in=items).update(
         give_up=False,
         fail_count=0,
         next_retry_at=None,

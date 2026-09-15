@@ -74,6 +74,7 @@ from app.activity_builders import (
     _queue_game_lengths_refresh,
     _should_queue_game_lengths_refresh,
 )
+from app.bulk_action_views import bulk_collection_quick_add, bulk_status_update
 from app.collection_views import (
     _build_collection_episode_audit_entries,
     _build_collection_season_audit_entries,
@@ -527,6 +528,7 @@ def home_rest_fragment(request):
             ],
             "MediaTypes": MediaTypes,
             "IMG_NONE": settings.IMG_NONE,
+            "return_url": reverse("home"),
         },
     )
 
@@ -2198,8 +2200,10 @@ __all__ = [
     "artist_detail",
     "artist_save",
     "artist_track_modal",
+    "bulk_collection_quick_add",
     "bulk_episode_tracking",
     "bulk_music_tracking",
+    "bulk_status_update",
     "calendar",
     "collection_add",
     "collection_fields_save",

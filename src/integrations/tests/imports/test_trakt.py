@@ -3,6 +3,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import call, patch
 
+import redis
 import requests
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
@@ -1377,6 +1378,189 @@ class ImportTrakt(TestCase):
         )
         self.assertEqual(season1.status, Status.COMPLETED.value)
         self.assertTrue(season1.episodes.exists())
+
+    @patch("app.models.providers.services.get_media_metadata")
+    @patch("integrations.imports.trakt.TraktImporter._get_metadata")
+    def test_new_mode_import_does_not_fabricate_earlier_seasons_from_one_finale(
+        self, mock_get_metadata, mock_get_media_metadata
+    ):
+        """Regression test for #1178: a "new"-mode import (a first-time Trakt
+        export/history import) must not treat a single watched finale as
+        proof the whole series was watched. Watching S2's last episode of a
+        show that has other seasons the import never touched must not
+        trigger TV._completed()'s fan-out, which would fabricate every
+        missing season/episode dated "today" -- exactly the bug reported
+        (thousands of phantom episodes logged against the import date).
+        """
+        TMDB_ID = 99999
+        SEASON_NUMBER = 2
+        TOTAL_EPISODES = 5
+
+        def mock_metadata(media_type, tmdb_id, title, season_number=None):
+            if media_type == MediaTypes.TV.value:
+                return {
+                    "title": "Test Show",
+                    "image": "",
+                    "last_episode_season": SEASON_NUMBER,
+                    "max_progress": TOTAL_EPISODES,
+                }
+            if media_type == MediaTypes.SEASON.value:
+                return {
+                    "title": f"Season {season_number}",
+                    "image": "",
+                    "episodes": [
+                        {"episode_number": i, "still_path": None}
+                        for i in range(1, TOTAL_EPISODES + 1)
+                    ],
+                    "max_progress": TOTAL_EPISODES,
+                }
+            return None
+
+        mock_get_metadata.side_effect = mock_metadata
+
+        entry = {
+            "type": "episode",
+            "episode": {
+                "season": SEASON_NUMBER,
+                "number": TOTAL_EPISODES,
+                "title": "Finale",
+            },
+            "show": {"title": "Test Show", "ids": {"tmdb": TMDB_ID}},
+            "watched_at": "2024-06-01T00:00:00.000Z",
+        }
+
+        trakt_importer = TraktImporter("testuser", self.user, "new")
+        trakt_importer.process_watched_episode(entry)
+        trakt_importer.process_history = lambda: None
+        trakt_importer.process_watchlist = lambda: None
+        trakt_importer.process_ratings = lambda: None
+        trakt_importer.process_notes = lambda: None
+        trakt_importer.process_comments = lambda: None
+        trakt_importer.process_collection = lambda: None
+        trakt_importer.process_dropped = lambda: None
+        trakt_importer._validate_username = lambda: None
+
+        trakt_importer.import_data()
+
+        # Never asked to fetch the full show's metadata to fan out episodes.
+        mock_get_media_metadata.assert_not_called()
+
+        tv_obj = TV.objects.get(user=self.user, item__media_id=str(TMDB_ID))
+        self.assertEqual(tv_obj.status, Status.IN_PROGRESS.value)
+        self.assertFalse(
+            Season.objects.filter(
+                user=self.user,
+                item__media_id=str(TMDB_ID),
+                item__season_number=1,
+            ).exists(),
+        )
+
+    @patch("app.models.providers.services.get_media_metadata")
+    @patch("integrations.imports.trakt.TraktImporter._get_metadata")
+    def test_completion_cascade_dates_fabricated_episodes_from_the_watch_not_today(
+        self, mock_get_metadata, mock_get_media_metadata
+    ):
+        """Regression test for #1178: when the overwrite-mode completion
+        cascade does legitimately fire (see
+        test_import_data_cascades_completed_tv_status_to_other_seasons), the
+        episodes it fabricates for other seasons must be dated from the
+        watch event that triggered completion, not from timezone.now(). The
+        reported bug showed thousands of episodes logged as watched "today"
+        purely because the import ran today.
+        """
+        TMDB_ID = 99995
+        SEASON_NUMBER = 2
+        TOTAL_EPISODES = 5
+        WATCHED_AT = "2016-03-04T00:00:00.000Z"
+
+        item_tv, _ = Item.objects.get_or_create(
+            media_id=TMDB_ID,
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.TV.value,
+            defaults={"title": "Test Show", "image": ""},
+        )
+        tv_obj = TV.objects.create(
+            item=item_tv, user=self.user, status=Status.IN_PROGRESS.value
+        )
+        item_season1, _ = Item.objects.get_or_create(
+            media_id=TMDB_ID,
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.SEASON.value,
+            season_number=1,
+            defaults={"title": "Test Show", "image": ""},
+        )
+        Season.objects.create(
+            item=item_season1,
+            user=self.user,
+            related_tv=tv_obj,
+            status=Status.IN_PROGRESS.value,
+        )
+
+        def mock_metadata(media_type, tmdb_id, title, season_number=None):
+            if media_type == MediaTypes.TV.value:
+                return {
+                    "title": "Test Show",
+                    "image": "",
+                    "last_episode_season": SEASON_NUMBER,
+                    "max_progress": TOTAL_EPISODES,
+                }
+            if media_type == MediaTypes.SEASON.value:
+                return {
+                    "title": f"Season {season_number}",
+                    "image": "",
+                    "episodes": [
+                        {"episode_number": i, "still_path": None}
+                        for i in range(1, TOTAL_EPISODES + 1)
+                    ],
+                    "max_progress": TOTAL_EPISODES,
+                }
+            return None
+
+        mock_get_metadata.side_effect = mock_metadata
+
+        mock_get_media_metadata.return_value = {
+            "max_progress": TOTAL_EPISODES,
+            "related": {"seasons": [{"season_number": 1, "image": ""}]},
+            "season/1": {
+                "image": "",
+                "season_number": 1,
+                "episodes": [{"episode_number": i} for i in range(1, TOTAL_EPISODES + 1)],
+            },
+        }
+
+        entry = {
+            "type": "episode",
+            "episode": {
+                "season": SEASON_NUMBER,
+                "number": TOTAL_EPISODES,
+                "title": "Finale",
+            },
+            "show": {"title": "Test Show", "ids": {"tmdb": TMDB_ID}},
+            "watched_at": WATCHED_AT,
+        }
+
+        trakt_importer = TraktImporter("testuser", self.user, "overwrite")
+        trakt_importer.process_watched_episode(entry)
+        trakt_importer.process_history = lambda: None
+        trakt_importer.process_watchlist = lambda: None
+        trakt_importer.process_ratings = lambda: None
+        trakt_importer.process_notes = lambda: None
+        trakt_importer.process_comments = lambda: None
+        trakt_importer.process_collection = lambda: None
+        trakt_importer.process_dropped = lambda: None
+        trakt_importer._validate_username = lambda: None
+
+        trakt_importer.import_data()
+
+        season1 = Season.objects.get(
+            user=self.user,
+            item__media_id=str(TMDB_ID),
+            item__season_number=1,
+        )
+        fabricated_episodes = list(season1.episodes.all())
+        self.assertTrue(fabricated_episodes)
+        for episode in fabricated_episodes:
+            self.assertEqual(episode.end_date, trakt._parse_watched_at(WATCHED_AT))
 
     def test_import_data_cascades_dropped_tv_status_to_in_progress_seasons(self):
         """Regression test for #985: a show hidden/dropped on Trakt must
@@ -2880,6 +3064,34 @@ class TraktDeviceFlow(TestCase):
                 with self.assertRaises(MediaImportError) as ctx:
                     trakt.poll_device_token("device-code", "client", "secret")
                 self.assertIn(fragment, str(ctx.exception))
+
+    @patch("integrations.imports.trakt.get_username_from_oauth", return_value="floppy")
+    @patch("integrations.imports.trakt.services._fallback_session.post")
+    @patch("integrations.imports.trakt.services.session.post")
+    def test_poll_falls_back_when_redis_breaks_the_limiter(
+        self,
+        mock_post,
+        mock_fallback_post,
+        _mock_username,
+    ):
+        """A mid-run Redis outage must not crash device-code polling (#1166)."""
+        mock_post.side_effect = redis.exceptions.ConnectionError("refused")
+        mock_fallback_post.return_value = self._response(
+            200,
+            {"access_token": "access", "refresh_token": "refresh"},
+        )
+
+        result = trakt.poll_device_token("device-code", "client", "secret")
+
+        self.assertEqual(
+            result,
+            {
+                "access_token": "access",
+                "refresh_token": "refresh",
+                "username": "floppy",
+            },
+        )
+        mock_fallback_post.assert_called_once()
 
 
 class TraktRefreshRedirectUri(TestCase):

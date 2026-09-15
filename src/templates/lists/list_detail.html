@@ -90,6 +90,7 @@
               </a>
             </div>
           </div>
+          {% include "lists/components/bulk_select_button.html" %}
           {% include "lists/components/media_type_breakdown_button.html" %}
         </div>
       {% elif custom_list.can_recommend %}
@@ -143,9 +144,10 @@
                 {% translate "Export as CSV" %}
               </a>
             </div>
-          </div>
-          {% include "lists/components/media_type_breakdown_button.html" %}
         </div>
+        {% include "lists/components/bulk_select_button.html" %}
+        {% include "lists/components/media_type_breakdown_button.html" %}
+      </div>
       {% else %}
         <div class="hidden sm:flex mb-4 items-center gap-2">
           <a href="{% url 'list_export_csv' custom_list.public_reference %}"
@@ -354,6 +356,10 @@
        "
        @open-list-edit-modal.window="showModal = true">
 
+    {% if can_edit %}
+      <div x-data="bulkSelection('list-bulk-action-data', 'bulk-action-refresh')">
+    {% endif %}
+
     <!-- Form to manage state -->
     <form id="filter-form" class="hidden">
       <input type="hidden" name="sort" x-model="sort">
@@ -366,10 +372,23 @@
       <input type="hidden" name="status" value="all" :disabled="statuses.length > 0">
       <input type="hidden" name="q" x-model="query">
     </form>
-    {% if column_config %}
-      {{ column_config|json_script:"media-column-config-data" }}
-      {{ default_column_config|json_script:"media-column-default-config-data" }}
+    {% if can_edit %}
+      <button id="bulk-action-refresh"
+              type="button"
+              class="hidden"
+              hx-get="{% url 'list_detail' custom_list.public_reference %}"
+              hx-target="#items-view"
+              hx-include="#filter-form"
+              hx-indicator="#loading-indicator"></button>
+      {% include "app/components/bulk_selection_toolbar.html" %}
     {% endif %}
+    {% if column_config %}
+    {{ column_config|json_script:"media-column-config-data" }}
+    {{ default_column_config|json_script:"media-column-default-config-data" }}
+  {% endif %}
+  {% if can_edit %}
+    {{ bulk_action_data|json_script:"list-bulk-action-data" }}
+  {% endif %}
     {% if can_edit %}
       {% include "lists/components/list_form.html" %}
     {% endif %}
@@ -740,6 +759,9 @@
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
       </div>
     </div>
+    {% if can_edit %}
+      </div>
+    {% endif %}
     </div>
 {% endblock content %}
 {# djlint:on #}

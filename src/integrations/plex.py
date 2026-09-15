@@ -391,6 +391,10 @@ def fetch_section_all_items(
         "X-Plex-Token": token,
         "X-Plex-Container-Start": start,
         "X-Plex-Container-Size": page_size,
+        # Include each item's full external-id Guid[] array in the list
+        # response so callers don't need a per-item detail fetch to
+        # resolve TMDB/IMDB/TVDB ids.
+        "includeGuids": 1,
     }
 
     # Ensure section_key is numeric (section ID) or use it as-is if it's already a path

@@ -10,11 +10,18 @@ from app.interactive_requests import interactive_request_active
 
 logger = logging.getLogger(__name__)
 
+# The beat runs this daily and the shared backoff caps at one day, so without a
+# longer floor an unresolvable backlog is due again on every nightly run - it
+# keeps filling the id-ordered batch and keeps starving newly tracked shows,
+# which is the whole thing the backoff is here to stop.
+_MIGRATION_RETRY_SECONDS = 7 * 24 * 60 * 60
+
 
 def _migration_candidates_queryset():
-    from app.models import Item, MediaTypes, Sources
+    from app.models import Item, MediaTypes, MetadataBackfillField, Sources
+    from app.tasks_backfill_state import _apply_backfill_state_filters
 
-    return (
+    queryset = (
         Item.objects.filter(
             media_type=MediaTypes.TV.value,
             source=Sources.TMDB.value,
@@ -24,6 +31,15 @@ def _migration_candidates_queryset():
         .exclude(library_media_type=MediaTypes.ANIME.value)
         .distinct()
         .order_by("id")
+    )
+    # A show TVDB has no resolvable id for is not pinned - TMDB may publish
+    # the external id later - but it also must not be retried every single
+    # day. Worse, the batch is taken in id order, so once enough unresolvable
+    # shows accumulated at the front they filled the batch and newly tracked
+    # shows never got a turn at all.
+    return _apply_backfill_state_filters(
+        queryset,
+        MetadataBackfillField.TVDB_MIGRATION.value,
     )
 
 
@@ -38,9 +54,14 @@ def migrate_tv_shows_to_preferred_provider_task(batch_size: int = 200):
     future runs stop retrying it. Best-effort — a failure on one show never
     blocks the rest of the batch.
     """
+    from app.models import MetadataBackfillField
     from app.providers import tvdb
     from app.services.tv_provider_migration import (
         migrate_tv_item_to_tvdb,
+    )
+    from app.tasks_backfill_state import (
+        _record_backfill_failure,
+        _record_backfill_pending,
     )
 
     if not tvdb.enabled():
@@ -60,6 +81,11 @@ def migrate_tv_shows_to_preferred_provider_task(batch_size: int = 200):
             result = migrate_tv_item_to_tvdb(item)
         except Exception:
             errored += 1
+            _record_backfill_failure(
+                item,
+                MetadataBackfillField.TVDB_MIGRATION.value,
+                "migration crashed",
+            )
             logger.warning(
                 "TV provider migration crashed for item %s (%s)",
                 item.pk,
@@ -73,7 +99,15 @@ def migrate_tv_shows_to_preferred_provider_task(batch_size: int = 200):
         elif item.metadata_migration_pinned_at is not None:
             pinned += 1
         else:
+            # Not migratable today and not pinned - back off instead of
+            # re-asking the providers about it again tomorrow.
             skipped += 1
+            _record_backfill_pending(
+                item,
+                MetadataBackfillField.TVDB_MIGRATION.value,
+                result.reason,
+                min_delay_seconds=_MIGRATION_RETRY_SECONDS,
+            )
 
     return {
         "migrated": migrated,

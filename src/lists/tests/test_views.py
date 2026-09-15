@@ -117,6 +117,74 @@ class ListsViewTests(TestCase):
         self.assertIn("custom_lists", response.context)
         self.assertIn("form", response.context)
 
+    def test_cards_do_not_materialize_memberships(self):
+        """Card summaries stay in SQL, including watched sorting and completion."""
+        self.client.force_login(self.user)
+        Movie.objects.bulk_create(
+            [
+                Movie(
+                    item=self.item1,
+                    user=self.user,
+                    status=Status.COMPLETED.value,
+                    end_date=timezone.now(),
+                ),
+            ]
+        )
+        for sort in ("name", "last_watched"):
+            with (
+                self.subTest(sort=sort),
+                patch.object(
+                    CustomListItem,
+                    "from_db",
+                    wraps=CustomListItem.from_db,
+                ) as load_membership,
+            ):
+                response = self.client.get(reverse("lists"), {"sort": sort})
+                self.assertEqual(response.status_code, 200)
+                cards = {card.id: card for card in response.context["custom_lists"]}
+                self.assertEqual(cards[self.list1.id].completed_count, 1)
+                self.assertEqual(cards[self.list1.id].completion_percent, 100)
+                load_membership.assert_not_called()
+
+    def test_last_watched_paginated_before_card_hydration(self):
+        """Only one page of full list rows is loaded even for a Python sort."""
+        CustomList.objects.bulk_create(
+            [
+                CustomList(owner=self.user, name=f"Extra {index:03}")
+                for index in range(30)
+            ]
+        )
+        self.client.force_login(self.user)
+        with patch.object(CustomList, "from_db", wraps=CustomList.from_db) as load:
+            response = self.client.get(reverse("lists"), {"sort": "last_watched"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context["custom_lists"]), 20)
+        self.assertEqual(response.context["custom_lists"].paginator.count, 32)
+        self.assertEqual(load.call_count, 20)
+
+    def test_cover_loads_only_first_membership(self):
+        """The cover endpoint must not prefetch the entire list."""
+        CustomListItem.objects.create(
+            custom_list=self.list1,
+            item=self.item2,
+            added_by=self.user,
+        )
+        self.client.force_login(self.user)
+        with (
+            patch.object(
+                CustomListItem,
+                "from_db",
+                wraps=CustomListItem.from_db,
+            ) as load,
+            patch.object(CustomList, "_get_tmdb_backdrop", return_value=None),
+        ):
+            response = self.client.get(
+                reverse("list_cover_image", args=[self.list1.id])
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(load.call_count, 1)
+        self.assertContains(response, self.item1.image)
+
     @patch.object(get_user_model(), "update_preference")
     def test_lists_view_search_filter(self, mock_update_preference):
         """Test the lists view with search filter."""
@@ -450,6 +518,38 @@ class ListDetailViewTests(TestCase):
         CustomListItem.objects.create(
             custom_list=self.custom_list,
             item=self.anime_item,
+        )
+
+    def test_public_list_exposes_kometa_episode_identity(self):
+        """Expose an episode-aware TVDB anchor without changing its visible link."""
+        self.custom_list.visibility = "public"
+        self.custom_list.save(update_fields=["visibility"])
+        self.tv_item.provider_external_ids = {"tvdb_id": "81189"}
+        self.tv_item.save(update_fields=["provider_external_ids"])
+        episode_item = Item.objects.create(
+            media_id=self.tv_item.media_id,
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.EPISODE.value,
+            title="Pilot",
+            season_number=1,
+            episode_number=2,
+        )
+        CustomListItem.objects.create(
+            custom_list=self.custom_list,
+            item=episode_item,
+        )
+        self.client.logout()
+
+        response = self.client.get(reverse("list_detail", args=[self.custom_list.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            "/details/tvdb/tv/81189/test-tv-show/season/1/episode/2",
+        )
+        self.assertContains(
+            response,
+            "/details/tmdb/tv/1668/pilot/season/1/episode/2",
         )
 
     @patch.object(get_user_model(), "update_preference")
@@ -3678,6 +3778,30 @@ class ListJsonExportTests(TestCase):
         # Should only include TMDB movies
         self.assertEqual(len(data), 1)
         self.assertIn({"id": 12345}, data)
+
+    def test_radarr_json_preserves_custom_list_order(self):
+        """Return public movie IDs in the list's persisted custom order."""
+        second_movie = Item.objects.create(
+            media_id="99999",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.MOVIE.value,
+            title="Second Movie",
+        )
+        CustomListItem.objects.create(
+            custom_list=self.custom_list,
+            item=second_movie,
+        )
+        CustomListItem.objects.filter(
+            custom_list=self.custom_list,
+            item=self.movie_item,
+        ).update(date_added=timezone.now() + timedelta(minutes=1))
+
+        response = self.client.get(
+            reverse("list_json", args=[self.custom_list.id]) + "?arr=radarr",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [{"id": 99999}, {"id": 12345}])
 
     def test_radarr_json_accepts_slug(self):
         """JSON exports should resolve custom public slugs."""

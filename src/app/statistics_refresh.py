@@ -268,7 +268,7 @@ def _get_activity_bounds(user):
             bounds.append(stats._localize_datetime(max_value).date())
 
     Episode = apps.get_model("app", "Episode")
-    episode_bounds = Episode.objects.filter(
+    episode_bounds = Episode.all_objects.filter(
         related_season__user=user,
         end_date__isnull=False,
     ).aggregate(min_date=Min("end_date"), max_date=Max("end_date"))
@@ -355,7 +355,7 @@ def _get_sparse_activity_days(user):
         or MediaTypes.SEASON.value in active_media_types
     ):
         Episode = apps.get_model("app", "Episode")
-        episode_qs = Episode.objects.filter(related_season__user=user)
+        episode_qs = Episode.all_objects.filter(related_season__user=user)
         episode_end_days = (
             episode_qs.filter(
                 end_date__isnull=False,
@@ -599,8 +599,12 @@ def refresh_statistics_cache(user_id: int, range_name: str):
             "episode_runtime_keys": set(),
             "credit_item_ids": set(),
         }
-        built_days = {}
+        # The aggregate reader fetches cached days in 50-day chunks. Retaining
+        # every rebuilt payload here duplicates a long history in the
+        # interactive worker until the final aggregate is complete.
+        cache_write_fallback_days = {}
         pending_writes = {}
+        pending_days = {}
         write_chunk_size = 500
         for day in sorted_days:
             day_stats = build_stats_for_day(
@@ -614,11 +618,26 @@ def refresh_statistics_cache(user_id: int, range_name: str):
             )
             refreshed_days += 1
             if day_stats:
-                built_days[day] = day_stats
                 pending_writes[_day_cache_key(user_id, day)] = day_stats
+                pending_days[day] = day_stats
                 if len(pending_writes) >= write_chunk_size:
-                    cache.set_many(pending_writes, timeout=STATISTICS_DAY_CACHE_TIMEOUT)
+                    failed_keys = set(
+                        cache.set_many(
+                            pending_writes,
+                            timeout=STATISTICS_DAY_CACHE_TIMEOUT,
+                        )
+                        or ()
+                    )
+                    if failed_keys:
+                        cache_write_fallback_days.update(
+                            {
+                                pending_day: pending_day_stats
+                                for pending_day, pending_day_stats in pending_days.items()
+                                if _day_cache_key(user_id, pending_day) in failed_keys
+                            }
+                        )
                     pending_writes = {}
+                    pending_days = {}
                 credit_backfill_hints += int(
                     day_stats.get("backfill", {}).get("missing_credits") or 0,
                 )
@@ -634,7 +653,21 @@ def refresh_statistics_cache(user_id: int, range_name: str):
                 if plays_total or minutes_total or daily_minutes_total:
                     nonempty_days += 1
         if pending_writes:
-            cache.set_many(pending_writes, timeout=STATISTICS_DAY_CACHE_TIMEOUT)
+            failed_keys = set(
+                cache.set_many(
+                    pending_writes,
+                    timeout=STATISTICS_DAY_CACHE_TIMEOUT,
+                )
+                or ()
+            )
+            if failed_keys:
+                cache_write_fallback_days.update(
+                    {
+                        pending_day: pending_day_stats
+                        for pending_day, pending_day_stats in pending_days.items()
+                        if _day_cache_key(user_id, pending_day) in failed_keys
+                    }
+                )
 
         _enqueue_collected_backfills(user_id, backfill_collector)
 
@@ -645,7 +678,7 @@ def refresh_statistics_cache(user_id: int, range_name: str):
             end_date,
             build_missing=True,
             credit_backfill_hints=credit_backfill_hints,
-            prebuilt_days=built_days,
+            prebuilt_days=cache_write_fallback_days,
         )
         cache_statistics_data(
             user_id, range_name, stats_data, history_version=history_version
@@ -735,7 +768,7 @@ def schedule_statistics_refresh(
             return False
 
     try:
-        from app.tasks import refresh_statistics_cache_task
+        from app.tasks_interactive import refresh_statistics_cache_task
 
         refresh_statistics_cache_task.apply_async(
             args=[user_id, range_name],

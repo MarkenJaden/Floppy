@@ -67,7 +67,7 @@ INBOUND_CHANNELS: tuple[InboundChannel, ...] = (
         key="jellyfinWebhook",
         address="webhook/jellyfin/{token}",
         provider="jellyfin",
-        summary="Jellyfin playback webhook.",
+        summary="Jellyfin playback and user-rating webhook.",
         dispatches_to="celery",
     ),
     InboundChannel(

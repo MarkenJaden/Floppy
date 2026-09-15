@@ -329,6 +329,10 @@ def _render_standard_track_modal(
         "episode_number": episode_number,
         "instance_id": instance_id,
     }
+    if media_type == MediaTypes.EPISODE.value and media:
+        # Editing an episode watch can also save the current form as a new
+        # entry. Give that create operation its own stable idempotency key.
+        initial_data["watch_operation_id"] = uuid4()
     route_identity_media_type = None
     route_library_media_type = None
 
@@ -830,21 +834,8 @@ def _render_standard_track_modal(
             getattr(media, "rewatch_started_at", None) if rewatch_action else None
         ),
         "general_existing_instance": media,
-        # Episodes are multi-watch: when the modal is bound to an existing watch
-        # this re-opens it in create mode so a rewatch can still be logged.
-        "episode_create_url": (
-            reverse(
-                "track_modal",
-                kwargs={
-                    "source": source,
-                    "media_type": media_type,
-                    "media_id": media_id,
-                    "season_number": season_number,
-                },
-            )
-            + f"?is_create=1&episode_number={episode_number}&return_url={return_url}"
-            if media_type == MediaTypes.EPISODE.value and media
-            else ""
+        "episode_save_as_new": bool(
+            media_type == MediaTypes.EPISODE.value and media,
         ),
         "metadata_fields": metadata_fields,
         "image_field": image_field,

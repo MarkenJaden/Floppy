@@ -2228,6 +2228,19 @@ class PlexHistoryImporter:
             if self._should_skip_episode_record(record):
                 continue
 
+            from integrations.episode_orders import apply_targets, resolve_incoming
+
+            ordered_targets = resolve_incoming(
+                self.user, record["tmdb_id"], Sources.TMDB.value,
+                record["season_number"], record["episode_number"],
+                integration="plex",
+            )
+            if ordered_targets is not None:
+                apply_targets(
+                    self.user, ordered_targets, watched_at=record["watched_at"],
+                )
+                continue
+
             tv_metadata = self._tv_metadata_cache.get(record["tmdb_id"])
             if not tv_metadata:
                 self._track_missing_ids(

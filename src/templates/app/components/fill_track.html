@@ -231,13 +231,12 @@
               {% endif %}
             </div>
             <div class="flex items-center gap-2 ml-auto">
-              {% if episode_create_url %}
-                <button type="button"
-                        hx-get="{{ episode_create_url }}"
-                        hx-target="closest [data-track-modal-root]"
-                        hx-swap="outerHTML"
+              {% if episode_save_as_new %}
+                <button type="submit"
+                        name="save_as_new_entry"
+                        value="1"
                         class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 cursor-pointer">
-                  {% translate "Add new entry" %}
+                  {% translate "Save as new entry" %}
                 </button>
               {% endif %}
               <button type="submit"

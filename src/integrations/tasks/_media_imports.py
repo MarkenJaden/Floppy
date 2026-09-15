@@ -120,25 +120,25 @@ def import_media(
     # library (and holding the single celery-queue worker) for no reason.
     if has_imported_media(imported_counts):
         events.tasks.reload_calendar.delay()
+
+        # Importers rely heavily on bulk_create_with_history, which bypasses model signals.
+        # Force-clear history cache so month view index pages don't keep stale "empty month"
+        # payloads after imports (notably reproducible with SIMKL imports).
+        history_cache.invalidate_history_cache(user.id, force=True)
+
+        # bulk_create also bypasses the post_save signals that normally schedule a statistics
+        # cache refresh. Trigger it explicitly so the hours card and activity overview reflect
+        # the newly imported media without requiring a manual page reload or waiting for the
+        # next scheduled Celery beat.
+        from app import statistics_cache as _statistics_cache
+
+        _statistics_cache.schedule_all_ranges_refresh(user.id)
     else:
         logger.info(
             "calendar_reload_skipped reason=no_items_imported importer=%s user_id=%s",
             getattr(importer_func, "__name__", importer_func),
             user_id,
         )
-
-    # Importers rely heavily on bulk_create_with_history, which bypasses model signals.
-    # Force-clear history cache so month view index pages don't keep stale "empty month"
-    # payloads after imports (notably reproducible with SIMKL imports).
-    history_cache.invalidate_history_cache(user.id, force=True)
-
-    # bulk_create also bypasses the post_save signals that normally schedule a statistics
-    # cache refresh. Trigger it explicitly so the hours card and activity overview reflect
-    # the newly imported media without requiring a manual page reload or waiting for the
-    # next scheduled Celery beat.
-    from app import statistics_cache as _statistics_cache
-
-    _statistics_cache.schedule_all_ranges_refresh(user.id)
 
     # Queue collection metadata update task for media server imports
     _queue_post_import_collection_update(user_id, importer_func)
@@ -466,40 +466,6 @@ def sync_plex_watchlist(user_id, mode="watchlist"):
         events.tasks.reload_calendar.delay()
 
     return format_watchlist_sync_message(sync_counts, warnings)
-
-
-@shared_task(name="Refresh Plex library sections")
-def refresh_plex_sections(user_id):
-    """Refresh and persist cached Plex library sections for a user.
-
-    Runs off the request thread so a page like Integrations settings never
-    blocks on live Plex connection probing (see integrations() in users/views.py).
-    """
-    from integrations import plex as plex_api
-
-    user = get_user_model().objects.get(id=user_id)
-    account = getattr(user, "plex_account", None)
-    if not account or not account.plex_token:
-        return
-
-    try:
-        sections = plex_api.list_sections(account.plex_token)
-    except plex_api.PlexAuthError as exc:
-        logger.warning(
-            "Plex token expired while refreshing sections for user %s: %s",
-            user.username,
-            exc,
-        )
-        return
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning(
-            "Could not refresh Plex libraries for user %s: %s", user.username, exc
-        )
-        return
-
-    account.sections = sections
-    account.sections_refreshed_at = timezone.now()
-    account.save(update_fields=["sections", "sections_refreshed_at"])
 
 
 @shared_task(name=JELLYFIN_PUSH_TASK_NAME)

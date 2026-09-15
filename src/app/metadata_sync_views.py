@@ -20,6 +20,7 @@ from django.views.decorators.http import require_GET, require_POST
 from app import (
     custom_metadata,
     helpers,
+    history_cache,
     metadata_utils,
 )
 from app.db_retry import is_retryable_error, run_retryable_db_operation
@@ -1706,6 +1707,7 @@ def sync_metadata(request, source, media_type, media_id, season_number=None):
             }
 
             episodes_to_update = []
+            episode_item_ids_with_title_changes = set()
             episode_count = 0
 
             # Create a lookup for raw episode data by episode_number
@@ -1715,10 +1717,17 @@ def sync_metadata(request, source, media_type, media_id, season_number=None):
                 episode_number = episode_data["episode_number"]
                 if episode_number in existing_episodes:
                     episode_item = existing_episodes[episode_number]
-                    title_fields = Item.title_fields_from_metadata(metadata)
-                    episode_item.title = title_fields["title"]
-                    episode_item.original_title = title_fields["original_title"]
-                    episode_item.localized_title = title_fields["localized_title"]
+                    episode_title_fields = Item.title_fields_from_episode_metadata(
+                        episode_data,
+                    )
+                    if episode_title_fields["title"]:
+                        if any(
+                            getattr(episode_item, field) != value
+                            for field, value in episode_title_fields.items()
+                        ):
+                            episode_item_ids_with_title_changes.add(episode_item.pk)
+                        for field, value in episode_title_fields.items():
+                            setattr(episode_item, field, value)
                     episode_item.image = episode_data["image"]
 
                     # Extract and update release_datetime from TMDB air_date
@@ -1771,6 +1780,17 @@ def sync_metadata(request, source, media_type, media_id, season_number=None):
                     updated_count,
                     title,
                 )
+
+            if episode_item_ids_with_title_changes:
+                history_user_ids = (
+                    Episode.objects.filter(
+                        item_id__in=episode_item_ids_with_title_changes,
+                    )
+                    .values_list("related_season__user_id", flat=True)
+                    .distinct()
+                )
+                for user_id in history_user_ids:
+                    history_cache.invalidate_history_cache(user_id, force=True)
 
         item.fetch_releases(delay=False)
 

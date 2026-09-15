@@ -181,6 +181,8 @@ class TrackedMediaResponseSerializer(serializers.Serializer):
     score = serializers.FloatField(allow_null=True)
     status = serializers.IntegerField(allow_null=True)
     progress = serializers.FloatField(allow_null=True)
+    episodes_left = serializers.IntegerField(allow_null=True)
+    total_episodes_left = serializers.IntegerField(allow_null=True)
     progress_scope = serializers.CharField(allow_null=True)
     progress_unit = serializers.CharField(allow_null=True)
     progressed_at = serializers.DateTimeField(allow_null=True)
@@ -213,6 +215,14 @@ class ConsumptionResponseSerializer(serializers.Serializer):
     notes = serializers.CharField(allow_blank=True, allow_null=True)
 
 
+class MediaTypeStatusSerializer(serializers.Serializer):
+    """Whether the media type of this item is enabled for the user."""
+
+    media_type = serializers.CharField()
+    enabled = serializers.BooleanField()
+    message = serializers.CharField(allow_blank=True, allow_null=True)
+
+
 class CompleteMediaResponseSerializer(serializers.Serializer):
     """Exact top-level CompleteMediaSerializer envelope."""
 
@@ -223,6 +233,8 @@ class CompleteMediaResponseSerializer(serializers.Serializer):
     media_type = serializers.CharField()
     title = serializers.CharField(allow_blank=True, allow_null=True)
     max_progress = serializers.IntegerField()
+    episodes_left = serializers.IntegerField(allow_null=True)
+    total_episodes_left = serializers.IntegerField(allow_null=True)
     image = serializers.CharField(allow_blank=True, allow_null=True)
     # FORK: 16:9 artwork
     backdrop = serializers.CharField(allow_null=True)
@@ -243,6 +255,7 @@ class CompleteMediaResponseSerializer(serializers.Serializer):
     consumptions_number = serializers.IntegerField()
     consumptions = ConsumptionResponseSerializer(many=True)
     lists = serializers.ListField(child=serializers.DictField())
+    media_type_status = MediaTypeStatusSerializer(allow_null=True)
 
 
 class EpisodeDetailsSerializer(serializers.Serializer):

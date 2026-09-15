@@ -385,6 +385,8 @@ class PocketCastsImporter:
         # Collect new completed podcasts for inference (if not first import)
         new_completed_podcasts = []  # List of (episode_data, duration_seconds, published_date)
         successful_show_syncs = 0
+        catalog_skipped = 0
+        catalog_synced = 0
 
         # First pass: iterate every subscribed podcast and sync the full episode catalog,
         # then process only episodes with listening activity into per-user Podcast rows.
@@ -400,13 +402,25 @@ class PocketCastsImporter:
                 self.warnings.append(f"{show_title}: failed to sync episode catalog")
                 continue
 
+            # Every recurring poll walks the show's whole public catalog, and
+            # almost none of it has changed since the last poll. Read the
+            # stored catalog once per show as plain rows, then skip any episode
+            # whose stored values already match - no per-episode SELECT, no
+            # model hydration, no save. Production evidence (2026-09-14): four
+            # runs of ~1,019 seconds each walked ~11,000 episodes across 12
+            # shows and imported nothing.
+            catalog_index = self._load_catalog_index(show)
             for metadata_ep in full_metadata.values():
                 catalog_episode_data = self._build_catalog_episode_data(
                     metadata_ep,
                     podcast_uuid,
                     podcast_meta,
                 )
+                if self._catalog_episode_unchanged(catalog_episode_data, catalog_index):
+                    catalog_skipped += 1
+                    continue
                 self._sync_catalog_episode(catalog_episode_data, show=show)
+                catalog_synced += 1
 
             play_states = self._fetch_show_play_states(podcast_uuid)
             if play_states is None:
@@ -567,6 +581,17 @@ class PocketCastsImporter:
                                     )
                             self._pending_history = updated_history
                         break
+
+        # The ratio here is the evidence a Docker session needs: on a settled
+        # library a recurring poll should report almost all catalog episodes
+        # skipped, and the run's wall time should fall with it.
+        logger.info(
+            "pocketcasts_catalog_sync user=%s shows=%s synced=%s skipped=%s",
+            self.user.username,
+            successful_show_syncs,
+            catalog_synced,
+            catalog_skipped,
+        )
 
         if successful_show_syncs == 0 and self.warnings:
             msg = "Pocket Casts import could not sync any subscribed shows."
@@ -1841,6 +1866,86 @@ class PocketCastsImporter:
         except (TypeError, ValueError):
             return None
         return number if number >= 0 else None
+
+    # The catalog fields _sync_catalog_episode() can write, mapped to the key
+    # _build_catalog_episode_data() puts the incoming value under. Both the
+    # stored-row read and the unchanged comparison below are driven from this,
+    # so a new writable field cannot be added to one and forgotten in the other
+    # without the consistency test in the integrations suite failing.
+    _CATALOG_COMPARISON_FIELDS = (
+        ("title", "title"),
+        ("slug", "slug"),
+        ("duration", "duration"),
+        ("audio_url", "url"),
+        ("episode_number", "episodeNumber"),
+        ("season_number", "episodeSeason"),
+        ("file_type", "fileType"),
+        ("episode_type", "episodeType"),
+    )
+
+    def _load_catalog_index(self, show):
+        """Read one show's stored catalog as rows, not model instances.
+
+        Keyed by episode UUID. ``values()`` rather than model objects because
+        this exists to answer "has anything changed?" for a whole catalog at
+        once - hydrating thousands of episodes to answer it is the cost being
+        removed.
+        """
+        fields = [stored for stored, _ in self._CATALOG_COMPARISON_FIELDS]
+        return {
+            row["episode_uuid"]: row
+            for row in PodcastEpisode.objects.filter(show=show).values(
+                "episode_uuid",
+                "published",
+                "is_deleted",
+                *fields,
+            )
+        }
+
+    def _catalog_episode_unchanged(self, episode_data, catalog_index):
+        """Report whether syncing this episode would write nothing.
+
+        Mirrors the write conditions in ``_sync_catalog_episode`` exactly: a
+        blank or absent incoming value never overwrites a stored one there, so
+        it must not count as a difference here either. Returning False is
+        always safe - it just means doing the full sync.
+        """
+        stored = catalog_index.get(episode_data.get("uuid"))
+        if stored is None:
+            return False
+
+        if stored["is_deleted"] != episode_data.get("isDeleted", False):
+            return False
+
+        published_raw = episode_data.get("published")
+        if published_raw:
+            published_ts = self._parse_history_timestamp(published_raw)
+            if published_ts is None:
+                # Unparseable, so the sync would not write it either.
+                pass
+            elif stored["published"] != datetime.fromtimestamp(published_ts, tz=UTC):
+                return False
+
+        for stored_field, incoming_key in self._CATALOG_COMPARISON_FIELDS:
+            incoming = episode_data.get(incoming_key)
+            if stored_field in ("episode_number", "season_number"):
+                if incoming is None:
+                    continue
+                coerced = self._coerce_nonnegative_int(incoming)
+                if coerced is not None and stored[stored_field] != coerced:
+                    return False
+                continue
+            if stored_field in ("slug", "file_type", "episode_type"):
+                # These write on "is not None", so "" is a real value.
+                if incoming is None:
+                    continue
+                if stored[stored_field] != incoming:
+                    return False
+                continue
+            if incoming and stored[stored_field] != incoming:
+                return False
+
+        return True
 
     def _sync_catalog_episode(self, episode_data, show=None):
         """Create or update catalog metadata for a Pocket Casts episode."""

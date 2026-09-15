@@ -998,7 +998,8 @@ def episode_save(request):
         fallback_media_type=MediaTypes.TV.value,
     )
 
-    instance_id = request.POST.get("instance_id")
+    save_as_new_entry = request.POST.get("save_as_new_entry") == "1"
+    instance_id = None if save_as_new_entry else request.POST.get("instance_id")
     episode_instance = None
     if instance_id:
         episode_instance = BasicMedia.objects.get_media(
@@ -1048,10 +1049,13 @@ def episode_save(request):
             library_media_type=library_media_type,
         )
         try:
+            watch_operation_id = form.cleaned_data.get("watch_operation_id")
+            if save_as_new_entry and not watch_operation_id:
+                watch_operation_id = uuid4()
             result = related_season.watch(
                 episode_number,
                 form.cleaned_data.get("end_date"),
-                watch_operation_id=form.cleaned_data.get("watch_operation_id"),
+                watch_operation_id=watch_operation_id,
                 score=form.cleaned_data.get("score"),
                 status=form.cleaned_data.get("status") or Status.COMPLETED.value,
                 start_date=form.cleaned_data.get("start_date"),

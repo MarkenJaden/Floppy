@@ -344,7 +344,7 @@ def _fetch_media_objects(media_refs):
                 "related_season__related_tv__item",
             )
         found_ids = set()
-        for media in queryset:
+        for media in queryset.iterator(chunk_size=500):
             media_objects[(media_type, media.id)] = media
             found_ids.add(media.id)
 
@@ -372,7 +372,7 @@ def _aggregate_minutes_per_media_type_from_days(user, day_list, *, build_missing
         cached = cache.get_many(key_map.values())
         for day in chunk:
             cache_key = key_map[day]
-            day_stats = cached.get(cache_key)
+            day_stats = cached.pop(cache_key, None)
             if not day_stats and build_missing:
                 day_stats = build_stats_for_day(user.id, day)
             if not day_stats:
@@ -696,7 +696,7 @@ def _aggregate_statistics_from_days(
         cached = cache.get_many(fetch_keys) if fetch_keys else {}
         for day in chunk:
             cache_key = key_map[day]
-            day_stats = prebuilt_days.get(day) or cached.get(cache_key)
+            day_stats = prebuilt_days.get(day) or cached.pop(cache_key, None)
             if not day_stats and build_missing:
                 day_stats = build_stats_for_day(user.id, day)
                 if day_stats:
