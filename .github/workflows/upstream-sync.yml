@@ -86,11 +86,13 @@ jobs:
           git merge -X ours --no-edit upstream/${UPSTREAM_BRANCH} || true
           git push origin "${BRANCH_NAME}"
           gh pr create \
+            --repo "${{ github.repository }}" \
             --title "⚠️ Upstream Sync Conflict - Manual Resolution Required" \
             --body "Automated sync from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` into \`${TARGET_BRANCH}\` failed due to merge conflicts. Please inspect and resolve manually on branch \`${BRANCH_NAME}\`." \
             --base "${TARGET_BRANCH}" \
             --head "${BRANCH_NAME}" || \
           gh issue create \
+            --repo "${{ github.repository }}" \
             --title "⚠️ Upstream Sync Conflict" \
             --body "Merge conflict occurred when syncing from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\`. Check branch \`${BRANCH_NAME}\`." || \
           echo "::warning::Could not create PR/Issue via GitHub CLI. Verify that 'Allow GitHub Actions to create and approve pull requests' is enabled in Settings -> Actions -> General -> Workflow permissions."
@@ -136,11 +138,13 @@ jobs:
           git checkout -b "${BRANCH_NAME}"
           git push origin "${BRANCH_NAME}"
           gh pr create \
+            --repo "${{ github.repository }}" \
             --title "❌ Upstream Sync Validation Failed" \
             --body "Upstream changes from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` were merged cleanly, but automated linting or test suite checks failed. Please review branch \`${BRANCH_NAME}\` before merging into \`${TARGET_BRANCH}\`." \
             --base "${TARGET_BRANCH}" \
             --head "${BRANCH_NAME}" || \
           gh issue create \
+            --repo "${{ github.repository }}" \
             --title "❌ Upstream Sync Validation Failed" \
             --body "Upstream changes from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` caused test or lint failures. Check branch \`${BRANCH_NAME}\`." || \
           echo "::warning::Could not create PR/Issue via GitHub CLI. Verify that 'Allow GitHub Actions to create and approve pull requests' is enabled in Settings -> Actions -> General -> Workflow permissions."
@@ -152,4 +156,4 @@ jobs:
           echo "All validation checks passed! Pushing to ${TARGET_BRANCH}..."
           git push origin "${TARGET_BRANCH}"
           echo "Triggering Docker image build workflow..."
-          gh workflow run docker-image.yml --ref "${TARGET_BRANCH}" || true
+          gh workflow run docker-image.yml --repo "${{ github.repository }}" --ref "${TARGET_BRANCH}" || true
