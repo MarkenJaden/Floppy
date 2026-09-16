@@ -567,9 +567,8 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
         except (ValueError, TypeError):
             return None, None
 
-        if (
-            (season_number is not None and season_number < 0)
-            or (episode_number is not None and episode_number < 0)
+        if (season_number is not None and season_number < 0) or (
+            episode_number is not None and episode_number < 0
         ):
             return None, None
 

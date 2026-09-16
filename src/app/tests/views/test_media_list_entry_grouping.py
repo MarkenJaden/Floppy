@@ -212,9 +212,7 @@ class MediaListEntryGroupingTests(TestCase):
         )
         self.user.anime_library_mode = MediaTypes.ANIME.value
         self.user.anime_show_each_play = True
-        self.user.save(
-            update_fields=["anime_library_mode", "anime_show_each_play"]
-        )
+        self.user.save(update_fields=["anime_library_mode", "anime_show_each_play"])
         cache.clear()
 
         with mock.patch.object(

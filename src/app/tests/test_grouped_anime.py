@@ -300,7 +300,7 @@ class AnimeLibraryVisibilityTests(TestCase):
                 )
 
     def test_tv_mode_shows_grouped_anime_in_the_tv_library(self):
-        """"TV Library" means the user wants grouped anime in TV Shows."""
+        """ "TV Library" means the user wants grouped anime in TV Shows."""
         self.user.anime_library_mode = MediaTypes.TV.value
         self.user.save(update_fields=["anime_library_mode"])
         _, include_in_tv = metadata_resolution.anime_library_visibility(self.user)

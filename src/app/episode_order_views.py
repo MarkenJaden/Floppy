@@ -17,7 +17,8 @@ def owned_tv(user, tv_id):
     """Resolve a tracked series only within the requesting user's library."""
     return get_object_or_404(
         TV.objects.select_related("item", "active_episode_order"),
-        pk=tv_id, user=user,
+        pk=tv_id,
+        user=user,
     )
 
 
@@ -26,14 +27,23 @@ def available_orders(tv, user):
     orders, errors = [], []
     for provider in ("tmdb", "tvdb"):
         series_id = metadata_resolution.resolve_provider_media_id(
-            tv.item, provider, route_media_type="tv",
+            tv.item,
+            provider,
+            route_media_type="tv",
         )
         if not series_id or not credentials.is_configured(provider, user=user):
             continue
         try:
             orders.extend(episode_orders.list_orders(provider, series_id, user=user))
-        except (services.ProviderAPIError, requests.RequestException, ValueError, KeyError):
-            errors.append(f"{provider.upper()} episode orders are temporarily unavailable.")
+        except (
+            services.ProviderAPIError,
+            requests.RequestException,
+            ValueError,
+            KeyError,
+        ):
+            errors.append(
+                f"{provider.upper()} episode orders are temporarily unavailable."
+            )
     return orders, errors
 
 
@@ -43,7 +53,9 @@ def selected_order(tv, user, provider, key):
         message = "Select TMDB or TVDB."
         raise ValueError(message)
     series_id = metadata_resolution.resolve_provider_media_id(
-        tv.item, provider, route_media_type="tv",
+        tv.item,
+        provider,
+        route_media_type="tv",
     )
     if not series_id:
         message = "This series has no verified identity for that provider."
@@ -81,14 +93,21 @@ def _form_resolutions(data, preview):
 
 
 def _preview_context(order, preview):
-    titles = dict(Item.objects.filter(
-        pk__in=[row["item_id"] for row in preview["watches"]],
-    ).values_list("pk", "title"))
-    proposed = {row["watch_ids"][0]: row["episode_ids"] for row in preview["resolutions"]}
+    titles = dict(
+        Item.objects.filter(
+            pk__in=[row["item_id"] for row in preview["watches"]],
+        ).values_list("pk", "title")
+    )
+    proposed = {
+        row["watch_ids"][0]: row["episode_ids"] for row in preview["resolutions"]
+    }
     return {
-        "order": order, "preview": preview,
-        "watches": [{**row, "title": titles[row["item_id"]],
-                     "proposed": proposed[row["id"]]} for row in preview["watches"]],
+        "order": order,
+        "preview": preview,
+        "watches": [
+            {**row, "title": titles[row["item_id"]], "proposed": proposed[row["id"]]}
+            for row in preview["watches"]
+        ],
         "episodes": order.catalogue["episodes"],
     }
 
@@ -103,23 +122,34 @@ def episode_ordering_settings(request, tv_id):
     if request.method == "POST":
         try:
             if request.POST.get("action") == "apply":
-                order = get_object_or_404(EpisodeOrder, pk=request.POST.get("order_id"), show=tv.item)
+                order = get_object_or_404(
+                    EpisodeOrder, pk=request.POST.get("order_id"), show=tv.item
+                )
                 preview = episode_ordering.preview_change(tv, order)
                 episode_ordering.apply_change(
-                    tv, order, token=request.POST.get("token", ""),
+                    tv,
+                    order,
+                    token=request.POST.get("token", ""),
                     resolutions=_form_resolutions(request.POST, preview),
                 )
                 messages.success(request, "Episode ordering updated.")
                 return redirect("episode_ordering_settings", tv_id=tv.pk)
             order = selected_order(
-                tv, request.user, request.POST.get("provider"), request.POST.get("key"),
+                tv,
+                request.user,
+                request.POST.get("provider"),
+                request.POST.get("key"),
             )
-            context.update(_preview_context(order, episode_ordering.preview_change(tv, order)))
+            context.update(
+                _preview_context(order, episode_ordering.preview_change(tv, order))
+            )
         except (ValueError, ValidationError) as error:
             context["error"] = str(error)
             status = 400
         except (services.ProviderAPIError, requests.RequestException, KeyError):
-            context["error"] = "Provider data is unavailable. Your current ordering has been preserved."
+            context["error"] = (
+                "Provider data is unavailable. Your current ordering has been preserved."
+            )
             status = 503
     context["orders"], context["provider_errors"] = available_orders(tv, request.user)
     return render(request, "app/episode_ordering.html", context, status=status)

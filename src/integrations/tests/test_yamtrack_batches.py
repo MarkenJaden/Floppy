@@ -151,7 +151,9 @@ class YamtrackBatchImportTests(TestCase):
         # batch_size is patched to 2 in setUp, so the "other" row forces a
         # flush (and cleanup) between the two "repeat" watches.
         counts, warnings = yamtrack.importer(
-            BytesIO(csv_bytes), self.user, "overwrite",
+            BytesIO(csv_bytes),
+            self.user,
+            "overwrite",
         )
 
         self.assertEqual(warnings, "")

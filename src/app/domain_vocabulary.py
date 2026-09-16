@@ -136,7 +136,9 @@ GENERATED_WARNING = (
     "`PYTHONPATH=src uv run --no-sync python -m app.domain_vocabulary` to regenerate. -->"
 )
 
-CONTEXT_PATH = Path(__file__).resolve().parents[1] / "api" / "contracts" / "context.jsonld"
+CONTEXT_PATH = (
+    Path(__file__).resolve().parents[1] / "api" / "contracts" / "context.jsonld"
+)
 FLOPPY_NAMESPACE = "https://github.com/dannyvfilms/Floppy/ns#"
 SCHEMA_ORG_NAMESPACE = "https://schema.org/"
 

@@ -222,7 +222,9 @@ def add_list_item_search(request, list_id):
             result["already_in_list"] = key in existing_items
 
         enriched_results = helpers.enrich_items_with_user_data(request, results)
-        preview_url = reverse("list_add_item_search", kwargs={"list_id": custom_list.id})
+        preview_url = reverse(
+            "list_add_item_search", kwargs={"list_id": custom_list.id}
+        )
         context = {
             "results": enriched_results,
             "custom_list": custom_list,

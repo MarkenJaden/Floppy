@@ -422,7 +422,10 @@ def editions(media_id, user=None):
             logger.warning(
                 "GraphQL errors from Hardcover API listing editions for %s: %s",
                 media_id,
-                [err.get("message", "Unknown error") for err in response.get("errors", [])],
+                [
+                    err.get("message", "Unknown error")
+                    for err in response.get("errors", [])
+                ],
             )
 
         book_data = (response.get("data") or {}).get("books_by_pk") or {}

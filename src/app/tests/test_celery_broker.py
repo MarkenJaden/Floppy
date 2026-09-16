@@ -131,7 +131,7 @@ class CeleryDispatchRoutingTests(SimpleTestCase):
         # argument`). This only bites when app and integrations tests share a
         # process, which is why running the suite serially surfaced it.
         self.app.finalize()
-        
+
         def _register(name):
             # _task_from_fun returns the *existing* task when the name is
             # already registered, so the injected real implementation has to be

@@ -89,10 +89,14 @@ class TerminalErrorClassificationTests(TestCase):
         this classification exists to avoid, so a bare ValueError must not be
         read as "this identifier is wrong".
         """
-        self.assertFalse(is_terminal_backfill_error(ValueError("TVDB is not configured")))
+        self.assertFalse(
+            is_terminal_backfill_error(ValueError("TVDB is not configured"))
+        )
         self.assertFalse(
             is_terminal_backfill_error(
-                ProviderNotConfiguredError(Sources.TVDB.value, "TVDB is not configured"),
+                ProviderNotConfiguredError(
+                    Sources.TVDB.value, "TVDB is not configured"
+                ),
             ),
         )
 

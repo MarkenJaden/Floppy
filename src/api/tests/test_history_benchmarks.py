@@ -54,13 +54,23 @@ def _percentile(values, percentile):
 def _summary(samples):
     return {
         "count": len(samples),
-        "duration_ms_median": round(statistics.median(s["duration_ms"] for s in samples), 2),
-        "duration_ms_p90": round(_percentile([s["duration_ms"] for s in samples], 0.9), 2),
+        "duration_ms_median": round(
+            statistics.median(s["duration_ms"] for s in samples), 2
+        ),
+        "duration_ms_p90": round(
+            _percentile([s["duration_ms"] for s in samples], 0.9), 2
+        ),
         "duration_ms_min": round(min(s["duration_ms"] for s in samples), 2),
         "duration_ms_max": round(max(s["duration_ms"] for s in samples), 2),
-        "query_count_median": round(statistics.median(s["query_count"] for s in samples), 2),
-        "sql_time_ms_median": round(statistics.median(s["sql_time_ms"] for s in samples), 2),
-        "rss_kb_delta_median": round(statistics.median(s["rss_kb_delta"] for s in samples), 2),
+        "query_count_median": round(
+            statistics.median(s["query_count"] for s in samples), 2
+        ),
+        "sql_time_ms_median": round(
+            statistics.median(s["sql_time_ms"] for s in samples), 2
+        ),
+        "rss_kb_delta_median": round(
+            statistics.median(s["rss_kb_delta"] for s in samples), 2
+        ),
         "response_bytes": samples[-1]["response_bytes"],
         "status": samples[-1]["status"],
         "result_day_count": samples[-1]["result_day_count"],
@@ -149,7 +159,8 @@ class HistoryApiBenchmarkTests(APITestCase):
                 Movie(
                     item=item,
                     user=cls.user,
-                    end_date=cls.base_date + timedelta(
+                    end_date=cls.base_date
+                    + timedelta(
                         days=2758 - (index % 10),
                     ),
                 )
@@ -272,7 +283,10 @@ class HistoryApiBenchmarkTests(APITestCase):
                         for index, value in enumerate(match.groups())
                     ]
                     metrics[category] = values
-            end_match = re.search(r"history_build_end .*entry_counts=(\{.*\}) elapsed_ms=([\d.]+) .*rss_kb_delta=([-\d]+|None)", record)
+            end_match = re.search(
+                r"history_build_end .*entry_counts=(\{.*\}) elapsed_ms=([\d.]+) .*rss_kb_delta=([-\d]+|None)",
+                record,
+            )
             if end_match:
                 rss_delta = end_match.group(3)
                 metrics["end"] = {

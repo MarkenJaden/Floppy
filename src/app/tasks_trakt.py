@@ -50,7 +50,9 @@ def enqueue_trakt_popularity_backfill_items(item_ids, countdown=10, *, force=Fal
         drain_kwargs={"force": force},
     )
     if not queued:
-        logger.debug("Trakt popularity backfill queue unavailable, dispatching directly")
+        logger.debug(
+            "Trakt popularity backfill queue unavailable, dispatching directly"
+        )
         populate_trakt_popularity_data_for_items.apply_async(
             args=[normalized],
             kwargs={"force": force},

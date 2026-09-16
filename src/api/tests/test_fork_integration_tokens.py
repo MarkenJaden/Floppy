@@ -41,7 +41,9 @@ class IntegrationTokenModelTests(FloppyApiTestCase):
         self.assertNotIn(raw_token, refreshed.token_digest)
         self.assertNotIn(raw_token, refreshed.name)
         self.assertNotIn(raw_token, refreshed.client_identifier)
-        self.assertEqual(str(token), f"IntegrationToken(Nuvio Living Room, {self.user1.username})")
+        self.assertEqual(
+            str(token), f"IntegrationToken(Nuvio Living Room, {self.user1.username})"
+        )
 
     def test_custom_scopes_and_expiration(self):
         """Custom scopes and expiration timestamps are respected."""
@@ -200,7 +202,11 @@ class IntegrationTokenAuthHeaderTests(FloppyApiTestCase):
                 response = self.call_api(
                     "post",
                     "api_scrobble",
-                    payload={"action": "start", "media_type": "movie", "ids": {"tmdb": "603"}},
+                    payload={
+                        "action": "start",
+                        "media_type": "movie",
+                        "ids": {"tmdb": "603"},
+                    },
                     headers=header,
                 )
                 self.assertEqual(response.status_code, HTTP.FORBIDDEN)
@@ -241,7 +247,11 @@ class IntegrationTokenAuthHeaderTests(FloppyApiTestCase):
         res = self.call_api(
             "put",
             "api_playback_progress",
-            payload={"media_type": "movie", "ids": {"tmdb": movie_item.media_id}, "position_seconds": 888},
+            payload={
+                "media_type": "movie",
+                "ids": {"tmdb": movie_item.media_id},
+                "position_seconds": 888,
+            },
             headers={"HTTP_X_API_KEY": self.raw_token},
         )
         self.assertEqual(res.status_code, HTTP.OK)
@@ -251,7 +261,9 @@ class IntegrationTokenAuthHeaderTests(FloppyApiTestCase):
         self.assertEqual(p1.position_seconds, 888)
 
         # User2 does not have progress
-        self.assertFalse(PlaybackProgress.objects.filter(user=self.user2, item=movie_item).exists())
+        self.assertFalse(
+            PlaybackProgress.objects.filter(user=self.user2, item=movie_item).exists()
+        )
 
 
 class ScopePermissionTests(FloppyApiTestCase):

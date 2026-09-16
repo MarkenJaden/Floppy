@@ -307,7 +307,9 @@ def save_collection_field_schema(user, payload):
         # tab) are left alone instead of being wiped by a stale submission.
         stale_field_ids &= known_field_ids
     if stale_field_ids:
-        CollectionField.objects.filter(id__in=stale_field_ids, group__user=user).delete()
+        CollectionField.objects.filter(
+            id__in=stale_field_ids, group__user=user
+        ).delete()
 
     stale_group_ids = set(existing_groups) - seen_group_ids
     if known_field_ids is not None:

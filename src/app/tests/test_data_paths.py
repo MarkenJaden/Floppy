@@ -615,4 +615,3 @@ fi
                 f"supervisord <-c> </etc/supervisord.conf> [SECRET_FILE={custom_secret}]",
                 commands,
             )
-

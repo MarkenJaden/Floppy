@@ -141,9 +141,7 @@ class AnimeMigrationAtomicityTests(TransactionTestCase):
             ),
             "anime": list(Anime.all_objects.order_by("id").values()),
             "historical_tv": list(TV.history.order_by("history_id").values()),
-            "historical_seasons": list(
-                Season.history.order_by("history_id").values()
-            ),
+            "historical_seasons": list(Season.history.order_by("history_id").values()),
             "historical_episodes": list(
                 Episode.history.order_by("history_id").values()
             ),
@@ -416,12 +414,8 @@ class AnimeMigrationAtomicityTests(TransactionTestCase):
                 self.flat_item,
                 Sources.TMDB.value,
             )
-            tvdb_result = anime_migration.persist_flat_anime_migration(
-                tvdb_preflight
-            )
-            tmdb_result = anime_migration.persist_flat_anime_migration(
-                tmdb_preflight
-            )
+            tvdb_result = anime_migration.persist_flat_anime_migration(tvdb_preflight)
+            tmdb_result = anime_migration.persist_flat_anime_migration(tmdb_preflight)
             completed = anime_migration.preflight_flat_anime_to_grouped(
                 self.user,
                 self.flat_item,
@@ -470,7 +464,9 @@ class AnimeMigrationAtomicityTests(TransactionTestCase):
         with self.assertRaises(anime_migration.AnimeMigrationError) as raised:
             anime_migration.persist_flat_anime_migration(preflight)
 
-        self.assertEqual(raised.exception.state, anime_migration.AnimeMigrationState.STALE)
+        self.assertEqual(
+            raised.exception.state, anime_migration.AnimeMigrationState.STALE
+        )
         self.assertEqual(raised.exception.code, anime_migration.STALE_CODE)
         self.assertFalse(TV.objects.exists())
         self.assertFalse(Episode.objects.exists())
@@ -525,8 +521,12 @@ class AnimeMigrationAtomicityTests(TransactionTestCase):
         )
         Episode.objects.bulk_create(
             [
-                Episode(item=episode_item, related_season=season, end_date=timezone.now()),
-                Episode(item=episode_item, related_season=season, end_date=timezone.now()),
+                Episode(
+                    item=episode_item, related_season=season, end_date=timezone.now()
+                ),
+                Episode(
+                    item=episode_item, related_season=season, end_date=timezone.now()
+                ),
             ]
         )
         before = self._table_snapshot()

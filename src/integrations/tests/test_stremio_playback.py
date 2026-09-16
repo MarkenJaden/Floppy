@@ -204,7 +204,9 @@ class StremioPlaybackSessionTests(TestCase):
 
     def test_duplicate_request_after_ingress_window_reuses_active_session(self):
         first = self.start()
-        with patch.object(playback.timezone, "now", return_value=self.now + timedelta(minutes=31)):
+        with patch.object(
+            playback.timezone, "now", return_value=self.now + timedelta(minutes=31)
+        ):
             duplicate = playback.start_session(
                 {"id": "tt100", "type": "movie"}, self.user.id
             )
@@ -214,14 +216,22 @@ class StremioPlaybackSessionTests(TestCase):
     def test_recent_replay_does_not_complete_from_stale_state(self):
         session_id = self.start()
         stale_time = self.now - timedelta(minutes=1)
-        self.library = self.state("tt100", 95, watched_at=stale_time, flagged=1, times=1)
+        self.library = self.state(
+            "tt100", 95, watched_at=stale_time, flagged=1, times=1
+        )
         self.observe(session_id, 60)
         self.assertEqual(self.observe(session_id, 90).status, "schedule")
-        self.library = self.state("tt100", 2, watched_at=self.now + timedelta(minutes=2), times=1)
+        self.library = self.state(
+            "tt100", 2, watched_at=self.now + timedelta(minutes=2), times=1
+        )
         self.observe(session_id, 120)
-        self.library = self.state("tt100", 20, watched_at=self.now + timedelta(minutes=8), times=1)
+        self.library = self.state(
+            "tt100", 20, watched_at=self.now + timedelta(minutes=8), times=1
+        )
         self.observe(session_id, 480)
-        self.library = self.state("tt100", 92, watched_at=self.now + timedelta(minutes=43), flagged=1, times=2)
+        self.library = self.state(
+            "tt100", 92, watched_at=self.now + timedelta(minutes=43), flagged=1, times=2
+        )
         self.assertEqual(self.observe(session_id, 43 * 60).status, "complete")
 
     def test_high_stale_baseline_without_sequential_transition_remains_pending(self):
@@ -238,15 +248,22 @@ class StremioPlaybackSessionTests(TestCase):
 
     def _local_season(self, episode_count):
         tv_item = Item.objects.create(
-            media_id="123", source=Sources.TMDB.value, media_type=MediaTypes.TV.value,
-            title="Show", provider_external_ids={"imdb_id": "tt200"},
+            media_id="123",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.TV.value,
+            title="Show",
+            provider_external_ids={"imdb_id": "tt200"},
         )
         tv = TV.objects.create(
             user=self.user, item=tv_item, status=Status.IN_PROGRESS.value
         )
         season_item = Item.objects.create(
-            media_id="123", source=Sources.TMDB.value, media_type=MediaTypes.SEASON.value,
-            title="Show", season_number=1, local_season_episode_count=episode_count,
+            media_id="123",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.SEASON.value,
+            title="Show",
+            season_number=1,
+            local_season_episode_count=episode_count,
         )
         Season.objects.create(
             user=self.user,
@@ -263,7 +280,9 @@ class StremioPlaybackSessionTests(TestCase):
             target, 87, watched_at=self.now + timedelta(minutes=40), flagged=1
         )
         self.observe(session_id, 40 * 60)
-        self.library = self.state(current, 1, watched_at=self.now + timedelta(minutes=41))
+        self.library = self.state(
+            current, 1, watched_at=self.now + timedelta(minutes=41)
+        )
         self.library[0]["_id"] = target.split(":", 1)[0]
         return self.observe(session_id, 41 * 60)
 
@@ -377,7 +396,9 @@ class StremioPlaybackSessionTests(TestCase):
 
     def test_temporary_outage_recovers_and_resets_failure_budget(self):
         session_id = self.start()
-        with patch.object(playback, "get_library_items", side_effect=requests.ConnectionError):
+        with patch.object(
+            playback, "get_library_items", side_effect=requests.ConnectionError
+        ):
             self.assertEqual(self.observe(session_id, 60).status, "schedule")
         self.library = self.state("tt100", 1)
         self.assertEqual(self.observe(session_id, 120).reason, "baseline_captured")
@@ -388,7 +409,9 @@ class StremioPlaybackSessionTests(TestCase):
 
     def test_transient_failure_budget_is_bounded(self):
         session_id = self.start()
-        with patch.object(playback, "get_library_items", side_effect=requests.ConnectionError):
+        with patch.object(
+            playback, "get_library_items", side_effect=requests.ConnectionError
+        ):
             for attempt in range(1, playback.MAX_TRANSIENT_FAILURES + 1):
                 decision = self.observe(session_id, attempt * 120)
                 self.assertEqual(decision.status, "schedule")
@@ -405,7 +428,9 @@ class StremioPlaybackSessionTests(TestCase):
             decision = playback.start_session(
                 {"id": "tt100", "type": "movie"}, self.user.id, now=self.now
             )
-        self.assertEqual((decision.status, decision.reason), ("terminal", "guard_unavailable"))
+        self.assertEqual(
+            (decision.status, decision.reason), ("terminal", "guard_unavailable")
+        )
 
     def test_disconnected_account_stops_immediately(self):
         session_id = self.start()
@@ -413,7 +438,9 @@ class StremioPlaybackSessionTests(TestCase):
         account.connection_broken = True
         account.save(update_fields=["connection_broken"])
         decision = self.observe(session_id, 60)
-        self.assertEqual((decision.status, decision.reason), ("terminal", "account_disconnected"))
+        self.assertEqual(
+            (decision.status, decision.reason), ("terminal", "account_disconnected")
+        )
 
     def test_credential_failure_stops_immediately(self):
         session_id = self.start()
@@ -421,11 +448,15 @@ class StremioPlaybackSessionTests(TestCase):
             playback.helpers, "decrypt_or_raise", side_effect=MediaImportError("bad")
         ):
             decision = self.observe(session_id, 60)
-        self.assertEqual((decision.status, decision.reason), ("terminal", "credential_configuration"))
+        self.assertEqual(
+            (decision.status, decision.reason), ("terminal", "credential_configuration")
+        )
 
     def test_unexpected_programming_error_is_visible(self):
         session_id = self.start()
-        with patch.object(playback, "get_library_items", side_effect=RuntimeError("bug")):
+        with patch.object(
+            playback, "get_library_items", side_effect=RuntimeError("bug")
+        ):
             with self.assertRaisesRegex(RuntimeError, "bug"):
                 self.observe(session_id, 60)
 

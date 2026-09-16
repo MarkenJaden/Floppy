@@ -581,9 +581,7 @@ def bulk_list_add(request):
             ).values_list("item_id", flat=True),
         )
         added_items = [
-            item
-            for item_id, item in items_by_id.items()
-            if item_id not in existing_ids
+            item for item_id, item in items_by_id.items() if item_id not in existing_ids
         ]
         CustomListItem.objects.bulk_create(
             [
@@ -714,7 +712,10 @@ def collection_add_to_list_modal(request):
     collection_items = related.get(collection_name)
     if not collection_items:
         for k, v in related.items():
-            if k not in ("seasons", "recommendations") and k.lower() == collection_name.lower():
+            if (
+                k not in ("seasons", "recommendations")
+                and k.lower() == collection_name.lower()
+            ):
                 collection_items = v
                 collection_name = k
                 break
@@ -759,22 +760,26 @@ def collection_add_to_list_submit(request):
 
     if not custom_list_id:
         response = HttpResponse("")
-        response["HX-Trigger"] = json.dumps({
-            "showToast": {
-                "message": gettext("Please select a list."),
-                "type": "error",
+        response["HX-Trigger"] = json.dumps(
+            {
+                "showToast": {
+                    "message": gettext("Please select a list."),
+                    "type": "error",
+                }
             }
-        })
+        )
         return response
 
     if not selected_media_ids:
         response = HttpResponse("")
-        response["HX-Trigger"] = json.dumps({
-            "showToast": {
-                "message": gettext("Please select at least one item."),
-                "type": "error",
+        response["HX-Trigger"] = json.dumps(
+            {
+                "showToast": {
+                    "message": gettext("Please select at least one item."),
+                    "type": "error",
+                }
             }
-        })
+        )
         return response
 
     custom_list = get_object_or_404(
@@ -796,12 +801,17 @@ def collection_add_to_list_submit(request):
     ordered_ids = []
     if parent_media_id and source and media_type:
         try:
-            parent_meta = services.get_media_metadata(media_type, parent_media_id, source)
+            parent_meta = services.get_media_metadata(
+                media_type, parent_media_id, source
+            )
             related = parent_meta.get("related") or {}
             c_items = related.get(collection_name)
             if not c_items:
                 for k, v in related.items():
-                    if k not in ("seasons", "recommendations") and k.lower() == collection_name.lower():
+                    if (
+                        k not in ("seasons", "recommendations")
+                        and k.lower() == collection_name.lower()
+                    ):
                         c_items = v
                         break
             if not c_items:
@@ -809,13 +819,15 @@ def collection_add_to_list_submit(request):
                     if k not in ("seasons", "recommendations") and v:
                         c_items = v
                         break
-            for item_dict in (c_items or []):
+            for item_dict in c_items or []:
                 if isinstance(item_dict, dict) and "media_id" in item_dict:
                     mid_key = str(item_dict["media_id"])
                     collection_items_by_id[mid_key] = item_dict
                     ordered_ids.append(mid_key)
         except Exception as exc:
-            logger.warning("Failed to retrieve collection items from parent metadata: %s", exc)
+            logger.warning(
+                "Failed to retrieve collection items from parent metadata: %s", exc
+            )
 
     if ordered_ids:
         order_index = {mid: i for i, mid in enumerate(ordered_ids)}
@@ -858,7 +870,9 @@ def collection_add_to_list_submit(request):
                         **_list_item_title_fields_from_metadata(media_type, meta),
                     )
                 except Exception as exc:
-                    logger.warning("Could not create item for media_id %s: %s", mid_str, exc)
+                    logger.warning(
+                        "Could not create item for media_id %s: %s", mid_str, exc
+                    )
                     continue
 
         if item:
@@ -905,12 +919,16 @@ def collection_add_to_list_submit(request):
             request.user.id,
         )
         response = HttpResponse("")
-        response["HX-Trigger"] = json.dumps({
-            "showToast": {
-                "message": gettext("Couldn't add items to this list — please try again."),
-                "type": "error",
-            },
-        })
+        response["HX-Trigger"] = json.dumps(
+            {
+                "showToast": {
+                    "message": gettext(
+                        "Couldn't add items to this list — please try again."
+                    ),
+                    "type": "error",
+                },
+            }
+        )
         return response
 
     if added_count > 0 and already_count == 0:
@@ -926,14 +944,17 @@ def collection_add_to_list_submit(request):
             added_count,
         ) % {"count": added_count, "list": custom_list.name, "skipped": already_count}
     else:
-        msg = gettext('All selected items are already in "%(list)s".') % {"list": custom_list.name}
+        msg = gettext('All selected items are already in "%(list)s".') % {
+            "list": custom_list.name
+        }
 
     response = HttpResponse("")
-    response["HX-Trigger"] = json.dumps({
-        "showToast": {
-            "message": msg,
-            "type": "success" if added_count > 0 else "info",
-        },
-    })
+    response["HX-Trigger"] = json.dumps(
+        {
+            "showToast": {
+                "message": msg,
+                "type": "success" if added_count > 0 else "info",
+            },
+        }
+    )
     return response
-

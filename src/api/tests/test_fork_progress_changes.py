@@ -140,8 +140,7 @@ class ProgressChangeFeedTests(FloppyApiTestCase):
         )
 
         self.client.get(
-            f"{FEED}?cursor={self.changes[2].sequence}"
-            f"&connection={binding.origin_key}",
+            f"{FEED}?cursor={self.changes[2].sequence}&connection={binding.origin_key}",
             **self.auth_headers,
         )
 

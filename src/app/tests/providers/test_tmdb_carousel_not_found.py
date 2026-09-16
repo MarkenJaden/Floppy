@@ -27,8 +27,12 @@ class TmdbCarouselNotFoundTests(TestCase):
         mock_api.side_effect = _http_error(404)
 
         expected = {"video": None, "photos": []}
-        self.assertEqual(tmdb.carousel_media(MediaTypes.SEASON.value, "999999", 10), expected)
-        self.assertEqual(tmdb.carousel_media(MediaTypes.SEASON.value, "999999", 10), expected)
+        self.assertEqual(
+            tmdb.carousel_media(MediaTypes.SEASON.value, "999999", 10), expected
+        )
+        self.assertEqual(
+            tmdb.carousel_media(MediaTypes.SEASON.value, "999999", 10), expected
+        )
 
         mock_api.assert_called_once()
 

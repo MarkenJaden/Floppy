@@ -459,7 +459,9 @@ class GPodderImporterTests(TestCase):
     ):
         self.account.episode_actions_since = 55
         self.account.last_full_resync_at = timezone.now()
-        self.account.save(update_fields=["episode_actions_since", "last_full_resync_at"])
+        self.account.save(
+            update_fields=["episode_actions_since", "last_full_resync_at"]
+        )
 
         mock_fetch_subscriptions.return_value = []
         mock_show_metadata.return_value = {}
@@ -523,7 +525,9 @@ class GPodderImporterTests(TestCase):
 
         self.account.episode_actions_since = 99
         self.account.last_full_resync_at = timezone.now() - timedelta(hours=25)
-        self.account.save(update_fields=["episode_actions_since", "last_full_resync_at"])
+        self.account.save(
+            update_fields=["episode_actions_since", "last_full_resync_at"]
+        )
 
         mock_fetch_subscriptions.return_value = ["https://example.com/feed.xml"]
         mock_show_metadata.return_value = {"title": "Voicemail Dump Truck"}
@@ -663,7 +667,9 @@ class GPodderImporterTests(TestCase):
 
         self.account.episode_actions_since = 200
         self.account.last_full_resync_at = timezone.now() - timedelta(hours=25)
-        self.account.save(update_fields=["episode_actions_since", "last_full_resync_at"])
+        self.account.save(
+            update_fields=["episode_actions_since", "last_full_resync_at"]
+        )
 
         mock_fetch_subscriptions.return_value = ["https://example.com/feed.xml"]
         mock_show_metadata.return_value = {"title": "Example Show"}

@@ -767,7 +767,9 @@ class HistoryEpisodeTitleBucketCollisionTests(TestCase):
         day = history_cache.build_history_day(user, day_key)
 
         episode_entries = [
-            entry for entry in day["entries"] if entry["media_type"] == MediaTypes.EPISODE.value
+            entry
+            for entry in day["entries"]
+            if entry["media_type"] == MediaTypes.EPISODE.value
         ]
         self.assertEqual(len(episode_entries), 1)
         self.assertEqual(episode_entries[0]["display_title"], "The Real Episode Title")

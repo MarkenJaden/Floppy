@@ -168,4 +168,3 @@ class PreferencesViewTests(TestCase):
         live_region = save_bar.find("div", attrs={"aria-live": "polite"})
         self.assertIsNotNone(live_region, "aria-live region not found in save bar")
         self.assertEqual(live_region.get("aria-atomic"), "true")
-

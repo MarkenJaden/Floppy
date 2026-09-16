@@ -89,7 +89,9 @@ class Command(BaseCommand):
         user.is_superuser = False
         user.is_staff = False
         user.save(update_fields=["is_superuser", "is_staff"])
-        self.stdout.write(self.style.SUCCESS(f"{user.username} is no longer a superuser."))
+        self.stdout.write(
+            self.style.SUCCESS(f"{user.username} is no longer a superuser.")
+        )
 
     def _list_users(self, user_model):
         """Print every account with its superuser status."""
@@ -108,7 +110,9 @@ class Command(BaseCommand):
 
         self.stdout.write("")
         if superusers:
-            self.stdout.write(f"{len(superusers)} superuser(s): {', '.join(superusers)}")
+            self.stdout.write(
+                f"{len(superusers)} superuser(s): {', '.join(superusers)}"
+            )
         else:
             self.stdout.write(
                 self.style.WARNING(

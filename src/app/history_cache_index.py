@@ -39,32 +39,40 @@ def _add_days(days_set, days_iterable):
     return added
 
 
-def build_history_index(
-    user, logging_style_override=None, media_types=None
-):
+def build_history_index(user, logging_style_override=None, media_types=None):
     """Build an ordered list of active history days for a user."""
     build_start = time.perf_counter()
     logging_style = _normalize_logging_style(logging_style_override, user)
     requested_media_types = expand_history_media_types(media_types)
-    include_episode = requested_media_types is None or "episode" in requested_media_types
+    include_episode = (
+        requested_media_types is None or "episode" in requested_media_types
+    )
     include_movie = requested_media_types is None or "movie" in requested_media_types
     include_music = requested_media_types is None or "music" in requested_media_types
-    include_podcast = requested_media_types is None or "podcast" in requested_media_types
+    include_podcast = (
+        requested_media_types is None or "podcast" in requested_media_types
+    )
     include_game = requested_media_types is None or "game" in requested_media_types
-    include_boardgame = requested_media_types is None or "boardgame" in requested_media_types
+    include_boardgame = (
+        requested_media_types is None or "boardgame" in requested_media_types
+    )
     days = set()
 
     episode_days = (
-        Episode.all_objects.filter(
-            related_season__user=user,
-            end_date__isnull=False,
+        (
+            Episode.all_objects.filter(
+                related_season__user=user,
+                end_date__isnull=False,
+            )
+            .annotate(
+                day=TruncDate("end_date"),
+            )
+            .values_list("day", flat=True)
+            .distinct()
         )
-        .annotate(
-            day=TruncDate("end_date"),
-        )
-        .values_list("day", flat=True)
-        .distinct()
-    ) if include_episode else []
+        if include_episode
+        else []
+    )
     episode_count = _add_days(days, episode_days)
 
     movie_qs = Movie.objects.none()
@@ -107,9 +115,7 @@ def build_history_index(
         (Manga, "manga"),
         (Anime, "anime"),
     ):
-        if not (
-            requested_media_types is None or media_type in requested_media_types
-        ):
+        if not (requested_media_types is None or media_type in requested_media_types):
             continue
         reading_qs = model.objects.filter(user=user)
         reading_end_days = (

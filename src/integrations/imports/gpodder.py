@@ -104,8 +104,7 @@ class GPodderImporter:
         subscriptions = self._load_subscriptions()
         is_full_resync = (
             self.account.last_full_resync_at is None
-            or timezone.now() - self.account.last_full_resync_at
-            >= FULL_RESYNC_INTERVAL
+            or timezone.now() - self.account.last_full_resync_at >= FULL_RESYNC_INTERVAL
         )
         actions, next_cursor = gpodder_api.fetch_episode_actions(
             self.credentials,

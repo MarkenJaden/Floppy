@@ -28,7 +28,10 @@ class ServerPortValidationTests(SimpleTestCase):
             True,
         )
         for value in invalid_values:
-            with self.subTest(value=value), self.assertRaises(server_port.ServerPortError):
+            with (
+                self.subTest(value=value),
+                self.assertRaises(server_port.ServerPortError),
+            ):
                 server_port.validate_port(value)
 
 

@@ -77,7 +77,9 @@ class EpisodeHistoryInvalidationTests(TransactionTestCase):
             season_number=1,
             episode_number=1,
         )
-        previous_month = (timezone.now().replace(day=1) - datetime.timedelta(days=1)).replace(
+        previous_month = (
+            timezone.now().replace(day=1) - datetime.timedelta(days=1)
+        ).replace(
             day=10,
             microsecond=0,
         )

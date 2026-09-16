@@ -41,9 +41,7 @@ def routed_api_views():
                 continue
             key = f"{view_class.__module__}.{view_class.__name__}"
             methods = {
-                method.upper()
-                for method in HTTP_METHODS
-                if hasattr(view_class, method)
+                method.upper() for method in HTTP_METHODS if hasattr(view_class, method)
             }
             seen.setdefault(key, set()).update(methods)
 

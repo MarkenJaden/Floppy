@@ -214,7 +214,9 @@ class MetadataSettingsPageTests(TestCase):
 
     @patch.dict("os.environ", {"HOST_CONTAINERNAME": "yamtrack"})
     @patch("users.metadata_views.preflight.in_container", return_value=True)
-    def test_a_container_install_is_told_to_use_docker_exec(self, _in_container, _probe):
+    def test_a_container_install_is_told_to_use_docker_exec(
+        self, _in_container, _probe
+    ):
         """Podman counts too: preflight.in_container checks both markers."""
         self.client.force_login(self.user)
 

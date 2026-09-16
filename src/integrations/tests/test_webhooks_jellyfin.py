@@ -155,7 +155,9 @@ class JellyfinWebhookTests(TestCase):
         )
 
     @patch("integrations.webhooks.jellyfin.services.get_media_metadata")
-    def test_user_data_saved_rating_creates_statusless_tv(self, mock_get_media_metadata):
+    def test_user_data_saved_rating_creates_statusless_tv(
+        self, mock_get_media_metadata
+    ):
         """A series rating creates a statusless TV row without watch state."""
         mock_get_media_metadata.return_value = {
             "media_id": "1668",

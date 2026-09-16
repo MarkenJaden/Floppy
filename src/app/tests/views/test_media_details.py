@@ -542,7 +542,9 @@ class MediaDetailsViewTests(TestCase):
             for section in response.context["detail_link_sections"]
             if section["title"] in ("Source", "Tracking Source")
         ]
-        self.assertTrue(source_sections, "Expected a Source link section in the fallback")
+        self.assertTrue(
+            source_sections, "Expected a Source link section in the fallback"
+        )
         self.assertEqual(
             source_sections[0]["entries"][0]["url"],
             "https://www.igdb.com/games/zone-of-the-enders-the-2nd-runner",
@@ -5520,7 +5522,9 @@ class MediaDetailsViewTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertFalse(
-            MetadataProviderPreference.objects.filter(user=self.user, item=item).exists(),
+            MetadataProviderPreference.objects.filter(
+                user=self.user, item=item
+            ).exists(),
         )
 
     @patch("app.views.metadata_resolution.resolve_detail_metadata")
@@ -10531,7 +10535,6 @@ class MediaDetailsViewTests(TestCase):
         item.refresh_from_db()
         self.assertEqual(item.image, existing_image)
 
-
     @patch("integrations.tasks.fetch_collection_metadata_for_item.delay")
     @patch("app.views.credits.sync_item_credits_from_metadata")
     @patch("app.views.metadata_utils.apply_item_metadata", return_value=[])
@@ -10618,6 +10621,7 @@ class MediaDetailsViewTests(TestCase):
         self.assertIn('hx-swap-oob="outerHTML"', section)
         self.assertIn('<h2 class="text-xl font-bold">Your Notes</h2>', section)
         self.assertIn("First note ever", section)
+
     @patch("integrations.tasks.fetch_collection_metadata_for_item.delay")
     @patch("app.views.credits.sync_item_credits_from_metadata")
     @patch("app.views.metadata_utils.apply_item_metadata", return_value=[])
@@ -10679,6 +10683,7 @@ class MediaDetailsViewTests(TestCase):
         section = body[body.index('id="detail-notes-section"') :]
         self.assertIn('hx-swap-oob="outerHTML"', section)
         self.assertNotIn('<h2 class="text-xl font-bold">Your Notes</h2>', section)
+
     def test_editing_an_episode_note_swaps_the_section_back(self):
         """Episode saves push the notes section back like movie saves do.
 
@@ -10765,6 +10770,7 @@ class MediaDetailsViewTests(TestCase):
             f"episode-notes-modal-tmdb-1668-1-1-{episode.id}",
             section,
         )
+
     @patch("app.views.tmdb.episode", return_value={})
     @patch("app.providers.services.get_media_metadata")
     @patch("app.providers.tmdb.process_episodes")

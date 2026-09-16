@@ -1312,6 +1312,7 @@ def parse_completion_datetime(value):
 
     return parsed
 
+
 def split_pass_history(tracked_plays, season):
     """Return (plays in the season's current rewatch pass, every play).
 

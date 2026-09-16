@@ -294,10 +294,14 @@ class ProgressEditTV(TestCase):
         self.assertEqual(retry_response.status_code, 200)
         self.assertEqual(watched.count(), 2)
         self.assertTrue(watched.filter(item__episode_number=2).exists())
-        returned_token = retry_response.content.decode().split(
-            '"watch_operation_id": "',
-            1,
-        )[1].split('"', 1)[0]
+        returned_token = (
+            retry_response.content.decode()
+            .split(
+                '"watch_operation_id": "',
+                1,
+            )[1]
+            .split('"', 1)[0]
+        )
         self.assertEqual(str(UUID(returned_token)), returned_token)
         self.assertNotEqual(returned_token, str(watch_operation_id))
 

@@ -306,9 +306,7 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
         music_map = (
             {
                 music.id: music
-                for music in Music.objects.filter(
-                    id__in=music_ids, user=user
-                )
+                for music in Music.objects.filter(id__in=music_ids, user=user)
                 .select_related("item", "album", "track")
                 .defer(*history_deferred_item_fields("item"))
             }

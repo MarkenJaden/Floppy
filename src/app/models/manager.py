@@ -319,8 +319,10 @@ class MediaManager(models.Manager):
                         user=user,
                         item_id=OuterRef("item_id"),
                     ).exclude(resolution="")
-                    matching_collection_platforms = explicit_collection_platforms.filter(
-                        resolution__iexact=platform,
+                    matching_collection_platforms = (
+                        explicit_collection_platforms.filter(
+                            resolution__iexact=platform,
+                        )
                     )
                     platform_json_qs = _filter_queryset_by_item_json_array_ci(
                         queryset,
@@ -479,7 +481,9 @@ class MediaManager(models.Manager):
             ).filter(row_number=1)
 
         queryset = queryset.select_related("item").defer(
-            *_media_list_deferred_item_fields(needs_watch_providers=needs_watch_providers),
+            *_media_list_deferred_item_fields(
+                needs_watch_providers=needs_watch_providers
+            ),
         )
         queryset = self._apply_prefetch_related(queryset, media_type, list_mode=True)
 
@@ -707,10 +711,14 @@ class MediaManager(models.Manager):
         title_tiebreak = Lower("item__title")
         is_desc = direction == "desc"
         queryset = queryset.select_related("item").defer(
-            *_media_list_deferred_item_fields(needs_watch_providers=needs_watch_providers),
+            *_media_list_deferred_item_fields(
+                needs_watch_providers=needs_watch_providers
+            ),
         )
         queryset = queryset.order_by(
-            order_expr.desc(nulls_last=True) if is_desc else order_expr.asc(nulls_last=True),
+            order_expr.desc(nulls_last=True)
+            if is_desc
+            else order_expr.asc(nulls_last=True),
             title_tiebreak.desc() if is_desc else title_tiebreak.asc(),
             F("item_id").desc() if is_desc else F("item_id").asc(),
         )
@@ -1995,7 +2003,9 @@ class MediaManager(models.Manager):
                         getattr(season.item, "provider_episode_count", None)
                         for season in main_seasons
                     ]
-                    if season_counts and all(count is not None for count in season_counts):
+                    if season_counts and all(
+                        count is not None for count in season_counts
+                    ):
                         total = sum(season_counts)
 
             media.total_episode_count = total

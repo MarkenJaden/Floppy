@@ -330,7 +330,9 @@ def _discover_planning_instance(
     if model is AlbumTracker:
         if album is None:
             return None
-        return model.objects.filter(user=user, album=album).select_related("album").first()
+        return (
+            model.objects.filter(user=user, album=album).select_related("album").first()
+        )
     if model is PodcastShowTracker:
         if show is None:
             return None

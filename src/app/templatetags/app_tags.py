@@ -824,14 +824,16 @@ def get_search_media_types(user):
             "value": "all",
         }
     ]
-    types.extend([
-        {
-            "display": media_type_readable_plural(media_type),
-            "value": media_type,
-        }
-        for media_type in enabled_types
-        if media_type != MediaTypes.SEASON.value
-    ])
+    types.extend(
+        [
+            {
+                "display": media_type_readable_plural(media_type),
+                "value": media_type,
+            }
+            for media_type in enabled_types
+            if media_type != MediaTypes.SEASON.value
+        ]
+    )
     return types
 
 
@@ -1108,14 +1110,18 @@ def _next_episode_number_for_season_item(item, media):
 
     from events.models import Event
 
-    event_numbers = Event.objects.filter(
-        item__media_id=media_id,
-        item__source=source,
-        item__media_type=MediaTypes.SEASON.value,
-        item__season_number=season_number,
-        content_number__isnull=False,
-        datetime__lte=timezone.now(),
-    ).exclude(datetime__year__lt=1900).values_list("content_number", flat=True)
+    event_numbers = (
+        Event.objects.filter(
+            item__media_id=media_id,
+            item__source=source,
+            item__media_type=MediaTypes.SEASON.value,
+            item__season_number=season_number,
+            content_number__isnull=False,
+            datetime__lte=timezone.now(),
+        )
+        .exclude(datetime__year__lt=1900)
+        .values_list("content_number", flat=True)
+    )
     episode_numbers = sorted({int(number) for number in event_numbers})
     if not episode_numbers:
         max_progress = getattr(media, "max_progress", None)

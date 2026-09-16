@@ -194,7 +194,9 @@ class KoreaderImporterTests(TestCase):
 
     @patch("integrations.imports.koreader.KoreaderClient.probe_list_support")
     @patch("integrations.imports.koreader.KoreaderClient.get_progress")
-    def test_import_run_records_created_and_updated_counts(self, mock_progress, mock_probe):
+    def test_import_run_records_created_and_updated_counts(
+        self, mock_progress, mock_probe
+    ):
         mock_probe.return_value = False
         KoreaderDocumentLink.objects.create(
             user=self.user,
@@ -451,7 +453,9 @@ class KoreaderImporterTests(TestCase):
 
     @patch("integrations.imports.koreader.KoreaderClient.probe_list_support")
     @patch("integrations.imports.koreader.KoreaderClient.get_progress")
-    def test_import_run_failed_when_linked_fetch_errors(self, mock_progress, mock_probe):
+    def test_import_run_failed_when_linked_fetch_errors(
+        self, mock_progress, mock_probe
+    ):
         mock_probe.return_value = False
         mock_progress.side_effect = KoreaderClientError(
             "KOReader progress response was not JSON",
@@ -536,7 +540,6 @@ class KoreaderImporterTests(TestCase):
         self.assertEqual(warnings, "")
         media = Book.objects.get(user=self.user, item=self.item)
         self.assertEqual(media.progress, 1774)
-
 
     @patch("integrations.imports.koreader.KoreaderClient.probe_list_support")
     @patch("integrations.imports.koreader.KoreaderClient.get_progress")

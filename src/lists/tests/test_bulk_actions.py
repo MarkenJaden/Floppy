@@ -69,7 +69,9 @@ class BulkListAddViewTests(TestCase):
                 "list_item_id",
             ),
         )
-        self.assertEqual([entry.item_id for entry in list_items], [item.id for item in self.items])
+        self.assertEqual(
+            [entry.item_id for entry in list_items], [item.id for item in self.items]
+        )
         self.assertEqual(
             ListActivity.objects.filter(
                 custom_list=self.custom_list,

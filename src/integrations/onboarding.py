@@ -54,9 +54,15 @@ class OnboardingSource:
     setup_kind: str  # oauth | api_key | host_url | credentials | upload
     account_attr: str | None = None  # request.user.<attr> if persistently connected
     recommended_import_mode: str = "new"
-    tags: tuple[str, ...] = field(default_factory=tuple)  # matches import_data.html's activeMediaTag values
-    integration_tag: str | None = None  # matches integrations.html's activeIntegration values
-    integration_configured_attr: str | None = None  # request.user.<attr> truthy once webhook is live
+    tags: tuple[str, ...] = field(
+        default_factory=tuple
+    )  # matches import_data.html's activeMediaTag values
+    integration_tag: str | None = (
+        None  # matches integrations.html's activeIntegration values
+    )
+    integration_configured_attr: str | None = (
+        None  # request.user.<attr> truthy once webhook is live
+    )
 
     # --- Inline "Connect" step in the setup wizard (service_setup.html) ---
     # connect_url_name is the Django URL name the wizard's form posts to
@@ -115,7 +121,10 @@ ONBOARDING_SOURCES: tuple[OnboardingSource, ...] = (
         "radarr_instances",
         tags=("screen",),
         connect_url_name="radarr_connect",
-        connect_fields=(("base_url", "Base URL", "url"), ("api_key", "API Key", "password")),
+        connect_fields=(
+            ("base_url", "Base URL", "url"),
+            ("api_key", "API Key", "password"),
+        ),
     ),
     OnboardingSource(
         "sonarr",
@@ -124,7 +133,10 @@ ONBOARDING_SOURCES: tuple[OnboardingSource, ...] = (
         "sonarr_instances",
         tags=("screen",),
         connect_url_name="sonarr_connect",
-        connect_fields=(("base_url", "Base URL", "url"), ("api_key", "API Key", "password")),
+        connect_fields=(
+            ("base_url", "Base URL", "url"),
+            ("api_key", "API Key", "password"),
+        ),
     ),
     OnboardingSource(
         "stremio",
@@ -133,7 +145,10 @@ ONBOARDING_SOURCES: tuple[OnboardingSource, ...] = (
         "stremio_account",
         tags=("screen",),
         connect_url_name="stremio_connect",
-        connect_fields=(("email", "Email", "text"), ("password", "Password", "password")),
+        connect_fields=(
+            ("email", "Email", "text"),
+            ("password", "Password", "password"),
+        ),
     ),
     OnboardingSource(
         "audiobookshelf",
@@ -142,7 +157,10 @@ ONBOARDING_SOURCES: tuple[OnboardingSource, ...] = (
         "audiobookshelf_account",
         tags=("reading", "podcasts"),
         connect_url_name="audiobookshelf_connect",
-        connect_fields=(("base_url", "Server URL", "url"), ("api_token", "API Token", "password")),
+        connect_fields=(
+            ("base_url", "Server URL", "url"),
+            ("api_token", "API Token", "password"),
+        ),
     ),
     OnboardingSource(
         "storyteller",
@@ -159,7 +177,10 @@ ONBOARDING_SOURCES: tuple[OnboardingSource, ...] = (
         "pocketcasts_account",
         tags=("podcasts",),
         connect_url_name="pocketcasts_connect",
-        connect_fields=(("email", "Email", "text"), ("password", "Password", "password")),
+        connect_fields=(
+            ("email", "Email", "text"),
+            ("password", "Password", "password"),
+        ),
     ),
     OnboardingSource(
         "gpodder",
@@ -190,7 +211,10 @@ ONBOARDING_SOURCES: tuple[OnboardingSource, ...] = (
         "koito_account",
         tags=("music",),
         connect_url_name="koito_connect",
-        connect_fields=(("base_url", "Server URL", "url"), ("api_key", "API Key", "password")),
+        connect_fields=(
+            ("base_url", "Server URL", "url"),
+            ("api_key", "API Key", "password"),
+        ),
     ),
     OnboardingSource(
         "trakt",
@@ -305,7 +329,15 @@ ONBOARDING_SOURCES: tuple[OnboardingSource, ...] = (
         ALL_MEDIA_TYPES,
         "upload",
         recommended_import_mode="overwrite",
-        tags=("backup", "screen", "anime_manga", "reading", "games", "podcasts", "music"),
+        tags=(
+            "backup",
+            "screen",
+            "anime_manga",
+            "reading",
+            "games",
+            "podcasts",
+            "music",
+        ),
         connect_url_name="import_yamtrack",
         upload_field_name="yamtrack_csv",
     ),

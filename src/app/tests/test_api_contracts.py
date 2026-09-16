@@ -113,7 +113,10 @@ class OfflineAPIDocsTests(SimpleTestCase):
         first_request = soup.select_one("#first-request")
 
         self.assertEqual(
-            [heading.get_text(" ", strip=True) for heading in first_request.find_all("h3")],
+            [
+                heading.get_text(" ", strip=True)
+                for heading in first_request.find_all("h3")
+            ],
             ["Check the connection", "Authenticated request"],
         )
         public_command = soup.select_one("#connection-command").get_text()
@@ -196,9 +199,7 @@ class OfflineAPIDocsTests(SimpleTestCase):
         )
 
         content = response.content.decode()
-        self.assertIn(
-            f'"https://floppy.example.test{reverse("api_info")}/"', content
-        )
+        self.assertIn(f'"https://floppy.example.test{reverse("api_info")}/"', content)
         self.assertIn(
             f'"https://floppy.example.test{reverse("api_user_preferences")}/"',
             content,
@@ -228,18 +229,20 @@ class OfflineAPIDocsTests(SimpleTestCase):
         committed = soup.select_one("#committed-schema")
 
         self.assertIn("full schema", dynamic.get_text(" ", strip=True).lower())
-        self.assertIn("generated dynamically", dynamic.get_text(" ", strip=True).lower())
+        self.assertIn(
+            "generated dynamically", dynamic.get_text(" ", strip=True).lower()
+        )
         self.assertIn("diagnostics", dynamic.get_text(" ", strip=True).lower())
         self.assertEqual(dynamic.find("a").get("href"), reverse("schema"))
         self.assertIn("reviewed", committed.get_text(" ", strip=True).lower())
         self.assertIn("committed", committed.get_text(" ", strip=True).lower())
         self.assertIn("versioned subset", committed.get_text(" ", strip=True).lower())
-        self.assertIn("supported integrations", committed.get_text(" ", strip=True).lower())
+        self.assertIn(
+            "supported integrations", committed.get_text(" ", strip=True).lower()
+        )
         self.assertIn("mcp grounding", committed.get_text(" ", strip=True).lower())
         self.assertIn("41 operations", committed.get_text(" ", strip=True).lower())
-        self.assertEqual(
-            committed.find("a").get("href"), reverse("openapi-contract")
-        )
+        self.assertEqual(committed.find("a").get("href"), reverse("openapi-contract"))
 
     def test_docs_have_no_swagger_or_executable_request_ui(self):
         response, soup = self.get_docs()
@@ -330,12 +333,8 @@ class OpenAPIArtifactTests(SimpleTestCase):
     def test_contract_is_clearly_scoped_and_subpath_safe(self):
         schema = generate_static_schema_contract().schema
 
-        self.assertIn(
-            "verified consumer subset", schema["info"]["description"].lower()
-        )
-        self.assertEqual(
-            schema["x-floppy-scope"], "verified-mcp-and-grounding-subset"
-        )
+        self.assertIn("verified consumer subset", schema["info"]["description"].lower())
+        self.assertEqual(schema["x-floppy-scope"], "verified-mcp-and-grounding-subset")
         self.assertEqual(schema["servers"], [{"url": "../"}])
 
         with override_settings(BASE_URL="/floppy"):
@@ -670,12 +669,12 @@ class OpenAPIArtifactTests(SimpleTestCase):
 
     def test_list_latest_update_allows_empty_list_null(self):
         paths = generate_static_schema_contract().schema["paths"]
-        post_schema = paths["/api/v1/lists/"]["post"]["responses"]["201"][
-            "content"
-        ]["application/json"]["schema"]
-        get_schema = paths["/api/v1/lists/"]["get"]["responses"]["200"][
-            "content"
-        ]["application/json"]["schema"]["properties"]["results"]["items"]
+        post_schema = paths["/api/v1/lists/"]["post"]["responses"]["201"]["content"][
+            "application/json"
+        ]["schema"]
+        get_schema = paths["/api/v1/lists/"]["get"]["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]["properties"]["results"]["items"]
 
         self.assertTrue(post_schema["properties"]["latest_update"]["nullable"])
         self.assertTrue(get_schema["properties"]["latest_update"]["nullable"])
@@ -725,7 +724,9 @@ class OpenAPIArtifactTests(SimpleTestCase):
                 for status, response in operation["responses"].items():
                     if method != "delete" and status.startswith("2"):
                         with self.subTest(path=path, method=method, status=status):
-                            self.assertIn("schema", response["content"]["application/json"])
+                            self.assertIn(
+                                "schema", response["content"]["application/json"]
+                            )
 
 
 class JSONLDContextTests(SimpleTestCase):
@@ -809,9 +810,7 @@ class JSONLDContextTests(SimpleTestCase):
             for relationship, target in term.relationships:
                 name = property_name(relationship)
                 expected = (
-                    DOMAIN_TERMS[
-                        [t.key for t in DOMAIN_TERMS].index(target)
-                    ].schema_org
+                    DOMAIN_TERMS[[t.key for t in DOMAIN_TERMS].index(target)].schema_org
                     or f"{FLOPPY_NAMESPACE}{target}"
                 )
                 with self.subTest(relationship=relationship):
@@ -998,7 +997,9 @@ class SchemaFindingContractTests(SimpleTestCase):
 
 class MCPHTTPManifestTests(SimpleTestCase):
     def test_relative_paths_have_one_canonical_openapi_form(self):
-        self.assertEqual(canonical_openapi_path("media/{media_type}"), "/api/v1/media/{media_type}/")
+        self.assertEqual(
+            canonical_openapi_path("media/{media_type}"), "/api/v1/media/{media_type}/"
+        )
         self.assertEqual(canonical_openapi_path("/media/"), "/api/v1/media/")
 
     @staticmethod
@@ -1083,9 +1084,12 @@ async def computed_path():
 
     def test_source_extractor_requires_literal_lowercase_methods(self):
         for method in ("method", '"GET"'):
-            with self.subTest(method=method), self.assertRaisesRegex(
-                AssertionError,
-                "MCP method must be a lowercase string literal at line 4",
+            with (
+                self.subTest(method=method),
+                self.assertRaisesRegex(
+                    AssertionError,
+                    "MCP method must be a lowercase string literal at line 4",
+                ),
             ):
                 self._routes_from_source(
                     f"""

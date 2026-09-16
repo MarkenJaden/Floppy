@@ -52,19 +52,30 @@ class TV(Media):
     """Model for TV shows."""
 
     active_episode_order = models.ForeignKey(
-        "app.EpisodeOrder", null=True, blank=True, on_delete=models.PROTECT,
+        "app.EpisodeOrder",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
         related_name="trackers",
     )
 
     @property
     def tracking_media_id(self):
         """Return the identity of the selected episode catalogue."""
-        return self.active_episode_order.media_id if self.active_episode_order_id else self.item.media_id
+        return (
+            self.active_episode_order.media_id
+            if self.active_episode_order_id
+            else self.item.media_id
+        )
 
     @property
     def tracking_source(self):
         """Return the provider of the selected episode catalogue."""
-        return self.active_episode_order.provider if self.active_episode_order_id else self.item.source
+        return (
+            self.active_episode_order.provider
+            if self.active_episode_order_id
+            else self.item.source
+        )
 
     tracker = FieldTracker()
 
@@ -207,7 +218,9 @@ class TV(Media):
             no_seasons_msg = "This show has no seasons to rewatch."
             raise RewatchAlreadyCompleteError(no_seasons_msg)
 
-        seasons = [season for season in all_seasons if season.rewatch_started_at is None]
+        seasons = [
+            season for season in all_seasons if season.rewatch_started_at is None
+        ]
         if not seasons:
             already_open_msg = "Every season is already being rewatched."
             raise RewatchAlreadyCompleteError(already_open_msg)
@@ -1418,7 +1431,9 @@ class Season(Media):
     def get_tv(self):
         """Get related TV instance for a season and create it if it doesn't exist."""
         if self.item.episode_order_id:
-            return TV.objects.get(user=self.user, item_id=self.item.episode_order.show_id)
+            return TV.objects.get(
+                user=self.user, item_id=self.item.episode_order.show_id
+            )
         # Scope to the season's own bucket (anime vs. non-anime) so a season
         # is never silently attached to a TV row from the show's other
         # identity when both exist — see #623.
@@ -1605,9 +1620,8 @@ class Season(Media):
         tvdb_episode_images = {}
         normalized_episode_number = int(episode_number)
 
-        if (
-            isinstance(season_metadata, dict)
-            and isinstance(season_metadata.get("episodes"), list)
+        if isinstance(season_metadata, dict) and isinstance(
+            season_metadata.get("episodes"), list
         ):
             from app.services.episode_coordinates import (
                 InvalidEpisodeCoordinateError,

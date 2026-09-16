@@ -278,7 +278,9 @@ def import_koito_history(user_id, reset=False):
         return {"message": "Music tracking is disabled."}
 
     task_id = current_task.request.id if current_task and current_task.request else None
-    import_run = ImportRun.objects.create(user_id=user_id, source="koito", task_id=task_id)
+    import_run = ImportRun.objects.create(
+        user_id=user_id, source="koito", task_id=task_id
+    )
 
     if reset:
         account.reset_history_import()

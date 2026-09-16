@@ -151,7 +151,9 @@ class MatchCorrectionTests(TestCase):
             )
 
         self.assertFalse(Movie.objects.filter(user=self.user, item=source).exists())
-        self.assertTrue(Movie.objects.filter(user=self.other_user, item=source).exists())
+        self.assertTrue(
+            Movie.objects.filter(user=self.other_user, item=source).exists()
+        )
         self.assertEqual(
             destination_movie.plays.count(),
             2,

@@ -343,11 +343,15 @@ def _timeout_details(status: dict) -> str:
         )
     else:
         items.append(f"<li>Progress state: <code>{progress_state}</code></li>")
-    items.append(f"<li>Database: <code>{html.escape(str(status.get('database', 'unknown')))}</code></li>")
+    items.append(
+        f"<li>Database: <code>{html.escape(str(status.get('database', 'unknown')))}</code></li>"
+    )
     version = html.escape(str(status.get("version") or "unknown"))
     commit_sha = html.escape(str(status.get("commit_sha") or "unknown"))
     items.append(f"<li>Build: version={version} commit={commit_sha}</li>")
-    return f"<div class='card'><h2>What was happening</h2><ul>{''.join(items)}</ul></div>"
+    return (
+        f"<div class='card'><h2>What was happening</h2><ul>{''.join(items)}</ul></div>"
+    )
 
 
 def _timeout_diagnosis_card() -> str:
@@ -401,8 +405,7 @@ def render_page(
         body = (
             "<h1>Your data is safe. Nothing was deleted.</h1>"
             "<p>Floppy paused before it started. It cannot read the report that "
-            f"explains why. Look at {_CONTAINER_LOG_HINT}.</p>"
-            + _help_card()
+            f"explains why. Look at {_CONTAINER_LOG_HINT}.</p>" + _help_card()
         )
         return _document(body)
 
@@ -456,7 +459,9 @@ def render_page(
                 "<button>Keep everything and start Floppy</button></form></div>",
             )
         if can_repair:
-            required = _count((report.get("repair_plan") or {}).get("required_relationships"))
+            required = _count(
+                (report.get("repair_plan") or {}).get("required_relationships")
+            )
             if required:
                 explanation = (
                     "Floppy creates and verifies a backup first. It preserves "
@@ -503,9 +508,7 @@ def render_page(
         "<div class='card'><h2>Use a backup instead</h2><ol>"
         "<li>Stop Floppy.</li>"
         "<li>Replace <code>db.sqlite3</code> with your backup.</li>"
-        "<li>Start Floppy.</li></ol>"
-        + _backup_card()
-        + "</div>",
+        "<li>Start Floppy.</li></ol>" + _backup_card() + "</div>",
     )
     parts.append(_help_card())
     public = {
@@ -765,9 +768,13 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             supplied = (fields.get("token") or [""])[0].strip()
             expected = report.get("incident_token") or ""
-            if not supplied or not expected or not secrets.compare_digest(
-                supplied,
-                expected,
+            if (
+                not supplied
+                or not expected
+                or not secrets.compare_digest(
+                    supplied,
+                    expected,
+                )
             ):
                 self._send(
                     403,

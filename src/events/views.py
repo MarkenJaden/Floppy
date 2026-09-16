@@ -257,7 +257,9 @@ def download_calendar(request, token: str):
     selected_statuses = request.GET.getlist("status")
     if selected_statuses:
         valid_statuses = {
-            status for status in selected_statuses if status in {c.value for c in Status}
+            status
+            for status in selected_statuses
+            if status in {c.value for c in Status}
         }
 
         if valid_statuses:

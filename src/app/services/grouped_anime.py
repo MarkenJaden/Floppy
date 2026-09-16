@@ -181,9 +181,13 @@ class AnimeRouteResolver:
         if not metadata_resolution.prefers_grouped_anime(self.user):
             # A MAL-preferring user's anime belongs in flat rows. Importers
             # without a MAL identity treat this as "not mine to create".
-            return "flat" if self.verdict_is_anime(tv_metadata, tmdb_id=tmdb_id) else None
+            return (
+                "flat" if self.verdict_is_anime(tv_metadata, tmdb_id=tmdb_id) else None
+            )
 
-        return "grouped" if self.verdict_is_anime(tv_metadata, tmdb_id=tmdb_id) else None
+        return (
+            "grouped" if self.verdict_is_anime(tv_metadata, tmdb_id=tmdb_id) else None
+        )
 
     def verdict(self, tv_metadata, *, tmdb_id=None):
         """Return the classifier verdict, computed at most once per show."""
@@ -274,10 +278,16 @@ def classify_tv_metadata(
     candidate_group_keys = tuple(
         sorted({entry["mapping_group_key"] for _provider, entry in hits}),
     )
-    matched_entries = {
-        entry["mapping_key"]: entry for _provider, entry in hits
-    }
-    mal_ids = tuple(sorted({mal_id for entry in matched_entries.values() for mal_id in entry["mal_ids"]}))
+    matched_entries = {entry["mapping_key"]: entry for _provider, entry in hits}
+    mal_ids = tuple(
+        sorted(
+            {
+                mal_id
+                for entry in matched_entries.values()
+                for mal_id in entry["mal_ids"]
+            }
+        )
+    )
     result_kwargs = {
         "tmdb_id": ids.get("tmdb_id"),
         "tvdb_id": ids.get("tvdb_id"),
@@ -382,7 +392,12 @@ def _target_collision(items: list[Item]) -> str | None:
             "season_number": item.season_number,
             "episode_number": item.episode_number,
         }
-        if Item.objects.select_for_update().filter(**identity).exclude(pk=item.pk).first():
+        if (
+            Item.objects.select_for_update()
+            .filter(**identity)
+            .exclude(pk=item.pk)
+            .first()
+        ):
             return f"target_bucket_collision_for_item_{item.pk}"
     return None
 
@@ -486,7 +501,9 @@ def promote_grouped_anime(
     _upsert_grouped_link(tv_item, Sources.TMDB.value, match.tmdb_id, link_metadata)
     _upsert_grouped_link(tv_item, Sources.TVDB.value, match.tvdb_id, link_metadata)
     if len(match.mal_ids) == 1:
-        _upsert_grouped_link(tv_item, Sources.MAL.value, match.mal_ids[0], link_metadata)
+        _upsert_grouped_link(
+            tv_item, Sources.MAL.value, match.mal_ids[0], link_metadata
+        )
     logger.info(
         "grouped_anime_promotion result=applied item=%s group=%s revision=%s digest=%s",
         tv_item.pk,

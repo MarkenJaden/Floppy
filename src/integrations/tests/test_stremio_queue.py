@@ -14,10 +14,11 @@ class StremioQueueTests(SimpleTestCase):
 
     def test_duplicate_and_cap_are_atomic(self):
         """Duplicates do not consume slots and the ninth item is limited."""
-        members = [stremio_queue.member("series", f"tt123:{index}:1") for index in range(1, 10)]
+        members = [
+            stremio_queue.member("series", f"tt123:{index}:1") for index in range(1, 10)
+        ]
         statuses = [
-            stremio_queue.reserve_pending(7, queue_member)
-            for queue_member in members
+            stremio_queue.reserve_pending(7, queue_member) for queue_member in members
         ]
 
         self.assertEqual(statuses[:8], ["accepted"] * 8)

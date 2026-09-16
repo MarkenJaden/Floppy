@@ -40,7 +40,9 @@ class ImageCacheSettingsTests(TestCase):
             ).status_code,
             403,
         )
-        self.assertEqual(self.client.post(reverse("clear_image_cache")).status_code, 403)
+        self.assertEqual(
+            self.client.post(reverse("clear_image_cache")).status_code, 403
+        )
         self.assertFalse(ApplicationSettings.objects.get(pk=1).image_caching_enabled)
 
     def test_superuser_toggle_persists_and_clear_is_superuser_only(self):
@@ -63,4 +65,3 @@ class ImageCacheSettingsTests(TestCase):
             "return window.confirm(gettext('Clear all cached external images? "
             "They will be downloaded again if caching remains enabled.'));",
         )
-

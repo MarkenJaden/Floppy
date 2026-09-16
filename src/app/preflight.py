@@ -92,6 +92,7 @@ def _where(container: str, plain: str) -> str:
     """Return whichever instruction suits the environment Floppy runs in."""
     return container if in_container() else plain
 
+
 # SQLite needs room for the database, its write-ahead log and a checkpoint. This
 # is a floor for "the next write will not fail", not a capacity estimate.
 _BYTES_PER_UNIT = 1024.0
@@ -213,8 +214,7 @@ def check_paths() -> CheckResult:
             fix=_where(
                 f"{HOST} remove the directory, create an empty file in its "
                 "place, then recreate the container",
-                f"{HOST} remove the directory and create an empty file in its "
-                "place",
+                f"{HOST} remove the directory and create an empty file in its place",
             ),
             facts=facts,
         )
@@ -707,8 +707,7 @@ def check_redis() -> CheckResult:
                 summary=f"cannot reach {shown} ({', '.join(roles)})",
                 cause=clean(error),
                 fix=_where(
-                    f"{CONFIG} check that the Redis service is running and "
-                    "reachable",
+                    f"{CONFIG} check that the Redis service is running and reachable",
                     f"{CONFIG} check that Redis is running and that REDIS_URL "
                     "points at it",
                 ),
@@ -846,37 +845,45 @@ def check_runtime() -> CheckResult:
     warnings = []
 
     if detected["web_concurrency_over_profile"]:
-        warnings.append((
-            web_concurrency_warning(),
-            _where(
-                f"{CONFIG} clear WEB_CONCURRENCY in this container's template or "
-                "compose file and restart",
-                f"{CONFIG} unset WEB_CONCURRENCY and restart",
-            ),
-        ))
+        warnings.append(
+            (
+                web_concurrency_warning(),
+                _where(
+                    f"{CONFIG} clear WEB_CONCURRENCY in this container's template or "
+                    "compose file and restart",
+                    f"{CONFIG} unset WEB_CONCURRENCY and restart",
+                ),
+            )
+        )
 
     if detected["web_concurrency_source"] == "invalid":
-        warnings.append((
-            "WEB_CONCURRENCY is set to something that is not a number, so it "
-            "was ignored and the detected profile was used instead",
-            f"{CONFIG} set WEB_CONCURRENCY to a whole number, or clear it",
-        ))
+        warnings.append(
+            (
+                "WEB_CONCURRENCY is set to something that is not a number, so it "
+                "was ignored and the detected profile was used instead",
+                f"{CONFIG} set WEB_CONCURRENCY to a whole number, or clear it",
+            )
+        )
 
     if build_info_matches is False:
-        warnings.append((
-            f"the environment reports {settings.VERSION}, but this image was "
-            f"built as {build_info.get('VERSION', 'unknown')}, so something in "
-            "the deployment is shadowing the image's own identity",
-            f"{CONFIG} remove VERSION and COMMIT_SHA from this deployment",
-        ))
+        warnings.append(
+            (
+                f"the environment reports {settings.VERSION}, but this image was "
+                f"built as {build_info.get('VERSION', 'unknown')}, so something in "
+                "the deployment is shadowing the image's own identity",
+                f"{CONFIG} remove VERSION and COMMIT_SHA from this deployment",
+            )
+        )
 
     if boot_sizing and boot_sizing.get("tier") != detected["tier"]:
-        warnings.append((
-            f"this container booted at tier {boot_sizing.get('tier')} but now "
-            f"detects {detected['tier']}, so the running process count no longer "
-            "matches the host",
-            f"{FLOPPY} restart the container to resize it",
-        ))
+        warnings.append(
+            (
+                f"this container booted at tier {boot_sizing.get('tier')} but now "
+                f"detects {detected['tier']}, so the running process count no longer "
+                "matches the host",
+                f"{FLOPPY} restart the container to resize it",
+            )
+        )
 
     if warnings:
         return CheckResult(

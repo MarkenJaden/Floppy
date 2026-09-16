@@ -106,7 +106,9 @@ class GoogleBooksProviderTests(SimpleTestCase):
     @patch("app.providers.googlebooks.cache.set")
     @patch("app.providers.googlebooks.cache.get", return_value=None)
     @patch("app.providers.googlebooks.services.api_request")
-    def test_book_normalizes_volume_metadata(self, mock_request, mock_cache_get, mock_cache_set):
+    def test_book_normalizes_volume_metadata(
+        self, mock_request, mock_cache_get, mock_cache_set
+    ):
         mock_request.return_value = {
             "id": "volume-1",
             "volumeInfo": {

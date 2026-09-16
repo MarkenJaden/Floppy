@@ -654,9 +654,11 @@ class ListsTests(FloppyApiTestCase):
 
     def test_list_items_sort_filter_supports_multiword_fields(self):
         """List items accept a descending multiword Item field sort."""
-        movie, tv, anime = self.items_by_type[MediaTypes.MOVIE.value][0], self.items_by_type[
-            MediaTypes.TV.value
-        ][0], self.items_by_type[MediaTypes.ANIME.value][0]
+        movie, tv, anime = (
+            self.items_by_type[MediaTypes.MOVIE.value][0],
+            self.items_by_type[MediaTypes.TV.value][0],
+            self.items_by_type[MediaTypes.ANIME.value][0],
+        )
         now = timezone.now()
         for item, release_datetime in (
             (movie, now - timedelta(days=2)),

@@ -347,14 +347,18 @@ class ProviderBackfillTaskTests(TestCase):
         )
         self.assertNotIn(
             item.id,
-            set(tasks_providers._provider_items_queryset().values_list("id", flat=True)),
+            set(
+                tasks_providers._provider_items_queryset().values_list("id", flat=True)
+            ),
         )
 
         state.next_retry_at = timezone.now()
         state.save(update_fields=["next_retry_at"])
         self.assertIn(
             item.id,
-            set(tasks_providers._provider_items_queryset().values_list("id", flat=True)),
+            set(
+                tasks_providers._provider_items_queryset().values_list("id", flat=True)
+            ),
         )
 
     @patch("app.tasks_providers.services.get_media_metadata")

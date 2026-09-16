@@ -71,6 +71,7 @@ def resolve_episode_coordinate_for_request(
         )
     return coordinate, None
 
+
 MEDIA_MODIFIABLE_FIELDS = {
     MediaTypes.MOVIE.value: {"score", "status", "start_date", "end_date", "notes"},
     MediaTypes.TV.value: {"score", "status", "notes"},
@@ -290,8 +291,7 @@ def get_media_type_availability(user, media_type):
     message = None
     if not enabled:
         message = (
-            f"{media_type.capitalize()} tracking is disabled in your account "
-            "settings."
+            f"{media_type.capitalize()} tracking is disabled in your account settings."
         )
         alt = _ALTERNATE_LIBRARY_TYPE.get(media_type)
         if alt and getattr(user, f"{alt}_enabled", True):

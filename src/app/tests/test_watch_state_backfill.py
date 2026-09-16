@@ -130,8 +130,7 @@ class BackfillTests(TestCase):
         backfill_watch_state(user_id=self.user.id)
 
         states = {
-            state.item_id: state
-            for state in WatchState.objects.filter(user=self.user)
+            state.item_id: state for state in WatchState.objects.filter(user=self.user)
         }
         self.assertEqual(len(states), 3)
         for item in (self.movie_item, self.episode_item, self.book_item):

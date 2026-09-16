@@ -845,8 +845,7 @@ def _paginate_python_sorted_items(
                 [item.id for item in batch],
             )
         ranked_rows.extend(
-            (value_getter(item, collection_platforms), item.id)
-            for item in batch
+            (value_getter(item, collection_platforms), item.id) for item in batch
         )
 
     ranked_rows.sort(key=lambda row: (row[0], row[1]), reverse=reverse)
@@ -859,7 +858,9 @@ def _paginate_python_sorted_items(
 
     final_items = list(items_queryset.filter(id__in=selected_ids))
     final_by_id = {item.id: item for item in final_items}
-    final_items = [final_by_id[item_id] for item_id in selected_ids if item_id in final_by_id]
+    final_items = [
+        final_by_id[item_id] for item_id in selected_ids if item_id in final_by_id
+    ]
     _attach_media_with_aggregation(final_items, media_user)
     items_page.object_list = final_items
     collection_platforms = (

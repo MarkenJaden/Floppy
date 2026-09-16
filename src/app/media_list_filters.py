@@ -26,10 +26,7 @@ from app.services import metadata_resolution
 from app.templatetags.app_tags import media_url
 from users.models import MediaSortChoices
 
-MEDIA_LIST_MEDIA_TYPES = tuple(
-    media_type
-    for media_type in MediaTypes.values
-)
+MEDIA_LIST_MEDIA_TYPES = tuple(media_type for media_type in MediaTypes.values)
 MEDIA_LIST_NO_STATUS = "no_status"
 MEDIA_LIST_YEAR_LENGTH = 4
 MEDIA_LIST_STATUS_BY_CODE = {
@@ -44,9 +41,7 @@ MEDIA_LIST_STATUS_VALUES = {
     MEDIA_LIST_NO_STATUS,
     *(status.value.lower() for status in Status),
 }
-MEDIA_LIST_SORTS = {
-    choice.value for choice in MediaSortChoices
-} | {
+MEDIA_LIST_SORTS = {choice.value for choice in MediaSortChoices} | {
     "added",
     "updated",
     "itemid",
@@ -169,9 +164,7 @@ def _split_values(values) -> list[str]:
     result = []
     for raw_value in values:
         result.extend(
-            value.strip()
-            for value in str(raw_value or "").split(",")
-            if value.strip()
+            value.strip() for value in str(raw_value or "").split(",") if value.strip()
         )
     return result
 
@@ -329,17 +322,13 @@ def parse_media_list_filters(request) -> MediaListFilters:
         collection=collection,
         progress=progress,
         genre=str(request.query_params.get("genre", "") or "").strip(),
-        implied_genre=str(
-            request.query_params.get("implied_genre", "") or ""
-        ).strip(),
+        implied_genre=str(request.query_params.get("implied_genre", "") or "").strip(),
         year=year,
         completed_date_from=completed_date_from_raw,
         completed_date_to=completed_date_to_raw,
         release=release,
         source=str(request.query_params.get("source", "") or "").strip(),
-        media_status=str(
-            request.query_params.get("media_status", "") or ""
-        ).strip(),
+        media_status=str(request.query_params.get("media_status", "") or "").strip(),
         language=str(request.query_params.get("language", "") or "").strip(),
         country=str(request.query_params.get("country", "") or "").strip(),
         platforms=tuple(_split_values(request.query_params.getlist("platform"))),
@@ -349,8 +338,7 @@ def parse_media_list_filters(request) -> MediaListFilters:
         author=str(request.query_params.get("author", "") or "").strip(),
         provider=str(request.query_params.get("provider", "") or "").strip(),
         provider_region=str(
-            getattr(getattr(request, "user", None), "watch_provider_region", "")
-            or ""
+            getattr(getattr(request, "user", None), "watch_provider_region", "") or ""
         ).strip(),
         pinned_providers=tuple(
             getattr(getattr(request, "user", None), "pinned_watch_providers", None)
@@ -404,7 +392,9 @@ def _item_formats(item, collection_formats: dict[int, set[str]]) -> set[str]:
     item_format = getattr(item, "format", None)
     if item_format:
         formats.add(_normalize(item_format))
-    formats.update(_normalize(value) for value in collection_formats.get(item.id, set()))
+    formats.update(
+        _normalize(value) for value in collection_formats.get(item.id, set())
+    )
     return formats
 
 
@@ -443,10 +433,14 @@ def _collection_context(user, entries):
     ).values_list("item_id", "resolution"):
         if value:
             collection_platforms.setdefault(item_id, set()).add(value)
-    for item_id, value in CollectionEntry.objects.filter(
-        user=user,
-        item_id__in=item_ids,
-    ).exclude(media_type="").values_list("item_id", "media_type"):
+    for item_id, value in (
+        CollectionEntry.objects.filter(
+            user=user,
+            item_id__in=item_ids,
+        )
+        .exclude(media_type="")
+        .values_list("item_id", "media_type")
+    ):
         if value:
             collection_formats.setdefault(item_id, set()).add(value)
     return collected_ids, collection_platforms, collection_formats
@@ -467,7 +461,9 @@ def _matches_metadata(entry, filters, collection_platforms, collection_formats):
     item = entry.item
     if filters.search:
         needle = _normalize(filters.search)
-        if needle not in _normalize(item.title) and needle not in _normalize(item.media_id):
+        if needle not in _normalize(item.title) and needle not in _normalize(
+            item.media_id
+        ):
             return False
     if filters.genre and not any(
         _normalize(filters.genre) == _normalize(value)
@@ -498,17 +494,19 @@ def _matches_metadata(entry, filters, collection_platforms, collection_formats):
         end_date = getattr(entry.media, "end_date", None)
         if end_date is None:
             return False
-        completed_date = timezone.localtime(end_date).date() if timezone.is_aware(
-            end_date,
-        ) else end_date.date()
-        if (
+        completed_date = (
+            timezone.localtime(end_date).date()
+            if timezone.is_aware(
+                end_date,
+            )
+            else end_date.date()
+        )
+        if filters.completed_date_from and completed_date < datetime.date.fromisoformat(
             filters.completed_date_from
-            and completed_date < datetime.date.fromisoformat(filters.completed_date_from)
         ):
             return False
-        if (
+        if filters.completed_date_to and completed_date > datetime.date.fromisoformat(
             filters.completed_date_to
-            and completed_date > datetime.date.fromisoformat(filters.completed_date_to)
         ):
             return False
     if filters.release != "all":
@@ -579,11 +577,15 @@ def _matches_metadata(entry, filters, collection_platforms, collection_formats):
             else []
         )
         if filters.pinned_providers:
-            pinned_matches = tmdb.pinned_provider_matches(item, filters.pinned_providers)
+            pinned_matches = tmdb.pinned_provider_matches(
+                item, filters.pinned_providers
+            )
             providers |= {
                 p["provider_name"] for p in pinned_matches if p.get("provider_name")
             }
-        if not any(_normalize(filters.provider) == _normalize(value) for value in providers):
+        if not any(
+            _normalize(filters.provider) == _normalize(value) for value in providers
+        ):
             return False
     return True
 
@@ -643,9 +645,7 @@ def _apply_progress_filter(entries, progress, media_type):
         entry
         for entry in entries
         if entry.media is not None
-        and (
-            helpers.is_caught_up_media(entry.media) == (progress == "caught_up")
-        )
+        and (helpers.is_caught_up_media(entry.media) == (progress == "caught_up"))
     ]
 
 
@@ -913,12 +913,17 @@ def _sort_entries(entries, filters, media_type):
     with_values = []
     without_values = []
     for entry in entries:
-        value = _sort_value(entry, filters.sort, next_episode_by_item_id.get(entry.item.id))
+        value = _sort_value(
+            entry, filters.sort, next_episode_by_item_id.get(entry.item.id)
+        )
         if value is None:
             without_values.append(entry)
         else:
             with_values.append((value, entry))
-    with_values.sort(key=lambda pair: (pair[0], getattr(pair[1].item, "title", "").lower()), reverse=reverse)
+    with_values.sort(
+        key=lambda pair: (pair[0], getattr(pair[1].item, "title", "").lower()),
+        reverse=reverse,
+    )
     without_values.sort(
         key=lambda entry: getattr(entry.item, "title", "").lower(),
         reverse=reverse,
@@ -926,7 +931,9 @@ def _sort_entries(entries, filters, media_type):
     return [entry for _, entry in with_values] + without_values
 
 
-def _statusless_entries(user, media_type, filters, tracked_item_ids, tag_ids=(None, None)):
+def _statusless_entries(
+    user, media_type, filters, tracked_item_ids, tag_ids=(None, None)
+):
     if not filters.include_no_status:
         return []
     if media_type == MediaTypes.EPISODE.value:
@@ -989,12 +996,20 @@ def _statusless_entries(user, media_type, filters, tracked_item_ids, tag_ids=(No
 
 
 def _get_media_entries_for_type(
-    user, media_type, filters, tag_ids=(None, None), *, limit=None, offset=None,
+    user,
+    media_type,
+    filters,
+    tag_ids=(None, None),
+    *,
+    limit=None,
+    offset=None,
 ):
     """Return (entries, total). `total` is None unless the SQL fast path ran."""
     tag_included_ids, tag_excluded_ids = tag_ids
     if media_type == MediaTypes.EPISODE.value:
-        queryset = Episode.objects.filter(related_season__user=user).select_related("item")
+        queryset = Episode.objects.filter(related_season__user=user).select_related(
+            "item"
+        )
         if filters.statuses:
             queryset = queryset.filter(related_season__status__in=filters.statuses)
         if filters.search:
@@ -1003,7 +1018,9 @@ def _get_media_entries_for_type(
             queryset = queryset.filter(item_id__in=tag_included_ids)
         if tag_excluded_ids is not None:
             queryset = queryset.exclude(item_id__in=tag_excluded_ids)
-        return [MediaListEntry(item=episode.item, media=episode) for episode in queryset], None
+        return [
+            MediaListEntry(item=episode.item, media=episode) for episode in queryset
+        ], None
 
     list_sql_filters = {
         "genre": filters.genre,
@@ -1058,7 +1075,8 @@ def _get_media_entries_for_type(
             entries = [
                 entry
                 for entry in entries
-                if getattr(entry.item, "library_media_type", None) != MediaTypes.ANIME.value
+                if getattr(entry.item, "library_media_type", None)
+                != MediaTypes.ANIME.value
             ]
     if media_type == MediaTypes.ANIME.value:
         include_in_anime, _ = metadata_resolution.anime_library_visibility(user)
@@ -1075,7 +1093,8 @@ def _get_media_entries_for_type(
             entries.extend(
                 MediaListEntry(item=media.item, media=media)
                 for media in grouped
-                if getattr(media.item, "library_media_type", None) == MediaTypes.ANIME.value
+                if getattr(media.item, "library_media_type", None)
+                == MediaTypes.ANIME.value
             )
     tracked_item_ids = {entry.item.id for entry in entries}
     entries.extend(
@@ -1084,31 +1103,47 @@ def _get_media_entries_for_type(
     return entries, None
 
 
-def _get_media_entries(user, media_type, filters, tag_ids=(None, None), *, limit=None, offset=None):
+def _get_media_entries(
+    user, media_type, filters, tag_ids=(None, None), *, limit=None, offset=None
+):
     """Return (entries, total). `total` is None unless the SQL fast path ran."""
     if media_type is not None:
         return _get_media_entries_for_type(
-            user, media_type, filters, tag_ids, limit=limit, offset=offset,
+            user,
+            media_type,
+            filters,
+            tag_ids,
+            limit=limit,
+            offset=offset,
         )
 
     entries = []
     for current_type in MEDIA_LIST_MEDIA_TYPES:
-        if current_type in {
-            MediaTypes.SEASON.value,
-            MediaTypes.EPISODE.value,
-        } or current_type in filters.exclude:
+        if (
+            current_type
+            in {
+                MediaTypes.SEASON.value,
+                MediaTypes.EPISODE.value,
+            }
+            or current_type in filters.exclude
+        ):
             continue
         # The root endpoint merges and sorts across every type in Python
         # afterward, so no single type's query can be SQL-paginated here —
         # limit/offset are intentionally not passed through.
         type_entries, _total = _get_media_entries_for_type(
-            user, current_type, filters, tag_ids,
+            user,
+            current_type,
+            filters,
+            tag_ids,
         )
         entries.extend(type_entries)
     return entries, None
 
 
-def get_media_list_entries(user, media_type, filters: MediaListFilters, *, limit=None, offset=None):
+def get_media_list_entries(
+    user, media_type, filters: MediaListFilters, *, limit=None, offset=None
+):
     """Return (entries, total) with web-compatible filtering and sorting.
 
     `total` is None unless the request qualified for the SQL fast path
@@ -1127,7 +1162,12 @@ def get_media_list_entries(user, media_type, filters: MediaListFilters, *, limit
     # since _get_media_entries's multi-type loop reuses the same ids.
     tag_ids = _tag_item_ids(user, filters.tags, filters.tag_mode)
     entries, total = _get_media_entries(
-        user, media_type, filters, tag_ids, limit=limit, offset=offset,
+        user,
+        media_type,
+        filters,
+        tag_ids,
+        limit=limit,
+        offset=offset,
     )
     if total is not None:
         return entries, total

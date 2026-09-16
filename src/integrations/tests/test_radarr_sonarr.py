@@ -126,7 +126,9 @@ class ArrMultiInstanceTests(TestCase):
     def setUp(self):
         """Create an authenticated user for multi-instance ARR requests."""
         self.user = get_user_model().objects.create_user(username="arr-multi-user")
-        self.other_user = get_user_model().objects.create_user(username="arr-other-user")
+        self.other_user = get_user_model().objects.create_user(
+            username="arr-other-user"
+        )
         self.client.force_login(self.user)
 
     @patch("integrations.views.tasks.import_radarr.delay")
@@ -137,11 +139,19 @@ class ArrMultiInstanceTests(TestCase):
         """A user can connect more than one Radarr instance."""
         self.client.post(
             reverse("radarr_connect"),
-            {"base_url": "https://radarr-4k.local:7878", "api_key": "key-1", "name": "4K"},
+            {
+                "base_url": "https://radarr-4k.local:7878",
+                "api_key": "key-1",
+                "name": "4K",
+            },
         )
         self.client.post(
             reverse("radarr_connect"),
-            {"base_url": "https://radarr-anime.local:7878", "api_key": "key-2", "name": "Anime"},
+            {
+                "base_url": "https://radarr-anime.local:7878",
+                "api_key": "key-2",
+                "name": "Anime",
+            },
         )
 
         self.assertEqual(RadarrInstance.objects.filter(user=self.user).count(), 2)
@@ -162,9 +172,7 @@ class ArrMultiInstanceTests(TestCase):
 
         self.assertEqual(RadarrInstance.objects.filter(user=self.user).count(), 1)
         messages = [str(m) for m in response.context["messages"]]
-        self.assertTrue(
-            any("already have a Radarr instance" in m for m in messages)
-        )
+        self.assertTrue(any("already have a Radarr instance" in m for m in messages))
 
     @patch("integrations.views.tasks.import_radarr.delay")
     @patch("integrations.views.RadarrClient.healthcheck")
@@ -194,9 +202,7 @@ class ArrMultiInstanceTests(TestCase):
             user=self.user, item=item, source="radarr", source_instance_id=second.id
         )
 
-        self.client.post(
-            reverse("radarr_disconnect"), {"instance_id": first.id}
-        )
+        self.client.post(reverse("radarr_disconnect"), {"instance_id": first.id})
 
         self.assertFalse(RadarrInstance.objects.filter(pk=first.id).exists())
         self.assertTrue(RadarrInstance.objects.filter(pk=second.id).exists())
@@ -933,13 +939,19 @@ class CollectionSourceSyncTests(TestCase):
         from integrations.source_sync import remove_collection_source_state
 
         remove_collection_source_state(
-            user=self.user, item=self.item, source="radarr", source_instance_id=second.id
+            user=self.user,
+            item=self.item,
+            source="radarr",
+            source_instance_id=second.id,
         )
         entry.refresh_from_db()
         self.assertEqual(entry.resolution, "720p")
         self.assertTrue(
             CollectionSourceState.objects.filter(
-                user=self.user, item=self.item, source="radarr", source_instance_id=first.id
+                user=self.user,
+                item=self.item,
+                source="radarr",
+                source_instance_id=first.id,
             ).exists()
         )
 

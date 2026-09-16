@@ -86,6 +86,8 @@ class SqliteRepairPlannerTests(SimpleTestCase):
                 ).fetchone(),
                 (10, 20),
             )
-            self.assertEqual(len(conn.execute("PRAGMA foreign_key_check").fetchall()), 1)
+            self.assertEqual(
+                len(conn.execute("PRAGMA foreign_key_check").fetchall()), 1
+            )
         finally:
             conn.close()

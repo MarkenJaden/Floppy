@@ -14,7 +14,9 @@ class EpisodeOrderProviderTests(SimpleTestCase):
     def setUp(self):
         cache.clear()
         self.credentials = patch.object(
-            episode_orders.credentials, "cache_suffix", return_value="credential-a",
+            episode_orders.credentials,
+            "cache_suffix",
+            return_value="credential-a",
         )
         self.credentials.start()
         self.addCleanup(self.credentials.stop)
@@ -24,11 +26,24 @@ class EpisodeOrderProviderTests(SimpleTestCase):
     def test_tmdb_group_uses_group_coordinates_and_stable_episode_id(self, request):
         request.side_effect = [
             {"results": [{"id": "dvd-id", "name": "DVD release"}]},
-            {"groups": [{"order": 1, "episodes": [{
-                "id": 777, "order": 0, "season_number": 5,
-                "episode_number": 17, "name": "Correct episode",
-                "still_path": "/correct.jpg", "runtime": 45,
-            }]}]},
+            {
+                "groups": [
+                    {
+                        "order": 1,
+                        "episodes": [
+                            {
+                                "id": 777,
+                                "order": 0,
+                                "season_number": 5,
+                                "episode_number": 17,
+                                "name": "Correct episode",
+                                "still_path": "/correct.jpg",
+                                "runtime": 45,
+                            }
+                        ],
+                    }
+                ]
+            },
         ]
         result = episode_orders.fetch_order("tmdb", "123", "group:dvd-id")
         episode = result["episodes"][0]
@@ -39,19 +54,27 @@ class EpisodeOrderProviderTests(SimpleTestCase):
 
     @patch.object(episode_orders, "_request")
     def test_tvdb_discovers_types_and_keeps_default_distinct(self, request):
-        request.return_value = {"data": {"seasonTypes": [
-            {"type": "official", "name": "Aired Order"},
-            {"type": "production", "name": "Production"},
-        ]}}
+        request.return_value = {
+            "data": {
+                "seasonTypes": [
+                    {"type": "official", "name": "Aired Order"},
+                    {"type": "production", "name": "Production"},
+                ]
+            }
+        }
         result = episode_orders.list_orders("tvdb", "123")
-        self.assertEqual([row["key"] for row in result], ["default", "official", "production"])
+        self.assertEqual(
+            [row["key"] for row in result], ["default", "official", "production"]
+        )
 
     @patch.object(episode_orders, "_request")
     def test_tvdb_paginates_and_preserves_order_coordinates(self, request):
         request.side_effect = [
             {"data": {"seasonTypes": [{"type": "dvd", "name": "DVD"}]}},
-            {"data": {"episodes": [{"id": 1, "seasonNumber": 2, "number": 3}]},
-             "links": {"next": "ignored-provider-url"}},
+            {
+                "data": {"episodes": [{"id": 1, "seasonNumber": 2, "number": 3}]},
+                "links": {"next": "ignored-provider-url"},
+            },
             {"data": {"episodes": [{"id": 2, "seasonNumber": 2, "number": 4}]}},
         ]
         result = episode_orders.fetch_order("tvdb", "123", "dvd", language="fr")
@@ -65,15 +88,21 @@ class EpisodeOrderProviderTests(SimpleTestCase):
         # An explicitly empty type list is valid; default still exists.
         request.side_effect = [
             {"data": {"seasonTypes": [], "seasons": []}},
-            {"data": {"episodes": [{"id": 1, "seasonNumber": 1, "number": 1}]},
-             "links": {"next": "next"}},
+            {
+                "data": {"episodes": [{"id": 1, "seasonNumber": 1, "number": 1}]},
+                "links": {"next": "next"},
+            },
         ]
         with self.assertRaisesRegex(ValueError, "pagination limit"):
             episode_orders.fetch_order("tvdb", "123", "default")
         request.side_effect = None
-        request.return_value = {"data": {"episodes": [
-            {"id": 1, "seasonNumber": 1, "number": 1},
-        ]}}
+        request.return_value = {
+            "data": {
+                "episodes": [
+                    {"id": 1, "seasonNumber": 1, "number": 1},
+                ]
+            }
+        }
         result = episode_orders.fetch_order("tvdb", "123", "default")
         self.assertEqual(len(result["episodes"]), 1)
         self.assertEqual(request.call_count, 3)

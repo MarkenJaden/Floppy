@@ -114,7 +114,9 @@ class StudioDetailViewTests(TestCase):
                 },
             ),
         )
-        self.assertEqual(response.context["credited_media_type"], MediaTypes.MOVIE.value)
+        self.assertEqual(
+            response.context["credited_media_type"], MediaTypes.MOVIE.value
+        )
 
     @patch("app.providers.igdb.company_profile")
     def test_studio_detail_renders_provider_catalog(self, mock_company_profile):

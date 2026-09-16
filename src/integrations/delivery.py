@@ -16,16 +16,19 @@ from .models import IntegrationEventReceipt, IntegrationToken
 logger = logging.getLogger(__name__)
 
 
-
 def calculate_payload_digest(payload: Any) -> str:
     """Calculate deterministic SHA-256 hex digest of sorted canonical JSON."""
     if isinstance(payload, (dict, list)):
-        json_str = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        json_str = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), default=str
+        )
     elif isinstance(payload, str):
         try:
             parsed = json.loads(payload)
             if isinstance(parsed, (dict, list)):
-                json_str = json.dumps(parsed, sort_keys=True, separators=(",", ":"), default=str)
+                json_str = json.dumps(
+                    parsed, sort_keys=True, separators=(",", ":"), default=str
+                )
             else:
                 json_str = payload
         except (ValueError, TypeError):
@@ -34,14 +37,18 @@ def calculate_payload_digest(payload: Any) -> str:
         try:
             parsed = json.loads(payload.decode("utf-8"))
             if isinstance(parsed, (dict, list)):
-                json_str = json.dumps(parsed, sort_keys=True, separators=(",", ":"), default=str)
+                json_str = json.dumps(
+                    parsed, sort_keys=True, separators=(",", ":"), default=str
+                )
             else:
                 json_str = payload.decode("utf-8", errors="replace")
         except Exception:
             json_str = payload.decode("utf-8", errors="replace")
     else:
         try:
-            json_str = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+            json_str = json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), default=str
+            )
         except Exception:
             json_str = str(payload)
 
@@ -50,7 +57,11 @@ def calculate_payload_digest(payload: Any) -> str:
 
 def _replay_response(receipt) -> Response:
     """Return the stored response for a receipt being replayed."""
-    body = None if receipt.response_status_code == HTTP.NO_CONTENT else receipt.response_body
+    body = (
+        None
+        if receipt.response_status_code == HTTP.NO_CONTENT
+        else receipt.response_body
+    )
     return Response(body, status=receipt.response_status_code)
 
 
@@ -115,7 +126,9 @@ def get_or_record_receipt(
     if response.status_code < HTTP.INTERNAL_SERVER_ERROR:
         if response.data is not None:
             try:
-                response_data = json.loads(json.dumps(response.data, cls=DjangoJSONEncoder))
+                response_data = json.loads(
+                    json.dumps(response.data, cls=DjangoJSONEncoder)
+                )
             except Exception:
                 response_data = response.data
         else:

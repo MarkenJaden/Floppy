@@ -54,7 +54,9 @@ def search(query, page):
                     "GET",
                     f"{base_url}/search",
                     params={"query": query, "type": "boardgame"},
-                    headers={"Authorization": f"Bearer {credentials.get("bgg", "token")}"},
+                    headers={
+                        "Authorization": f"Bearer {credentials.get('bgg', 'token')}"
+                    },
                     response_format="xml",
                 )
             except requests.exceptions.HTTPError as error:
@@ -125,7 +127,7 @@ def _fetch_thumbnails(game_ids):
                 Sources.BGG.value,
                 "GET",
                 f"{base_url}/thing?id={','.join(batch)}",
-                headers={"Authorization": f"Bearer {credentials.get("bgg", "token")}"},
+                headers={"Authorization": f"Bearer {credentials.get('bgg', 'token')}"},
                 response_format="xml",
             )
         except (requests.exceptions.HTTPError, services.ProviderAPIError):
@@ -157,7 +159,7 @@ def boardgame(media_id):
                 "GET",
                 f"{base_url}/thing",
                 params={"id": media_id, "stats": "1"},
-                headers={"Authorization": f"Bearer {credentials.get("bgg", "token")}"},
+                headers={"Authorization": f"Bearer {credentials.get('bgg', 'token')}"},
                 response_format="xml",
             )
         except requests.exceptions.HTTPError as error:

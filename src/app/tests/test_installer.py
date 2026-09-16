@@ -119,8 +119,7 @@ class PromptCaptureTests(SimpleTestCase):
 
     def test_ask_choice_captures_a_typed_number(self):
         output = run_over_pty(
-            'ask_choice PICK "Pick one" a "a|Alpha|" "b|Beta|"\n'
-            'echo "GOT:[$PICK]"\n',
+            'ask_choice PICK "Pick one" a "a|Alpha|" "b|Beta|"\necho "GOT:[$PICK]"\n',
             sends=[b"2\n"],
         )
         self.assertIn("GOT:[b]", output)
@@ -569,7 +568,9 @@ class GeneratedSupervisorTests(SimpleTestCase):
         )
         # Unquoted, because Supervisor takes these options literally: quoting
         # them would make the quotes part of the path.
-        self.assertEqual(parser["supervisord"]["logfile"], f"{root}/logs/supervisord.log")
+        self.assertEqual(
+            parser["supervisord"]["logfile"], f"{root}/logs/supervisord.log"
+        )
 
     def test_optional_workers_follow_the_resource_profile(self):
         with tempfile.TemporaryDirectory() as temp_dir:

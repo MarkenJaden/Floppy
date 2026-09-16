@@ -75,7 +75,9 @@ class PlaybackReportingParserTests(TestCase):
         self.assertEqual(result.rows, [])
         self.assertEqual(result.rejected_count, 3)
         self.assertTrue(any("PlayDuration" in warning for warning in result.warnings))
-        self.assertTrue(any("9 tab-separated" in warning for warning in result.warnings))
+        self.assertTrue(
+            any("9 tab-separated" in warning for warning in result.warnings)
+        )
 
 
 class PlaybackReportingImporterTests(TestCase):

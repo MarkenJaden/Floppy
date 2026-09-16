@@ -130,7 +130,9 @@ class ImportDataViewTests(TestCase):
         from app.models import Item, MediaTypes, Movie, Sources, Status
         from integrations.models import ImportRun
 
-        for index, source in enumerate(["trakt", "simkl", "plex", "lastfm", "yamtrack"]):
+        for index, source in enumerate(
+            ["trakt", "simkl", "plex", "lastfm", "yamtrack"]
+        ):
             run = ImportRun.objects.create(user=self.user, source=source)
             item = Item.objects.create(
                 media_id=f"n1-guard-movie-{index}",
@@ -165,7 +167,9 @@ class ImportDataViewTests(TestCase):
         with CaptureQueriesContext(connection) as more_sources:
             self.client.get(reverse("import_data_activity"), HTTP_HX_REQUEST="true")
 
-        self.assertEqual(len(few_sources.captured_queries), len(more_sources.captured_queries))
+        self.assertEqual(
+            len(few_sources.captured_queries), len(more_sources.captured_queries)
+        )
 
     def test_import_data_shows_lastfm_history_status_and_action(self):
         """Last.fm card should render history backfill status and rerun controls."""

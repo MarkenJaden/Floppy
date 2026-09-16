@@ -79,7 +79,9 @@ class FetchShowMetadataArtworkTests(SimpleTestCase):
         mock_get.return_value = Mock(content=ITUNES_IMAGE_FEED)
         mock_get.return_value.raise_for_status = Mock()
 
-        metadata = podcast_rss.fetch_show_metadata_from_rss("https://example.com/feed.xml")
+        metadata = podcast_rss.fetch_show_metadata_from_rss(
+            "https://example.com/feed.xml"
+        )
 
         self.assertEqual(metadata["image"], "https://example.com/itunes-art.jpg")
 
@@ -88,7 +90,9 @@ class FetchShowMetadataArtworkTests(SimpleTestCase):
         mock_get.return_value = Mock(content=CHANNEL_IMAGE_FEED)
         mock_get.return_value.raise_for_status = Mock()
 
-        metadata = podcast_rss.fetch_show_metadata_from_rss("https://example.com/feed.xml")
+        metadata = podcast_rss.fetch_show_metadata_from_rss(
+            "https://example.com/feed.xml"
+        )
 
         self.assertEqual(metadata["image"], "https://example.com/rss-art.jpg")
 
@@ -97,7 +101,9 @@ class FetchShowMetadataArtworkTests(SimpleTestCase):
         mock_get.return_value = Mock(content=NO_IMAGE_FEED)
         mock_get.return_value.raise_for_status = Mock()
 
-        metadata = podcast_rss.fetch_show_metadata_from_rss("https://example.com/feed.xml")
+        metadata = podcast_rss.fetch_show_metadata_from_rss(
+            "https://example.com/feed.xml"
+        )
 
         self.assertNotIn("image", metadata)
 
@@ -110,7 +116,9 @@ class FetchShowMetadataWebsiteTests(SimpleTestCase):
         mock_get.return_value = Mock(content=RSS_LINK_FEED)
         mock_get.return_value.raise_for_status = Mock()
 
-        metadata = podcast_rss.fetch_show_metadata_from_rss("https://example.com/feed.xml")
+        metadata = podcast_rss.fetch_show_metadata_from_rss(
+            "https://example.com/feed.xml"
+        )
 
         self.assertEqual(metadata["website_url"], "https://example.com/show")
 
@@ -119,7 +127,9 @@ class FetchShowMetadataWebsiteTests(SimpleTestCase):
         mock_get.return_value = Mock(content=ATOM_LINK_FEED)
         mock_get.return_value.raise_for_status = Mock()
 
-        metadata = podcast_rss.fetch_show_metadata_from_rss("https://example.com/feed.xml")
+        metadata = podcast_rss.fetch_show_metadata_from_rss(
+            "https://example.com/feed.xml"
+        )
 
         self.assertEqual(metadata["website_url"], "https://example.com/show")
 
@@ -128,7 +138,9 @@ class FetchShowMetadataWebsiteTests(SimpleTestCase):
         mock_get.return_value = Mock(content=NO_LINK_FEED)
         mock_get.return_value.raise_for_status = Mock()
 
-        metadata = podcast_rss.fetch_show_metadata_from_rss("https://example.com/feed.xml")
+        metadata = podcast_rss.fetch_show_metadata_from_rss(
+            "https://example.com/feed.xml"
+        )
 
         self.assertNotIn("website_url", metadata)
 

@@ -43,9 +43,7 @@ STATIC_SPECTACULAR_SETTINGS = {
 _OBJECT_SCHEMA = {"type": "object", "additionalProperties": True}
 _ARRAY_SCHEMA = {"type": "array", "items": _OBJECT_SCHEMA}
 _TRACKED_MEDIA_REF = {"$ref": "#/components/schemas/TrackedMediaResponse"}
-_TRACKED_MEDIA_ENVELOPE_REF = {
-    "$ref": "#/components/schemas/TrackedMediaEnvelope"
-}
+_TRACKED_MEDIA_ENVELOPE_REF = {"$ref": "#/components/schemas/TrackedMediaEnvelope"}
 _TAG_SCHEMA = {
     "type": "object",
     "required": ["id", "name", "created_at"],
@@ -274,9 +272,7 @@ _STATIC_OPERATION_OVERRIDES = {
             404: DetailErrorSerializer,
         }
     },
-    ("/api/v1/music/songs/plays/", "POST"): {
-        "responses": {201: _TRACKED_MEDIA_REF}
-    },
+    ("/api/v1/music/songs/plays/", "POST"): {"responses": {201: _TRACKED_MEDIA_REF}},
     ("/api/v1/podcasts/episodes/plays/", "POST"): {
         "responses": {200: _TRACKED_MEDIA_REF, 201: _TRACKED_MEDIA_REF}
     },
@@ -347,6 +343,7 @@ def label_verified_schema(result, **_kwargs):
     """Make the committed artifact's deliberately limited scope machine-readable."""
     result["x-floppy-scope"] = "verified-mcp-and-grounding-subset"
     return result
+
 
 type SchemaFinding = tuple[str, str]
 
@@ -651,8 +648,7 @@ _EXPECTED_OPERATION_ID_COLLISIONS = (
         (
             ("/api/v1/media/{media_type}/{source}/{media_id}/lists/", "get"),
             (
-                "/api/v1/media/{media_type}/{source}/{media_id}/{season_number}/"
-                "lists/",
+                "/api/v1/media/{media_type}/{source}/{media_id}/{season_number}/lists/",
                 "get",
             ),
             (
@@ -841,8 +837,12 @@ def assert_schema_findings(
         ("errors", EXPECTED_SCHEMA_ERRORS, frozenset(errors)),
         ("warnings", EXPECTED_SCHEMA_WARNINGS, frozenset(warnings)),
     ):
-        differences.extend(f"{label} + {finding!r}" for finding in sorted(actual - expected))
-        differences.extend(f"{label} - {finding!r}" for finding in sorted(expected - actual))
+        differences.extend(
+            f"{label} + {finding!r}" for finding in sorted(actual - expected)
+        )
+        differences.extend(
+            f"{label} - {finding!r}" for finding in sorted(expected - actual)
+        )
 
     if differences:
         details = "\n".join(differences)

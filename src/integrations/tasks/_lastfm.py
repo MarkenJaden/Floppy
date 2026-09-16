@@ -284,7 +284,9 @@ def import_lastfm_history(user_id, reset=False, import_run_id=None):
     if import_run_id and not reset:
         import_run = ImportRun.objects.filter(id=import_run_id).first()
     if import_run is None:
-        import_run = ImportRun.objects.create(user_id=user_id, source="lastfm", task_id=task_id)
+        import_run = ImportRun.objects.create(
+            user_id=user_id, source="lastfm", task_id=task_id
+        )
     elif task_id and import_run.task_id != task_id:
         ImportRun.objects.filter(id=import_run.id).update(task_id=task_id)
 

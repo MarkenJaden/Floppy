@@ -400,10 +400,7 @@ def record_state_change(
     state = WatchState.objects.select_for_update().get(pk=state.pk)
 
     if expected_revision is not None and expected_revision != state.revision:
-        msg = (
-            f"Expected revision {expected_revision} but state is at "
-            f"{state.revision}"
-        )
+        msg = f"Expected revision {expected_revision} but state is at {state.revision}"
         raise RevisionConflictError(msg)
 
     if play_count is None:

@@ -39,7 +39,9 @@ class CustomSignupForm(SignupForm):
 
         # Change label and placeholder for password2 field
         self.fields["password2"].label = _("Confirm Password")
-        self.fields["password2"].widget.attrs["placeholder"] = _("Confirm your password")
+        self.fields["password2"].widget.attrs["placeholder"] = _(
+            "Confirm your password"
+        )
 
     def save(self, request):
         """Save the new user, turning a race-condition IntegrityError into a form error."""
@@ -182,7 +184,9 @@ class AuthenticatorSetupForm(forms.Form):
 class RegenerateRecoveryCodesForm(forms.Form):
     """Regenerate recovery codes with password confirmation."""
 
-    current_password = forms.CharField(label=_("Current password"), widget=forms.PasswordInput)
+    current_password = forms.CharField(
+        label=_("Current password"), widget=forms.PasswordInput
+    )
 
     def __init__(self, *args, user, **kwargs):
         """Store the extra keyword arguments this form needs."""
@@ -202,8 +206,12 @@ class PasswordRecoveryForm(SetPasswordForm):
     """Self-service password recovery using recovery codes and authenticator."""
 
     username = forms.CharField(label=_("Username"), max_length=150)
-    recovery_code = forms.CharField(label=_("Recovery code"), max_length=32, required=False)
-    authenticator_code = forms.CharField(label=_("Authenticator code"), required=False, max_length=6)
+    recovery_code = forms.CharField(
+        label=_("Recovery code"), max_length=32, required=False
+    )
+    authenticator_code = forms.CharField(
+        label=_("Authenticator code"), required=False, max_length=6
+    )
 
     error_messages = {
         "invalid_recovery": _("Unable to verify recovery details."),

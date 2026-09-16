@@ -176,9 +176,7 @@ class MalRatingContextTests(TestCase):
             mal_rating_count=100,
         )
 
-        self.assertIsNone(
-            _build_mal_rating_context(unrated, MediaTypes.ANIME.value)
-        )
+        self.assertIsNone(_build_mal_rating_context(unrated, MediaTypes.ANIME.value))
         self.assertIsNone(
             _build_mal_rating_context(missing_score, MediaTypes.ANIME.value)
         )

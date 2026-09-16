@@ -807,13 +807,17 @@ class TVDBProviderTests(TestCase):
         self.assertEqual(result["results"][0]["title"], "Sword Art Online")
         self.assertEqual(result["results"][0]["localized_title"], "Sword Art Online")
 
-    @patch("app.providers.tvdb._with_preferred_translation", side_effect=lambda row, *args, **kwargs: row)
+    @patch(
+        "app.providers.tvdb._with_preferred_translation",
+        side_effect=lambda row, *args, **kwargs: row,
+    )
     @patch("app.providers.tvdb._request")
-    def test_search_promotes_direct_title_matches(self, mock_request, _mock_translation):
+    def test_search_promotes_direct_title_matches(
+        self, mock_request, _mock_translation
+    ):
         """Direct title matches should outrank broad TVDB search matches."""
         rows = [
-            {"id": index, "name": f"Unrelated Series {index}"}
-            for index in range(1, 20)
+            {"id": index, "name": f"Unrelated Series {index}"} for index in range(1, 20)
         ]
         rows[-1] = {
             "id": 424536,
@@ -852,14 +856,10 @@ class TVDBProviderTests(TestCase):
             result["results"][0]["localized_title"],
             "ソードアート・オンライン",
         )
-        self.assertEqual(
-            mock_request.call_args_list[0].kwargs["params"]["lang"], "jpn"
-        )
+        self.assertEqual(mock_request.call_args_list[0].kwargs["params"]["lang"], "jpn")
 
     @patch("app.providers.tvdb._request")
-    def test_search_fetches_translation_when_row_has_none_embedded(
-        self, mock_request
-    ):
+    def test_search_fetches_translation_when_row_has_none_embedded(self, mock_request):
         """Search rows without embedded translations should be localized via a
         per-result translation fetch, matching the detail page's behavior.
         """

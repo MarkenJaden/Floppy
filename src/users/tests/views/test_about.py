@@ -48,10 +48,15 @@ class AboutViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         soup = BeautifulSoup(response.content, "html.parser")
-        section = soup.find("section", attrs={"aria-labelledby": "about-install-heading"})
+        section = soup.find(
+            "section", attrs={"aria-labelledby": "about-install-heading"}
+        )
 
         self.assertIsNotNone(section, "About page is missing the install section")
-        self.assertEqual(section.find(id="about-install-heading").get_text(strip=True), "Install Floppy")
+        self.assertEqual(
+            section.find(id="about-install-heading").get_text(strip=True),
+            "Install Floppy",
+        )
 
         text = section.get_text(" ", strip=True)
         self.assertIn("Floppy is an installable PWA.", text)
@@ -80,7 +85,9 @@ class AboutViewTests(TestCase):
     def test_install_button_is_hidden_until_an_install_event_arrives(self):
         response = self.client.get(reverse("about"))
         soup = BeautifulSoup(response.content, "html.parser")
-        section = soup.find("section", attrs={"aria-labelledby": "about-install-heading"})
+        section = soup.find(
+            "section", attrs={"aria-labelledby": "about-install-heading"}
+        )
 
         button = section.find("button")
 
@@ -105,9 +112,13 @@ class AboutViewTests(TestCase):
         """Platform narrowing is a JS enhancement; the HTML must carry both."""
         response = self.client.get(reverse("about"))
         soup = BeautifulSoup(response.content, "html.parser")
-        section = soup.find("section", attrs={"aria-labelledby": "about-install-heading"})
+        section = soup.find(
+            "section", attrs={"aria-labelledby": "about-install-heading"}
+        )
 
-        panels = {h.get_text(strip=True): h.find_parent("div") for h in section.find_all("h4")}
+        panels = {
+            h.get_text(strip=True): h.find_parent("div") for h in section.find_all("h4")
+        }
 
         self.assertEqual(set(panels), {"iOS and iPadOS", "Android"})
         for name, panel in panels.items():

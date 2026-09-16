@@ -919,7 +919,8 @@ class MoviePlay(models.Model):
             models.UniqueConstraint(
                 fields=["movie", "external_id"],
                 name="app_movieplay_unique_movie_external_id",
-                condition=models.Q(external_id__isnull=False) & ~models.Q(
+                condition=models.Q(external_id__isnull=False)
+                & ~models.Q(
                     external_id="",
                 ),
             ),

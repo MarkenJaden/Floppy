@@ -242,7 +242,10 @@ class IntegrationTest(StaticLiveServerTestCase):
             self.addCleanup(page.remove_listener, "request", record_toggle_request)
 
             def record_toggle_response(response, statuses=toggle_statuses):
-                if response.request.method == "POST" and "list_item_toggle" in response.url:
+                if (
+                    response.request.method == "POST"
+                    and "list_item_toggle" in response.url
+                ):
                     statuses.append(response.status)
 
             page.on("response", record_toggle_response)

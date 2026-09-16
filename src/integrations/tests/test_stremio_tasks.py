@@ -57,9 +57,7 @@ class StremioPlaybackTaskTests(SimpleTestCase):
     ):
         mock_start.return_value = PlaybackDecision("schedule", "session-1", 60)
 
-        _webhook.process_stremio_webhook.run(
-            {"id": "tt1", "type": "movie"}, 42
-        )
+        _webhook.process_stremio_webhook.run({"id": "tt1", "type": "movie"}, 42)
 
         mock_process.assert_called_once()
         mock_apply.assert_called_once_with(
@@ -74,9 +72,7 @@ class StremioPlaybackTaskTests(SimpleTestCase):
     ):
         mock_start.return_value = PlaybackDecision("duplicate", "session-1")
 
-        _webhook.process_stremio_webhook.run(
-            {"id": "tt1", "type": "movie"}, 42
-        )
+        _webhook.process_stremio_webhook.run({"id": "tt1", "type": "movie"}, 42)
 
         mock_apply.assert_not_called()
 

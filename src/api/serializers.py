@@ -114,7 +114,8 @@ def _has_dropped_season(media):
     return any(
         season.status == Status.DROPPED.value
         for season in media.seasons.all()
-        if getattr(getattr(season, "item", None), "season_number", None) not in (None, 0)
+        if getattr(getattr(season, "item", None), "season_number", None)
+        not in (None, 0)
     )
 
 
@@ -527,7 +528,9 @@ class CompleteMediaSerializer(serializers.Serializer):
             # FORK: IMDb rating alongside TMDB-based score
             "imdb_rating": getattr(instance.get("item"), "imdb_rating", None),
             "imdb_rating_count": getattr(
-                instance.get("item"), "imdb_rating_count", None,
+                instance.get("item"),
+                "imdb_rating_count",
+                None,
             ),
             "cast": media_metadata.get("cast") or [],
             "crew": media_metadata.get("crew") or [],

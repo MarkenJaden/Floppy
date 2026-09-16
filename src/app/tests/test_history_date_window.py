@@ -49,7 +49,9 @@ class HistoryDateWindowTests(TestCase):
             genres=["Drama"],
         )
         tv = TV.objects.create(
-            item=tv_item, user=cls.user, status=Status.IN_PROGRESS.value,
+            item=tv_item,
+            user=cls.user,
+            status=Status.IN_PROGRESS.value,
         )
         season_item = Item.objects.create(
             media_id="window-show",
@@ -121,7 +123,8 @@ class HistoryDateWindowTests(TestCase):
         """Same days, same totals, same entries, in the same order."""
         date_filters = self._range()
         built = history_cache.get_history_days(
-            self.user, date_filters=date_filters,
+            self.user,
+            date_filters=date_filters,
         )
         cache.clear()
         windowed, total_days = history_cache_reader.get_cached_history_window(
@@ -138,7 +141,10 @@ class HistoryDateWindowTests(TestCase):
         """A day named by start_date or end_date stays in the result."""
         date_filters = self._range()
         windowed, _ = history_cache_reader.get_cached_history_window(
-            self.user, limit=50, offset=0, date_filters=date_filters,
+            self.user,
+            limit=50,
+            offset=0,
+            date_filters=date_filters,
         )
 
         dates = [day["date"].isoformat() for day in windowed]
@@ -148,7 +154,9 @@ class HistoryDateWindowTests(TestCase):
 
     def test_a_type_filter_still_applies_inside_the_range(self):
         """Combining the two filters must not widen either one."""
-        date_filters = {"start_date": (self.today - timedelta(days=2)).date().isoformat()}
+        date_filters = {
+            "start_date": (self.today - timedelta(days=2)).date().isoformat()
+        }
         windowed, _ = history_cache_reader.get_cached_history_window(
             self.user,
             limit=50,

@@ -64,6 +64,7 @@ def classify_stremio_id(entry_id):
         return (namespace, raw)
     return None
 
+
 # Forward-only status ranking used to decide whether the recurring sync may
 # advance an already-tracked Movie/TV/Season's status (see #580: the sync
 # must pick up completion the webhook deferred to it, but must never
@@ -237,11 +238,7 @@ class StremioImporter:
         # tmdb:/tvdb:/trakt: fall back to last-watched-episode-only import
         # (see _watched_videos), same as when Cinemeta itself is unreachable.
         cinemeta_videos = self._fetch_cinemeta_videos(
-            [
-                entry["_id"]
-                for entry in series
-                if entry["_id"].startswith("tt")
-            ],
+            [entry["_id"] for entry in series if entry["_id"].startswith("tt")],
         )
 
         grouped_anime_snapshot = grouped_anime.UNSET
@@ -497,7 +494,9 @@ class StremioImporter:
             self._advance_status_in_place(
                 existing_movie,
                 status,
-                progress=1 if status == Status.COMPLETED.value else existing_movie.progress,
+                progress=1
+                if status == Status.COMPLETED.value
+                else existing_movie.progress,
                 start_date=last_watched
                 if status != Status.PLANNING.value
                 else existing_movie.start_date,
@@ -777,7 +776,9 @@ class StremioImporter:
                 continue
 
             season_image = season_metadata.get("image") or metadata.get("image")
-            season_bucket = self._child_bucket(tv_instance.item, MediaTypes.SEASON.value)
+            season_bucket = self._child_bucket(
+                tv_instance.item, MediaTypes.SEASON.value
+            )
             season_item = helpers.find_item_across_buckets(
                 preferred_bucket=season_bucket,
                 media_id=tmdb_id,
@@ -800,20 +801,15 @@ class StremioImporter:
 
             max_progress = int(season_metadata.get("max_progress") or 0)
             watched_episode_numbers = {
-                int(number)
-                for number in episode_numbers
-                if int(number) > 0
+                int(number) for number in episode_numbers if int(number) > 0
             }
-            season_complete = (
-                max_progress > 0
-                and set(range(1, max_progress + 1)).issubset(
-                    watched_episode_numbers,
-                )
+            season_complete = max_progress > 0 and set(
+                range(1, max_progress + 1)
+            ).issubset(
+                watched_episode_numbers,
             )
             season_status = (
-                Status.COMPLETED.value
-                if season_complete
-                else Status.IN_PROGRESS.value
+                Status.COMPLETED.value if season_complete else Status.IN_PROGRESS.value
             )
 
             # An already-tracked show reaches here on re-sync (tv_instance may
@@ -867,7 +863,9 @@ class StremioImporter:
                 self.bulk_media[MediaTypes.SEASON.value].append(season_instance)
                 self.bulk_season_by_item_id[season_item.id] = season_instance
 
-            episode_bucket = self._child_bucket(tv_instance.item, MediaTypes.EPISODE.value)
+            episode_bucket = self._child_bucket(
+                tv_instance.item, MediaTypes.EPISODE.value
+            )
             for episode_number in episode_numbers:
                 episode_item = helpers.find_item_across_buckets(
                     preferred_bucket=episode_bucket,
@@ -899,10 +897,13 @@ class StremioImporter:
                 # re-sync of the same state - skip it to avoid piling up
                 # duplicate watch rows every 2 hours (see Episode's
                 # one-row-per-watch model in app/models/tv.py).
-                if existing_season is not None and app.models.Episode.objects.filter(
-                    item=episode_item,
-                    related_season=existing_season,
-                ).exists():
+                if (
+                    existing_season is not None
+                    and app.models.Episode.objects.filter(
+                        item=episode_item,
+                        related_season=existing_season,
+                    ).exists()
+                ):
                     continue
 
                 episode_instance = app.models.Episode(
@@ -1072,7 +1073,9 @@ class StremioImporter:
             self._advance_status_in_place(
                 existing_anime,
                 status,
-                progress=1 if status == Status.COMPLETED.value else existing_anime.progress,
+                progress=1
+                if status == Status.COMPLETED.value
+                else existing_anime.progress,
                 start_date=last_watched
                 if status != Status.PLANNING.value
                 else existing_anime.start_date,

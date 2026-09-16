@@ -7,7 +7,9 @@ from django.db import models
 class EpisodeOrder(models.Model):
     """An immutable provider catalogue used by order-local items."""
 
-    show = models.ForeignKey("app.Item", on_delete=models.PROTECT, related_name="episode_orders")
+    show = models.ForeignKey(
+        "app.Item", on_delete=models.PROTECT, related_name="episode_orders"
+    )
     provider = models.CharField(max_length=20)
     series_id = models.CharField(max_length=500)
     key = models.CharField(max_length=255)
@@ -18,10 +20,12 @@ class EpisodeOrder(models.Model):
     class Meta:
         """Keep each immutable provider catalogue revision unique."""
 
-        constraints = [models.UniqueConstraint(
-            fields=["show", "provider", "series_id", "key", "revision"],
-            name="app_episode_order_revision_unique",
-        )]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["show", "provider", "series_id", "key", "revision"],
+                name="app_episode_order_revision_unique",
+            )
+        ]
 
     def __str__(self):
         """Return the user-facing provider order label."""

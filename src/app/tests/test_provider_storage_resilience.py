@@ -60,7 +60,9 @@ class PlaceholderMigrationSafetyTests(SimpleTestCase):
     """The placeholder migration chain must be safe at each historical schema."""
 
     def test_0155_skips_models_that_cannot_store_new_placeholder(self):
-        migration = import_module("app.migrations.0155_rewrite_old_img_none_placeholder")
+        migration = import_module(
+            "app.migrations.0155_rewrite_old_img_none_placeholder"
+        )
         queryset = Mock()
         manager = Mock()
         manager.filter.return_value = queryset
@@ -80,7 +82,9 @@ class PlaceholderMigrationSafetyTests(SimpleTestCase):
         queryset.update.assert_not_called()
 
     def test_0155_can_rewrite_after_storage_is_wide_enough(self):
-        migration = import_module("app.migrations.0155_rewrite_old_img_none_placeholder")
+        migration = import_module(
+            "app.migrations.0155_rewrite_old_img_none_placeholder"
+        )
         queryset = Mock()
         manager = Mock()
         manager.filter.return_value = queryset
@@ -104,7 +108,8 @@ class PlaceholderMigrationSafetyTests(SimpleTestCase):
         image_alters = {
             operation.model_name: operation.field
             for operation in migration.Migration.operations
-            if isinstance(operation, migrations.AlterField) and operation.name == "image"
+            if isinstance(operation, migrations.AlterField)
+            and operation.name == "image"
         }
 
         self.assertEqual(set(image_alters), expected_models)

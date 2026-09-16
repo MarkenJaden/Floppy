@@ -586,11 +586,9 @@ class IntegrationTest(StaticLiveServerTestCase):
             .nth(1)
             .get_by_role("button", name="Clear date")
         )
-        start_clear = (
-            create_modal.locator(".date-picker-closed-field")
-            .first
-            .get_by_role("button", name="Clear date")
-        )
+        start_clear = create_modal.locator(
+            ".date-picker-closed-field"
+        ).first.get_by_role("button", name="Clear date")
         # mediaForm may auto-fill end_date after the create modal opens.
         expect(end_clear.or_(end_quick_actions)).to_be_visible()
         if end_clear.is_visible():
@@ -609,15 +607,11 @@ class IntegrationTest(StaticLiveServerTestCase):
         expect(
             end_quick_actions.get_by_role("button", name="Release Date", exact=True)
         ).to_be_visible()
-        end_picker_dialog = create_modal.get_by_role(
-            "dialog", name="End date picker"
-        )
+        end_picker_dialog = create_modal.get_by_role("dialog", name="End date picker")
         expect(end_picker_dialog).not_to_be_visible()
 
         before_start_action = self.page.evaluate("Date.now()")
-        start_quick_actions.get_by_role(
-            "button", name="Start Now", exact=True
-        ).click()
+        start_quick_actions.get_by_role("button", name="Start Now", exact=True).click()
         after_start_action = self.page.evaluate("Date.now()")
         start_value_ms = self.page.evaluate(
             "value => new Date(value).getTime()",
@@ -774,7 +768,9 @@ class IntegrationTest(StaticLiveServerTestCase):
         save_request.value.response()
         expect(self.page.locator("[data-track-modal-root]:visible")).to_have_count(0)
 
-        new_movie = Movie.objects.filter(item=item, user=self.user).order_by("-id").first()
+        new_movie = (
+            Movie.objects.filter(item=item, user=self.user).order_by("-id").first()
+        )
         self.assertIsNotNone(new_movie)
         self.assertIsNone(new_movie.start_date)
         self.assertIsNone(new_movie.end_date)
@@ -855,7 +851,9 @@ class IntegrationTest(StaticLiveServerTestCase):
         expect(calendar.locator("[data-calendar-cell]")).to_have_count(42)
         expect(calendar.locator('[data-calendar-cell="2026-03-01"]')).to_have_count(1)
         expect(calendar.locator('[data-calendar-cell="2026-03-05"]')).to_have_count(1)
-        expect(calendar.locator('[data-calendar-cell="2026-03-01"]')).not_to_be_disabled()
+        expect(
+            calendar.locator('[data-calendar-cell="2026-03-01"]')
+        ).not_to_be_disabled()
         expect(calendar.locator('[data-calendar-cell="2026-03-05"]')).to_be_disabled()
         expect(calendar.locator("span.absolute.bottom-1")).to_have_count(3)
 
@@ -883,7 +881,8 @@ class IntegrationTest(StaticLiveServerTestCase):
             "March 2024",
         )
         session_modal.get_by_role(
-            "button", name="Close activity history",
+            "button",
+            name="Close activity history",
         ).click()
 
         self.page.get_by_role("button", name="More tracking actions").click()
@@ -901,7 +900,9 @@ class IntegrationTest(StaticLiveServerTestCase):
         ).to_contain_text("March 2024")
         date_picker.locator('[data-calendar-cell="2024-02-29"]').click()
         self.assertTrue(
-            track_modal.locator('input[name="end_date"]').input_value().startswith(
+            track_modal.locator('input[name="end_date"]')
+            .input_value()
+            .startswith(
                 "2024-02-29T",
             ),
         )
@@ -1052,7 +1053,9 @@ class IntegrationTest(StaticLiveServerTestCase):
         )
         self.assertEqual(filtered_layout["overflowX"], "auto")
         self.assertEqual(filtered_layout["overflowY"], "hidden")
-        self.assertGreater(filtered_layout["scrollWidth"], filtered_layout["clientWidth"])
+        self.assertGreater(
+            filtered_layout["scrollWidth"], filtered_layout["clientWidth"]
+        )
 
         self.page.set_viewport_size({"width": 390, "height": 774})
         mobile_layout = self.page.evaluate(
@@ -1062,7 +1065,9 @@ class IntegrationTest(StaticLiveServerTestCase):
                 bodyWidth: document.body.scrollWidth,
             })""",
         )
-        self.assertLessEqual(mobile_layout["documentWidth"], mobile_layout["viewportWidth"])
+        self.assertLessEqual(
+            mobile_layout["documentWidth"], mobile_layout["viewportWidth"]
+        )
         self.assertLessEqual(mobile_layout["bodyWidth"], mobile_layout["viewportWidth"])
 
         self.page.set_viewport_size({"width": 1440, "height": 774})
@@ -1074,11 +1079,15 @@ class IntegrationTest(StaticLiveServerTestCase):
                     ?.getBoundingClientRect().width,
             })""",
         )
-        self.assertLessEqual(desktop_layout["documentWidth"], desktop_layout["viewportWidth"])
+        self.assertLessEqual(
+            desktop_layout["documentWidth"], desktop_layout["viewportWidth"]
+        )
         self.assertEqual(desktop_layout["chartWidth"], 150)
 
     @patch("app.discover_views.discover.get_discover_rows")
-    def test_discover_match_signal_wraps_without_page_overflow(self, mock_get_discover_rows):
+    def test_discover_match_signal_wraps_without_page_overflow(
+        self, mock_get_discover_rows
+    ):
         """Long Discover row metadata stays inside the viewport on mobile."""
         match_signal = (
             "Driven by your current 90-109 Minutes, 2010s, Adventure phase "

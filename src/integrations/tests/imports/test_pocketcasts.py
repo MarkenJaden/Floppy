@@ -595,15 +595,11 @@ class PocketCastsImportFlowTests(TestCase):
             importer.import_data()
 
         show = PodcastShow.objects.get(podcast_uuid="show-1")
-        moved_episode = PodcastEpisode.objects.get(
-            show=show, episode_uuid="uuid-moved"
-        )
+        moved_episode = PodcastEpisode.objects.get(show=show, episode_uuid="uuid-moved")
         self.assertIsNone(moved_episode.season_number)
         self.assertIsNone(moved_episode.episode_number)
         self.assertTrue(
-            Podcast.objects.filter(
-                user=self.user, item__media_id="uuid-valid"
-            ).exists()
+            Podcast.objects.filter(user=self.user, item__media_id="uuid-valid").exists()
         )
 
     def test_ensure_show_repairs_authenticated_image_url(self):
@@ -978,10 +974,14 @@ class PocketCastsIdentityAmbiguityTests(TestCase):
         self.assertEqual(result["episode"].episode_uuid, "uuid-c")
         self.assertEqual(PodcastEpisode.objects.filter(show=self.show).count(), 3)
         self.assertTrue(
-            PodcastEpisode.objects.filter(show=self.show, episode_uuid="uuid-a").exists()
+            PodcastEpisode.objects.filter(
+                show=self.show, episode_uuid="uuid-a"
+            ).exists()
         )
         self.assertTrue(
-            PodcastEpisode.objects.filter(show=self.show, episode_uuid="uuid-b").exists()
+            PodcastEpisode.objects.filter(
+                show=self.show, episode_uuid="uuid-b"
+            ).exists()
         )
 
     def test_sync_catalog_episode_still_matches_unique_title_date(self):

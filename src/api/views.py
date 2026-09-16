@@ -1064,7 +1064,9 @@ class MediaTypeListView(drf_views.APIView):
 
         media_form.save()
         apply_image_url(item, media_form.cleaned_data.get("image_url"))
-        episode_count_fields = metadata_utils.apply_provider_episode_count(item, metadata)
+        episode_count_fields = metadata_utils.apply_provider_episode_count(
+            item, metadata
+        )
         if episode_count_fields:
             item.save(update_fields=episode_count_fields)
         BasicMedia.objects.annotate_episode_progress(

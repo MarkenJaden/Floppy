@@ -58,7 +58,9 @@ class MergeItemTests(TestCase):
             title="Breaking Bad",
             image="",
         )
-        tv = TV.objects.create(item=loser, user=self.user, status=Status.IN_PROGRESS.value)
+        tv = TV.objects.create(
+            item=loser, user=self.user, status=Status.IN_PROGRESS.value
+        )
 
         item_merge.merge_item(loser, keeper)
 
@@ -138,7 +140,9 @@ class MergeItemTests(TestCase):
             title="Breaking Bad",
             image="",
         )
-        tv = TV.objects.create(item=tv_item, user=self.user, status=Status.IN_PROGRESS.value)
+        tv = TV.objects.create(
+            item=tv_item, user=self.user, status=Status.IN_PROGRESS.value
+        )
         loser_season = Season.objects.create(
             item=loser_season_item,
             user=self.user,
@@ -202,7 +206,9 @@ class MergeItemTests(TestCase):
         item_merge.merge_item(loser, keeper)
 
         self.assertTrue(ItemTag.objects.filter(item=keeper, tag=tag).exists())
-        self.assertTrue(CollectionEntry.objects.filter(item=keeper, user=self.user).exists())
+        self.assertTrue(
+            CollectionEntry.objects.filter(item=keeper, user=self.user).exists()
+        )
         loser_progress.refresh_from_db()
         self.assertEqual(loser_progress.item_id, keeper.pk)
 

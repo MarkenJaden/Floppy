@@ -68,7 +68,9 @@ class BulkDeleteByImportSourceTests(TestCase):
         trakt_movie = self._movie("trakt-movie", self.user, trakt_run)
         simkl_movie = self._movie("simkl-movie", self.user, simkl_run)
         manual_movie = self._movie("manual-movie", self.user, None)
-        other_user_movie = self._movie("other-user-movie", self.other_user, other_user_run)
+        other_user_movie = self._movie(
+            "other-user-movie", self.other_user, other_user_run
+        )
 
         response = self.client.post(
             reverse(

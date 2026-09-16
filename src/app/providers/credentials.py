@@ -373,7 +373,9 @@ _current_user: contextvars.ContextVar = contextvars.ContextVar(
 @contextlib.contextmanager
 def current_user_scope(user):
     """Publish the user whose personal keys apply for the duration of a request."""
-    token = _current_user.set(user if getattr(user, "is_authenticated", False) else None)
+    token = _current_user.set(
+        user if getattr(user, "is_authenticated", False) else None
+    )
     try:
         yield
     finally:
@@ -605,9 +607,7 @@ def is_configured(slug, user=None):
     spec = REGISTRY.get(slug)
     if spec is None:
         return False
-    return all(
-        get(slug, field.name, user) for field in spec.fields if field.required
-    )
+    return all(get(slug, field.name, user) for field in spec.fields if field.required)
 
 
 def instance_value(slug, field_name):

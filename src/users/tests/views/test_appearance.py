@@ -144,9 +144,7 @@ class AppearanceViewTests(TestCase):
         )
 
     def test_detail_section_attributes_apply_visibility_and_order(self):
-        self.user.detail_page_layouts = {
-            "episode": {"content": ["crew", "notes"]}
-        }
+        self.user.detail_page_layouts = {"episode": {"content": ["crew", "notes"]}}
 
         self.assertIn(
             'data-detail-section="crew" style="order: 0"',
@@ -162,9 +160,7 @@ class AppearanceViewTests(TestCase):
         )
 
     def test_comic_publishers_are_visible_by_default(self):
-        attributes = str(
-            detail_section_attrs(self.user, "comic", "sidebar", "studios")
-        )
+        attributes = str(detail_section_attrs(self.user, "comic", "sidebar", "studios"))
 
         self.assertIn('data-detail-section="studios" style="order:', attributes)
         self.assertNotIn("hidden", attributes)

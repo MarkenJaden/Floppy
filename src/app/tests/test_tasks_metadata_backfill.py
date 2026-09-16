@@ -948,7 +948,9 @@ class MetadataBackfillTaskTests(TestCase):
             status="",
         )
 
-        self.assertIn(item.id, tasks._status_items_queryset().values_list("id", flat=True))
+        self.assertIn(
+            item.id, tasks._status_items_queryset().values_list("id", flat=True)
+        )
 
         mock_get_media_metadata.return_value = {
             "details": {"status": "Ended"},

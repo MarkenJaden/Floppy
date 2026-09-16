@@ -671,7 +671,9 @@ def get_episode_datetime(
         return tmdb_datetime
 
     if tvmaze_date_datetime is not None:
-        if tmdb_datetime is None or abs(tvmaze_date_datetime - tmdb_datetime) <= timedelta(
+        if tmdb_datetime is None or abs(
+            tvmaze_date_datetime - tmdb_datetime
+        ) <= timedelta(
             days=2,
         ):
             return tvmaze_date_datetime

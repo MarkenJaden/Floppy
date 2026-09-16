@@ -213,9 +213,7 @@ class StremioAddonViewTests(TestCase):
                 expected_ids = [f"tt{index + 1:07d}" for index in range(count)]
                 expected_ids.reverse()
                 for skip in (0, 100, 200):
-                    response = self.client.get(
-                        self._catalog_url(extra=f"skip={skip}")
-                    )
+                    response = self.client.get(self._catalog_url(extra=f"skip={skip}"))
                     self.assertEqual(response.status_code, 200)
                     self.assertEqual(response["Access-Control-Allow-Origin"], "*")
                     self.assertEqual(response["Content-Type"], "application/json")
@@ -904,7 +902,9 @@ class StremioAddonViewTests(TestCase):
         self.assertEqual(json.loads(response.content), {"subtitles": []})
         mock_delay.assert_not_called()
 
-    @patch("integrations.views.stremio_queue.reserve_pending", return_value="unavailable")
+    @patch(
+        "integrations.views.stremio_queue.reserve_pending", return_value="unavailable"
+    )
     @patch("integrations.views.tasks.process_stremio_webhook.delay")
     def test_subtitles_redis_failure_fails_closed(
         self,

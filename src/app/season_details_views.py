@@ -210,11 +210,7 @@ def season_details(
     notes_entry = None
     if render_secondary_only and not public_view and user_medias:
         notes_entry = next(
-            (
-                entry
-                for entry in user_medias
-                if entry.notes and entry.notes.strip()
-            ),
+            (entry for entry in user_medias if entry.notes and entry.notes.strip()),
             None,
         )
     elif render_secondary_only and public_notes_view and list_owner:
@@ -482,8 +478,7 @@ def season_details(
         created_any_episode = False
         if missing_numbers:
             air_date_by_number = {
-                number: air_date_dt
-                for _episode, number, air_date_dt in parsed_episodes
+                number: air_date_dt for _episode, number, air_date_dt in parsed_episodes
             }
             Item.objects.bulk_create(
                 [

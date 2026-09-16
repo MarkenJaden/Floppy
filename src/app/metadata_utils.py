@@ -91,6 +91,7 @@ def provider_metadata_cache_keys(
             deduped.append(key)
     return deduped
 
+
 CORE_METADATA_FIELDS = [
     "synopsis",
     "source_url",

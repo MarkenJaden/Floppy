@@ -290,7 +290,9 @@ class TestAutoDetectedAudiobooks(PlexAudiobookImportTestCase):
         )
 
         self.assertTrue(
-            Book.objects.filter(user=self.user, item__source=Sources.PLEX.value).exists(),
+            Book.objects.filter(
+                user=self.user, item__source=Sources.PLEX.value
+            ).exists(),
         )
         self.assertIn("Detected 1 audiobook(s)", warnings)
 

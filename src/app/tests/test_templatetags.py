@@ -740,9 +740,13 @@ class AppTagsTests(TestCase):
 
         self.assertEqual(content.count("pointer-coarse:opacity-100"), 2)
         self.assertEqual(content.count("focus-visible:opacity-100"), 2)
-        self.assertIn('hx-confirm="Delete this activity entry? This cannot be undone."', content)
+        self.assertIn(
+            'hx-confirm="Delete this activity entry? This cannot be undone."', content
+        )
 
-    def test_media_card_touch_reveal_respects_overlay_preference_and_bulk_selection(self):
+    def test_media_card_touch_reveal_respects_overlay_preference_and_bulk_selection(
+        self,
+    ):
         """The card handler yields to immediate navigation and bulk selection."""
         self.user.clickable_media_cards = True
         request = self.request_factory.get("/media")
@@ -1962,7 +1966,11 @@ class DetailScoreChipsTemplateTests(TestCase):
         return render_to_string(
             "app/components/detail_score_chips.html",
             {
-                "media": {"media_id": "1", "source": "tvdb", "score_count": score_count},
+                "media": {
+                    "media_id": "1",
+                    "source": "tvdb",
+                    "score_count": score_count,
+                },
                 "display_provider": Sources.TVDB.value,
                 "Sources": Sources,
                 "MediaTypes": MediaTypes,

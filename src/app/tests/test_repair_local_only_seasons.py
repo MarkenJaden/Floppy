@@ -140,9 +140,7 @@ class RepairLocalOnlySeasonsTests(TestCase):
                 return_value={
                     "title": "Rent-a-Girlfriend",
                     "image": "",
-                    "related": {
-                        "seasons": [{"season_number": 5, "episode_count": 2}]
-                    },
+                    "related": {"seasons": [{"season_number": 5, "episode_count": 2}]},
                     "season/5": _season_payload(2),
                 },
             ),

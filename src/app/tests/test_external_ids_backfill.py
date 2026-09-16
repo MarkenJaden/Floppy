@@ -57,7 +57,9 @@ class ExternalIDsQuerysetTests(TestCase):
     def test_movies_without_imdb_id_are_candidates(self):
         item = make_movie(550)
 
-        self.assertIn(item.id, set(_external_ids_queryset().values_list("id", flat=True)))
+        self.assertIn(
+            item.id, set(_external_ids_queryset().values_list("id", flat=True))
+        )
 
     def test_movies_with_imdb_id_are_not_candidates(self):
         item = make_movie(551, {"imdb_id": "tt0000001", "tmdb_id": "551"})
@@ -71,7 +73,9 @@ class ExternalIDsQuerysetTests(TestCase):
         """upsert_provider_links synthesises tmdb_id from media_id for free."""
         item = make_movie(552, {"tmdb_id": "552"})
 
-        self.assertIn(item.id, set(_external_ids_queryset().values_list("id", flat=True)))
+        self.assertIn(
+            item.id, set(_external_ids_queryset().values_list("id", flat=True))
+        )
 
     def test_non_tmdb_sources_are_left_alone(self):
         item = Item.objects.create(
