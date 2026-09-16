@@ -180,9 +180,7 @@ def list_detail(request, list_reference):
         if "status" in request.GET:
             status_filter = tuple(
                 dict.fromkeys(
-                    value
-                    for value in raw_status_filter
-                    if value in valid_status_values
+                    value for value in raw_status_filter if value in valid_status_values
                 ),
             )
             request.user.update_preference(
@@ -271,9 +269,7 @@ def list_detail(request, list_reference):
     # no tracker row as well as rows whose current status is null.
     if params["status_filter"]:
         real_status_filter = tuple(
-            value
-            for value in params["status_filter"]
-            if value != MEDIA_LIST_NO_STATUS
+            value for value in params["status_filter"] if value != MEDIA_LIST_NO_STATUS
         )
         matching_item_ids = set()
         if real_status_filter:
@@ -368,11 +364,14 @@ def list_detail(request, list_reference):
     sort_config = media_sort_config.get(params["sort_by"])
     if sort_config:
         if params["sort_by"] == "platform":
+
             def value_getter(item, platforms):
                 return _platform_sort_value(item, platforms)
         else:
+
             def value_getter(item, _platforms):
                 return sort_config["key"](item)
+
         items_page, filtered_items_count, collection_platforms_by_item_id = (
             _paginate_python_sorted_items(
                 items,
@@ -455,9 +454,7 @@ def list_detail(request, list_reference):
             *MediaStatusChoices.choices[1:],
         ],
         "public_view": public_view,
-        "public_list_reference": custom_list.public_reference
-        if is_public_view
-        else "",
+        "public_list_reference": custom_list.public_reference if is_public_view else "",
         "show_public_notes": not is_public_view or custom_list.include_notes,
         "can_edit": can_edit,
         "enable_bulk_select": can_edit,

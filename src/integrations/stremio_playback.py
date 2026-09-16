@@ -216,9 +216,7 @@ def _cas(client, key, old_raw, session, now):
 def _close(client, key, old_raw, session_id):
     try:
         return bool(
-            client.eval(
-                CAS_SCRIPT, 2, key, _index_key(session_id), old_raw, "", 1
-            )
+            client.eval(CAS_SCRIPT, 2, key, _index_key(session_id), old_raw, "", 1)
         )
     except redis.RedisError as error:
         logger.info("stremio_playback status=guard_unavailable error=%s", error)
@@ -239,7 +237,11 @@ def normalize_state(entry, target_id, media_type):
     watched = _float(state.get("timeWatched"))
     return {
         "video_id": str(state.get("video_id") or ""),
-        "last_watched": (_aware(state.get("lastWatched")).isoformat() if _aware(state.get("lastWatched")) else None),
+        "last_watched": (
+            _aware(state.get("lastWatched")).isoformat()
+            if _aware(state.get("lastWatched"))
+            else None
+        ),
         "times_watched": _float(state.get("timesWatched")),
         "time_watched": watched,
         "duration": duration,
@@ -311,19 +313,14 @@ def _session_evidence(session, observation):
     if observation["time_watched"] < baseline["time_watched"]:
         session["reset_seen"] = True
         session["best"] = observation
-    last_advanced = (
-        _aware(observation["last_watched"]) is not None
-        and (
-            (
-                _aware(baseline["last_watched"]) is not None
-                and _aware(observation["last_watched"])
-                > _aware(baseline["last_watched"])
-            )
-            or (
-                _aware(baseline["last_watched"]) is None
-                and _aware(observation["last_watched"])
-                >= _aware(session["started_at"])
-            )
+    last_advanced = _aware(observation["last_watched"]) is not None and (
+        (
+            _aware(baseline["last_watched"]) is not None
+            and _aware(observation["last_watched"]) > _aware(baseline["last_watched"])
+        )
+        or (
+            _aware(baseline["last_watched"]) is None
+            and _aware(observation["last_watched"]) >= _aware(session["started_at"])
         )
     )
     times_advanced = observation["times_watched"] > baseline["times_watched"]
@@ -422,7 +419,9 @@ def observe_session(session_id, *, now=None):
         failures = session["transient_failures"] + 1
         if failures > MAX_TRANSIENT_FAILURES:
             _close(client, key, old_raw, session_id)
-            return PlaybackDecision("terminal", session_id, reason="transient_budget_exhausted")
+            return PlaybackDecision(
+                "terminal", session_id, reason="transient_budget_exhausted"
+            )
         session["transient_failures"] = failures
         session["revision"] += 1
         countdown = TRANSIENT_BACKOFF_SECONDS[failures - 1]
@@ -434,13 +433,21 @@ def observe_session(session_id, *, now=None):
         return PlaybackDecision("schedule", session_id, countdown, reason=str(error))
 
     session["transient_failures"] = 0
-    entry_id = session["media_id"].split(":", 1)[0] if session["media_type"] == "series" else session["media_id"]
-    entry = next((item for item in items if str(item.get("_id") or "") == entry_id), None)
+    entry_id = (
+        session["media_id"].split(":", 1)[0]
+        if session["media_type"] == "series"
+        else session["media_id"]
+    )
+    entry = next(
+        (item for item in items if str(item.get("_id") or "") == entry_id), None
+    )
     if entry is None:
         session["revision"] += 1
         if not _cas(client, key, old_raw, session, now):
             return PlaybackDecision("duplicate", session_id, reason="stale_observation")
-        return PlaybackDecision("schedule", session_id, 30, reason="library_item_missing")
+        return PlaybackDecision(
+            "schedule", session_id, 30, reason="library_item_missing"
+        )
     observation = normalize_state(entry, session["media_id"], session["media_type"])
 
     if observation["duration"] > 0 and not session["runtime_deadline_set"]:
@@ -453,14 +460,21 @@ def observe_session(session_id, *, now=None):
         session["baseline"] = observation
         session["best"] = observation
         session["revision"] += 1
-        countdown = polling_delay(observation["duration"], observation["watched_percent"])
+        countdown = polling_delay(
+            observation["duration"], observation["watched_percent"]
+        )
         if not _cas(client, key, old_raw, session, now):
             return PlaybackDecision("duplicate", session_id, reason="stale_observation")
-        return PlaybackDecision("schedule", session_id, countdown, reason="baseline_captured")
+        return PlaybackDecision(
+            "schedule", session_id, countdown, reason="baseline_captured"
+        )
 
     evidence = _session_evidence(session, observation)
     best = session["best"]
-    if observation["exact"] and observation["watched_percent"] >= best["watched_percent"]:
+    if (
+        observation["exact"]
+        and observation["watched_percent"] >= best["watched_percent"]
+    ):
         session["best"] = observation
 
     sequential = False
@@ -483,7 +497,9 @@ def observe_session(session_id, *, now=None):
     )
     if complete:
         if not _close(client, key, old_raw, session_id):
-            return PlaybackDecision("duplicate", session_id, reason="completion_already_claimed")
+            return PlaybackDecision(
+                "duplicate", session_id, reason="completion_already_claimed"
+            )
         watched_at = _aware(completion_state["last_watched"])
         payload = {
             "id": session["media_id"],

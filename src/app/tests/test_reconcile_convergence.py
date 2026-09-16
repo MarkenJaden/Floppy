@@ -156,7 +156,7 @@ class ReconcileConvergenceTests(TestCase):
         self,
         _mock_drain,
     ):
-        """"Complete" must mean the data is there, not that a sweep ran."""
+        """ "Complete" must mean the data is there, not that a sweep ran."""
         for media_id in range(1, 6):
             make_item(3500 + media_id)
 

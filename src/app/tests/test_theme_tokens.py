@@ -72,9 +72,7 @@ class ThemeTokenContractTests(SimpleTestCase):
             encoding="utf-8"
         )
         explicit_themes = [theme for theme in THEME_PRESETS if theme != "system"]
-        selector = ":root" + "".join(
-            f":not(.{theme})" for theme in explicit_themes
-        )
+        selector = ":root" + "".join(f":not(.{theme})" for theme in explicit_themes)
 
         self.assertIn(selector, css)
 

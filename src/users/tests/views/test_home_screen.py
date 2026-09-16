@@ -658,7 +658,10 @@ class HomeScreenViewTests(TestCase):
         )
 
         first = home_screen._cached_row_section(
-            self.user, row, MediaTypes.MOVIE.value, items_limit=10,
+            self.user,
+            row,
+            MediaTypes.MOVIE.value,
+            items_limit=10,
         )
         self.assertIsNone(first)
 
@@ -668,7 +671,10 @@ class HomeScreenViewTests(TestCase):
             side_effect=AssertionError("row builder should not run on a warm hit"),
         ):
             second = home_screen._cached_row_section(
-                self.user, row, MediaTypes.MOVIE.value, items_limit=10,
+                self.user,
+                row,
+                MediaTypes.MOVIE.value,
+                items_limit=10,
             )
 
         self.assertIsNone(second)
@@ -2093,8 +2099,12 @@ class CrossProviderDedupTests(TestCase):
             source=Sources.TVDB.value,
             image="",
         )
-        TV.objects.create(item=tmdb_item, user=self.user, status=Status.IN_PROGRESS.value)
-        TV.objects.create(item=tvdb_item, user=self.user, status=Status.IN_PROGRESS.value)
+        TV.objects.create(
+            item=tmdb_item, user=self.user, status=Status.IN_PROGRESS.value
+        )
+        TV.objects.create(
+            item=tvdb_item, user=self.user, status=Status.IN_PROGRESS.value
+        )
         return tmdb_item, tvdb_item
 
     def test_prefers_tvdb_item_for_tvdb_preferring_user(self):

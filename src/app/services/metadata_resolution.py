@@ -174,9 +174,7 @@ def metadata_default_source(user, media_type: str) -> str:
         # rows, silently changing the shape of their library. Keep them on a
         # grouped provider whenever one is usable.
         grouped = [
-            source
-            for source in available
-            if source.value in GROUPED_ANIME_PROVIDERS
+            source for source in available if source.value in GROUPED_ANIME_PROVIDERS
         ]
         if grouped:
             return grouped[0].value
@@ -187,10 +185,14 @@ def metadata_default_source(user, media_type: str) -> str:
 def metadata_language_default(user, item: Item | None = None) -> str:
     """Return the effective preferred metadata language for a user/item."""
     if item is not None and user and getattr(user, "is_authenticated", False):
-        preference = MetadataProviderPreference.objects.filter(
-            user=user,
-            item=item,
-        ).only("language").first()
+        preference = (
+            MetadataProviderPreference.objects.filter(
+                user=user,
+                item=item,
+            )
+            .only("language")
+            .first()
+        )
         if preference and preference.language:
             return preference.language
 
@@ -275,8 +277,7 @@ def prefers_grouped_anime(user) -> bool:
     if not getattr(user, "anime_enabled", False):
         return False
     return (
-        metadata_default_source(user, MediaTypes.ANIME.value)
-        in GROUPED_ANIME_PROVIDERS
+        metadata_default_source(user, MediaTypes.ANIME.value) in GROUPED_ANIME_PROVIDERS
     )
 
 

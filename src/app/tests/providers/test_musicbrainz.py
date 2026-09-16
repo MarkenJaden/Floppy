@@ -483,9 +483,7 @@ class MusicBrainzWikipediaDataTests(SimpleTestCase):
         with (
             patch("app.providers.musicbrainz.cache.get", return_value=None),
             patch("app.providers.musicbrainz.cache.set") as mock_cache_set,
-            patch(
-                "app.providers.musicbrainz.requests.get", return_value=mock_response
-            ),
+            patch("app.providers.musicbrainz.requests.get", return_value=mock_response),
         ):
             result = musicbrainz.get_wikipedia_data("Tool")
 
@@ -504,9 +502,7 @@ class MusicBrainzWikipediaDataTests(SimpleTestCase):
         with (
             patch("app.providers.musicbrainz.cache.get", return_value=None),
             patch("app.providers.musicbrainz.cache.set"),
-            patch(
-                "app.providers.musicbrainz.requests.get", return_value=mock_response
-            ),
+            patch("app.providers.musicbrainz.requests.get", return_value=mock_response),
         ):
             result = musicbrainz.get_wikipedia_data("Tool_(band)")
 

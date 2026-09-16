@@ -191,7 +191,9 @@ class SimklImporter:
 
         for tv in tv_list:
             self._progress_current += 1
-            import_progress.report(self._progress_current, self._progress_total, "SIMKL")
+            import_progress.report(
+                self._progress_current, self._progress_total, "SIMKL"
+            )
             try:
                 title = tv["show"]["title"]
                 logger.debug("Processing %s", title)
@@ -452,15 +454,21 @@ class SimklImporter:
 
             # Process episodes
             for episode in episodes:
-                if self.mode == "new" and (
-                    tv_media_id,
-                    season_number,
-                    episode["number"],
-                ) in self.existing_children[MediaTypes.EPISODE.value][tv_source]:
+                if (
+                    self.mode == "new"
+                    and (
+                        tv_media_id,
+                        season_number,
+                        episode["number"],
+                    )
+                    in self.existing_children[MediaTypes.EPISODE.value][tv_source]
+                ):
                     continue
 
                 ep_img = self._get_episode_image(episode, season_number, metadata)
-                episode_bucket = self._child_bucket(tv_instance.item, MediaTypes.EPISODE.value)
+                episode_bucket = self._child_bucket(
+                    tv_instance.item, MediaTypes.EPISODE.value
+                )
                 episode_item = helpers.find_item_across_buckets(
                     preferred_bucket=episode_bucket,
                     media_id=tv_media_id,
@@ -519,7 +527,9 @@ class SimklImporter:
 
         for movie in movie_list:
             self._progress_current += 1
-            import_progress.report(self._progress_current, self._progress_total, "SIMKL")
+            import_progress.report(
+                self._progress_current, self._progress_total, "SIMKL"
+            )
             try:
                 title = movie["movie"]["title"]
                 logger.debug("Processing %s", title)
@@ -597,7 +607,9 @@ class SimklImporter:
 
         for anime in anime_list:
             self._progress_current += 1
-            import_progress.report(self._progress_current, self._progress_total, "SIMKL")
+            import_progress.report(
+                self._progress_current, self._progress_total, "SIMKL"
+            )
             try:
                 self._process_single_anime_entry(anime, existing_anime_ids)
             except Exception as error:
@@ -641,8 +653,7 @@ class SimklImporter:
         except services.ProviderAPIError as error:
             if error.status_code == requests.codes.not_found:
                 self.warnings.append(
-                    f"{title}: not found in {Sources.MAL.label} "
-                    f"with ID {mal_id}.",
+                    f"{title}: not found in {Sources.MAL.label} with ID {mal_id}.",
                 )
                 return
             raise

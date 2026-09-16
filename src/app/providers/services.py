@@ -84,6 +84,7 @@ def interactive_request_scope():
     finally:
         _interactive_request.reset(token)
 
+
 # MusicBrainz MBIDs are UUIDs (36 chars); shorter values are not valid
 # recording IDs and should be treated as not found.
 MUSICBRAINZ_MBID_MIN_LENGTH = 30
@@ -721,7 +722,9 @@ def api_request(
         Parsed JSON dict or ElementTree for XML
     """
     if cache.get(_rate_limit_cooldown_key(provider, headers)):
-        logger.warning("%s request skipped: provider is in rate-limit cooldown", provider)
+        logger.warning(
+            "%s request skipped: provider is in rate-limit cooldown", provider
+        )
         raise ProviderAPIError(
             provider,
             requests.exceptions.RequestException("rate-limit cooldown"),
@@ -760,7 +763,9 @@ def api_request(
         # handle rate limiting
         interactive = _interactive_request.get()
         max_retries = (
-            RATE_LIMIT_MAX_RETRIES_INTERACTIVE if interactive else RATE_LIMIT_MAX_RETRIES
+            RATE_LIMIT_MAX_RETRIES_INTERACTIVE
+            if interactive
+            else RATE_LIMIT_MAX_RETRIES
         )
         if status_code == requests.codes.too_many_requests:
             max_wait = (
@@ -1059,10 +1064,14 @@ def get_media_metadata(
         if order is not None:
             from app.services.episode_ordering import metadata_for_order
 
-            return _ensure_title_fields(metadata_for_order(
-                media_type, order, season_numbers=season_numbers,
-                episode_number=episode_number,
-            ))
+            return _ensure_title_fields(
+                metadata_for_order(
+                    media_type,
+                    order,
+                    season_numbers=season_numbers,
+                    episode_number=episode_number,
+                )
+            )
     if media_type == MediaTypes.MUSIC.value and source == Sources.MANUAL.value:
         item = Item.objects.filter(
             media_id=media_id,
@@ -1206,7 +1215,9 @@ def get_media_metadata(
             else openlibrary.book(media_id)
         ),
         MediaTypes.COMIC.value: lambda: comicvine.comic(media_id, user=user),
-        MediaTypes.COMIC_ISSUE.value: lambda: comicvine.comic_issue(media_id, user=user),
+        MediaTypes.COMIC_ISSUE.value: lambda: comicvine.comic_issue(
+            media_id, user=user
+        ),
         MediaTypes.BOARDGAME.value: lambda: bgg.boardgame(media_id),
         MediaTypes.MUSIC.value: lambda: musicbrainz.recording(media_id),
         MediaTypes.PODCAST.value: lambda: _resolve_podcast_metadata(
@@ -1248,12 +1259,8 @@ def _resolve_search_source(media_type, source=None):
     """Return the effective search provider for a media type."""
     resolved = _normalize_source_value(source)
     if resolved:
-        if (
-            resolved == Sources.TVDB.value
-            and not tvdb.enabled()
-        ) or (
-            resolved == Sources.GOOGLEBOOKS.value
-            and not googlebooks.enabled()
+        if (resolved == Sources.TVDB.value and not tvdb.enabled()) or (
+            resolved == Sources.GOOGLEBOOKS.value and not googlebooks.enabled()
         ):
             resolved = None
         else:
@@ -1261,12 +1268,10 @@ def _resolve_search_source(media_type, source=None):
 
     default_source = config.get_default_source_name(media_type)
     default_value = _normalize_source_value(default_source)
-    if default_value not in {Sources.TVDB.value, Sources.GOOGLEBOOKS.value} or (
-        default_value == Sources.TVDB.value
-        and tvdb.enabled()
-    ) or (
-        default_value == Sources.GOOGLEBOOKS.value
-        and googlebooks.enabled()
+    if (
+        default_value not in {Sources.TVDB.value, Sources.GOOGLEBOOKS.value}
+        or (default_value == Sources.TVDB.value and tvdb.enabled())
+        or (default_value == Sources.GOOGLEBOOKS.value and googlebooks.enabled())
     ):
         return default_value
 
@@ -1625,7 +1630,9 @@ def search(
             else hardcover.search(query, page, user=user)
         ),
         MediaTypes.COMIC.value: lambda: comicvine.search(query, page, user=user),
-        MediaTypes.COMIC_ISSUE.value: lambda: comicvine.search_issues(query, page, user=user),
+        MediaTypes.COMIC_ISSUE.value: lambda: comicvine.search_issues(
+            query, page, user=user
+        ),
         MediaTypes.BOARDGAME.value: lambda: bgg.search(query, page),
         MediaTypes.MUSIC.value: lambda: musicbrainz.search_combined(query, page),
         MediaTypes.PODCAST.value: lambda: (

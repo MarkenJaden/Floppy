@@ -106,9 +106,10 @@ class TvTimeShowImporter(TraktMetadataResolverMixin):
             import_progress.report(i, total, "TV Time")
             # Rows without an episode number aren't episode watch entries
             # (e.g. "follow" activity), matching the reference tool's filter.
-            if not (row.get("series_name") or "").strip() or not (
-                row.get("episode_number") or ""
-            ).strip():
+            if (
+                not (row.get("series_name") or "").strip()
+                or not (row.get("episode_number") or "").strip()
+            ):
                 continue
             try:
                 self._process_row(row)
@@ -188,9 +189,10 @@ class TvTimeShowImporter(TraktMetadataResolverMixin):
         ):
             return
 
-        if self.mode == "overwrite" and tmdb_id in self.existing_media[
-            MediaTypes.TV.value
-        ][Sources.TMDB.value]:
+        if (
+            self.mode == "overwrite"
+            and tmdb_id in self.existing_media[MediaTypes.TV.value][Sources.TMDB.value]
+        ):
             self.to_delete[MediaTypes.TV.value][Sources.TMDB.value].add(tmdb_id)
 
         tv_metadata = self._get_tv_metadata(tmdb_id, series_name)
@@ -301,7 +303,9 @@ class TvTimeShowImporter(TraktMetadataResolverMixin):
         """Return (season_obj, created_this_run), reusing an existing DB/pending row."""
         season_key = (tmdb_id, season_number)
         if season_key in self.pending_season:
-            return self.pending_season[season_key], season_key in self.season_created_this_run
+            return self.pending_season[
+                season_key
+            ], season_key in self.season_created_this_run
 
         season_obj = None
         if tmdb_id not in self.to_delete[MediaTypes.TV.value][Sources.TMDB.value]:

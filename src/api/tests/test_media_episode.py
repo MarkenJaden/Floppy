@@ -24,8 +24,7 @@ class MediaEpisodeTests(FloppyApiTestCase):
             "api.views.services.get_media_metadata",
             return_value={
                 "episodes": [
-                    {"episode_number": episode_number}
-                    for episode_number in (1, 2, 3)
+                    {"episode_number": episode_number} for episode_number in (1, 2, 3)
                 ],
                 "related": {"seasons": [{"season_number": 1}]},
             },
@@ -154,9 +153,7 @@ class MediaEpisodeTests(FloppyApiTestCase):
         self.assertEqual(payload["source"], tv_item.source)
         self.assertIn("consumptions", payload)
         self.assertIn("lists", payload)
-        self.assertEqual(
-            payload["details"]["season_number"], season_item.season_number
-        )
+        self.assertEqual(payload["details"]["season_number"], season_item.season_number)
         self.assertEqual(
             payload["details"]["episode_number"], episode_item.episode_number
         )

@@ -1774,7 +1774,9 @@ class DeleteMedia(TestCase):
             title="Custom Show",
             image="http://example.com/image.jpg",
         )
-        tv_obj = TV.objects.create(item=item, user=self.user, status=Status.IN_PROGRESS.value)
+        tv_obj = TV.objects.create(
+            item=item, user=self.user, status=Status.IN_PROGRESS.value
+        )
 
         response = self.client.post(
             reverse("media_delete"),

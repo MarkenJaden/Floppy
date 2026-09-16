@@ -567,7 +567,9 @@ def collapse_batch_events(media_events):
             continue
 
         group.sort(key=lambda e: e.content_number or 0)
-        episode_numbers = [e.content_number for e in group if e.content_number is not None]
+        episode_numbers = [
+            e.content_number for e in group if e.content_number is not None
+        ]
         units.append(
             BatchEvent(
                 first_event=group[0],

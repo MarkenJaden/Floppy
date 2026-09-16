@@ -32,6 +32,7 @@ TRAKT_DEVICE_MAX_INTERVAL = 60
 BULK_PAGE_SIZE = 1000
 TRAKT_UNKNOWN_DATE = "1970-01-01T00:00:00.000Z"
 
+
 def _parse_watched_at(watched_at: str):
     if watched_at == TRAKT_UNKNOWN_DATE:
         return None
@@ -153,8 +154,7 @@ def request_device_code(client_id=None):
     except (services.ProviderAPIError, requests.RequestException) as error:
         logger.warning("Trakt device code request failed: %s", error)
         msg = (
-            "Could not start Trakt authorization. "
-            "Check TRAKT_API and TRAKT_API_SECRET."
+            "Could not start Trakt authorization. Check TRAKT_API and TRAKT_API_SECRET."
         )
         raise MediaImportError(msg) from error
 
@@ -305,13 +305,15 @@ class TraktMetadataResolverMixin:
         """Extract TMDB ID from entry data, falling back to a title search."""
         reference = self._get_trakt_reference(entry_data, media_type)
         self._last_external_reference = (entry_data, media_type, reference)
-        if reference and reference.review_status == external_references.ExternalReferenceReviewStatus.IGNORED.value:
+        if (
+            reference
+            and reference.review_status
+            == external_references.ExternalReferenceReviewStatus.IGNORED.value
+        ):
             return None
         target = external_references.reference_target(reference)
         target_type = (
-            MediaTypes.TV.value
-            if media_type == MediaTypes.SEASON.value
-            else media_type
+            MediaTypes.TV.value if media_type == MediaTypes.SEASON.value else media_type
         )
         if target and target.media_type == target_type:
             return str(target.media_id)
@@ -489,9 +491,7 @@ class TraktMetadataResolverMixin:
         # bucket, so the caller passes the show's anime route down to the season
         # and episode rows.
         desired_bucket = (
-            library_media_type
-            or metadata.get("library_media_type")
-            or media_type
+            library_media_type or metadata.get("library_media_type") or media_type
         )
 
         existing = list(app.models.Item.objects.filter(**item_kwargs))

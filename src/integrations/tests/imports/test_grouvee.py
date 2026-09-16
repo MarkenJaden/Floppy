@@ -166,7 +166,9 @@ class ImportGrouveeTimeLimit(TestCase):
 
     def test_entries_processed_before_the_limit_are_still_saved(self):
         """A time limit mid-import saves prior entries instead of losing them."""
-        user = get_user_model().objects.create_user(username="timelimit", password="***")
+        user = get_user_model().objects.create_user(
+            username="timelimit", password="***"
+        )
 
         def side_effect(media_type, media_id, source):
             if media_id == "128167":

@@ -128,7 +128,9 @@ class PathsCheckTests(SimpleTestCase):
         for marker in preflight._CONTAINER_MARKERS:
             with self.subTest(marker=str(marker)):
                 with mock.patch.object(
-                    Path, "exists", autospec=True,
+                    Path,
+                    "exists",
+                    autospec=True,
                     side_effect=lambda self, w=marker: self == w,
                 ):
                     self.assertTrue(preflight.in_container())
@@ -150,12 +152,15 @@ class PathsCheckTests(SimpleTestCase):
         ):
             with self.subTest(container=containerised):
                 with _TempDatabase() as temp, temp.settings():
-                    with mock.patch.object(
-                        preflight, "in_container", return_value=containerised
-                    ), mock.patch.object(
-                        preflight,
-                        "_probe_writable",
-                        return_value="Read-only file system",
+                    with (
+                        mock.patch.object(
+                            preflight, "in_container", return_value=containerised
+                        ),
+                        mock.patch.object(
+                            preflight,
+                            "_probe_writable",
+                            return_value="Read-only file system",
+                        ),
                     ):
                         result = preflight.check_paths()
 
@@ -255,7 +260,9 @@ class DatabaseCheckTests(SimpleTestCase):
                 with mock.patch.object(
                     preflight,
                     "inspect_database",
-                    side_effect=preflight.IntegrityScanTimeoutError("scan exceeded 0.1s"),
+                    side_effect=preflight.IntegrityScanTimeoutError(
+                        "scan exceeded 0.1s"
+                    ),
                 ):
                     result = preflight.check_database(timeout_seconds=0.1)
 
@@ -287,7 +294,9 @@ class DatabaseCheckTests(SimpleTestCase):
                 with mock.patch.object(
                     preflight,
                     "inspect_database",
-                    side_effect=preflight.IntegrityScanTimeoutError("scan exceeded 0.1s"),
+                    side_effect=preflight.IntegrityScanTimeoutError(
+                        "scan exceeded 0.1s"
+                    ),
                 ):
                     result = preflight.check_database(timeout_seconds=0.1)
 
@@ -320,7 +329,9 @@ class DatabaseCheckTests(SimpleTestCase):
                 with mock.patch.object(
                     preflight,
                     "inspect_database",
-                    side_effect=preflight.IntegrityScanTimeoutError("scan exceeded 0.1s"),
+                    side_effect=preflight.IntegrityScanTimeoutError(
+                        "scan exceeded 0.1s"
+                    ),
                 ):
                     result = preflight.check_database(timeout_seconds=0.1)
 
@@ -348,7 +359,9 @@ class DatabaseCheckTests(SimpleTestCase):
                 with mock.patch.object(
                     preflight,
                     "inspect_database",
-                    side_effect=preflight.IntegrityScanTimeoutError("scan exceeded 0.1s"),
+                    side_effect=preflight.IntegrityScanTimeoutError(
+                        "scan exceeded 0.1s"
+                    ),
                 ):
                     result = preflight.check_database(timeout_seconds=0.1)
 
@@ -362,7 +375,9 @@ class DatabaseCheckTests(SimpleTestCase):
                 with mock.patch.object(
                     preflight,
                     "inspect_database",
-                    side_effect=preflight.IntegrityScanTimeoutError("scan exceeded 0.1s"),
+                    side_effect=preflight.IntegrityScanTimeoutError(
+                        "scan exceeded 0.1s"
+                    ),
                 ):
                     result = preflight.check_database(timeout_seconds=0.1)
 
@@ -399,9 +414,11 @@ class DatabaseCheckTests(SimpleTestCase):
                 result = preflight.check_database()
             after = sorted(p.name for p in temp.data_dir.iterdir())
 
-            rows = sqlite3.connect(temp.db_path).execute(
-                "SELECT count(*) FROM child"
-            ).fetchone()[0]
+            rows = (
+                sqlite3.connect(temp.db_path)
+                .execute("SELECT count(*) FROM child")
+                .fetchone()[0]
+            )
 
         self.assertEqual(result.status, FAIL)
         self.assertEqual(before, after, "preflight created or removed a file")
@@ -525,8 +542,11 @@ class MigrationsCheckTests(SimpleTestCase):
         executor.migration_plan.return_value = []
         with _TempDatabase() as temp:
             _make_database(temp.db_path)
-            with temp.settings(), mock.patch.object(
-                preflight, "MigrationExecutor", return_value=executor
+            with (
+                temp.settings(),
+                mock.patch.object(
+                    preflight, "MigrationExecutor", return_value=executor
+                ),
             ):
                 result = preflight.check_migrations(database_ok=True)
 
@@ -539,8 +559,11 @@ class MigrationsCheckTests(SimpleTestCase):
         executor.migration_plan.return_value = [(migration, False)]
         with _TempDatabase() as temp:
             _make_database(temp.db_path)
-            with temp.settings(), mock.patch.object(
-                preflight, "MigrationExecutor", return_value=executor
+            with (
+                temp.settings(),
+                mock.patch.object(
+                    preflight, "MigrationExecutor", return_value=executor
+                ),
             ):
                 result = preflight.check_migrations(database_ok=True)
 
@@ -791,15 +814,15 @@ class CommandTests(TestCase):
         applied = preflight.CheckResult(
             name="migrations", status=OK, summary="none pending"
         )
-        with mock.patch(_CMD + "run_checks", return_value=results), \
-             mock.patch(
-                 _CMD + "call_command"
-             ) as migrate, \
-             mock.patch(_CMD + "check_database", return_value=self._passing()[2]), \
-             mock.patch(
-                 _CMD + "check_migrations",
-                 return_value=applied,
-             ):
+        with (
+            mock.patch(_CMD + "run_checks", return_value=results),
+            mock.patch(_CMD + "call_command") as migrate,
+            mock.patch(_CMD + "check_database", return_value=self._passing()[2]),
+            mock.patch(
+                _CMD + "check_migrations",
+                return_value=applied,
+            ),
+        ):
             output, code = self._run("--auto-migrate")
 
         self.assertEqual(code, 0)
@@ -816,15 +839,15 @@ class CommandTests(TestCase):
         applied = preflight.CheckResult(
             name="migrations", status=OK, summary="none pending"
         )
-        with mock.patch(_CMD + "run_checks", return_value=results), \
-             mock.patch(
-                 _CMD + "call_command"
-             ) as migrate, \
-             mock.patch(_CMD + "check_database", return_value=self._passing()[2]), \
-             mock.patch(
-                 _CMD + "check_migrations",
-                 return_value=applied,
-             ):
+        with (
+            mock.patch(_CMD + "run_checks", return_value=results),
+            mock.patch(_CMD + "call_command") as migrate,
+            mock.patch(_CMD + "check_database", return_value=self._passing()[2]),
+            mock.patch(
+                _CMD + "check_migrations",
+                return_value=applied,
+            ),
+        ):
             output, _code = self._run("--auto-migrate", "--json")
 
         json.loads(output)
@@ -856,11 +879,13 @@ class CommandTests(TestCase):
         # what makes them collide. Capturing the process stream rather than
         # handing the command a private one is what reproduces that.
         buffer = StringIO()
-        with mock.patch(_CMD + "run_checks", return_value=results), \
-             mock.patch(_CMD + "call_command", side_effect=print_then_migrate), \
-             mock.patch(_CMD + "check_database", return_value=self._passing()[2]), \
-             mock.patch(_CMD + "check_migrations", return_value=applied), \
-             redirect_stdout(buffer):
+        with (
+            mock.patch(_CMD + "run_checks", return_value=results),
+            mock.patch(_CMD + "call_command", side_effect=print_then_migrate),
+            mock.patch(_CMD + "check_database", return_value=self._passing()[2]),
+            mock.patch(_CMD + "check_migrations", return_value=applied),
+            redirect_stdout(buffer),
+        ):
             with suppress(SystemExit):  # the report is what matters here
                 call_command("floppy_preflight", "--auto-migrate", "--json")
 
@@ -882,8 +907,10 @@ class CommandTests(TestCase):
         )
         broken = Exception("Migration app.0109 is applied before its dependency")
 
-        with mock.patch(_CMD + "run_checks", return_value=results), \
-             mock.patch(_CMD + "call_command", side_effect=broken):
+        with (
+            mock.patch(_CMD + "run_checks", return_value=results),
+            mock.patch(_CMD + "call_command", side_effect=broken),
+        ):
             output, code = self._run("--auto-migrate", "--json")
 
         payload = json.loads(output)
@@ -906,9 +933,11 @@ class CommandTests(TestCase):
         applied = preflight.CheckResult(
             name="migrations", status=OK, summary="none pending"
         )
-        with mock.patch(_CMD + "run_checks", return_value=results), \
-             mock.patch(_CMD + "call_command") as migrate, \
-             mock.patch(_CMD + "check_migrations", return_value=applied):
+        with (
+            mock.patch(_CMD + "run_checks", return_value=results),
+            mock.patch(_CMD + "call_command") as migrate,
+            mock.patch(_CMD + "check_migrations", return_value=applied),
+        ):
             _output, code = self._run("--auto-migrate")
 
         self.assertEqual(code, 0)
@@ -928,8 +957,10 @@ class CommandTests(TestCase):
         results[3] = preflight.CheckResult(
             name="migrations", status=SKIPPED, summary="the database is unavailable"
         )
-        with mock.patch(_CMD + "run_checks", return_value=results), \
-             mock.patch(_CMD + "call_command") as migrate:
+        with (
+            mock.patch(_CMD + "run_checks", return_value=results),
+            mock.patch(_CMD + "call_command") as migrate,
+        ):
             _output, code = self._run("--auto-migrate")
 
         self.assertEqual(code, 1)
@@ -952,15 +983,17 @@ class CommandTests(TestCase):
         built = preflight.CheckResult(
             name="database", status=OK, summary="sqlite storage is intact"
         )
-        with mock.patch(_CMD + "run_checks", return_value=results), \
-             mock.patch(_CMD + "call_command"), \
-             mock.patch(_CMD + "check_database", return_value=built) as recheck, \
-             mock.patch(
-                 _CMD + "check_migrations",
-                 return_value=preflight.CheckResult(
-                     name="migrations", status=OK, summary="none pending"
-                 ),
-             ):
+        with (
+            mock.patch(_CMD + "run_checks", return_value=results),
+            mock.patch(_CMD + "call_command"),
+            mock.patch(_CMD + "check_database", return_value=built) as recheck,
+            mock.patch(
+                _CMD + "check_migrations",
+                return_value=preflight.CheckResult(
+                    name="migrations", status=OK, summary="none pending"
+                ),
+            ),
+        ):
             output, code = self._run("--auto-migrate")
 
         self.assertEqual(code, 0)
@@ -979,10 +1012,10 @@ class CommandTests(TestCase):
         json.loads(output)
 
     def test_does_not_migrate_when_nothing_is_pending(self):
-        with mock.patch(_CMD + "run_checks", return_value=self._passing()), \
-             mock.patch(
-                 _CMD + "call_command"
-             ) as migrate:
+        with (
+            mock.patch(_CMD + "run_checks", return_value=self._passing()),
+            mock.patch(_CMD + "call_command") as migrate,
+        ):
             _output, code = self._run("--auto-migrate")
 
         self.assertEqual(code, 0)

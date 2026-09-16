@@ -126,9 +126,7 @@ def is_approved_url(url):
     if parsed.scheme.lower() not in {"http", "https"}:
         return False
     try:
-        has_credentials_or_port = (
-            parsed.username or parsed.password or parsed.port
-        )
+        has_credentials_or_port = parsed.username or parsed.password or parsed.port
     except ValueError:
         return False
     if has_credentials_or_port:
@@ -181,7 +179,9 @@ def rewrite_payload_images(payload, request=None):
     if isinstance(payload, list):
         return [rewrite_payload_images(value, request=request) for value in payload]
     if isinstance(payload, tuple):
-        return tuple(rewrite_payload_images(value, request=request) for value in payload)
+        return tuple(
+            rewrite_payload_images(value, request=request) for value in payload
+        )
     if isinstance(payload, dict):
         return {
             key: (
@@ -227,9 +227,14 @@ def _fetch_to_disk(url):
         else:
             return False
 
-        if response is None or not HTTP_OK <= response.status_code < HTTP_MULTIPLE_CHOICES:
+        if (
+            response is None
+            or not HTTP_OK <= response.status_code < HTTP_MULTIPLE_CHOICES
+        ):
             return False
-        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        content_type = (
+            response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        )
         if not content_type.startswith("image/") or content_type == "image/svg+xml":
             return False
         try:

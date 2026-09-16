@@ -300,8 +300,7 @@ def _build_search_query_condition(query, *, tokenized=False):
     if not escaped_query:
         return None
     return (
-        f'(name ~ *"{escaped_query}"* '
-        f'| alternative_names.name ~ *"{escaped_query}"*)'
+        f'(name ~ *"{escaped_query}"* | alternative_names.name ~ *"{escaped_query}"*)'
     )
 
 

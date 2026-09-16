@@ -473,7 +473,9 @@ def _deduplicate_season_related_tv_item_rows(seasons):
     for season in seasons:
         related_tv_pk = season.related_tv.pk if season.related_tv_id else None
         key = (
-            related_tv_pk if related_tv_pk is not None else f"unsaved:{id(season.related_tv)}",
+            related_tv_pk
+            if related_tv_pk is not None
+            else f"unsaved:{id(season.related_tv)}",
             season.item_id,
         )
         existing = by_related_tv_item.get(key)
@@ -507,8 +509,12 @@ def bulk_create_media(bulk_media_list, user, *, backfill_completed=True):
             ordered_episodes.append(episode)
             continue
         targets = resolve_incoming(
-            user, item.media_id, item.source, item.season_number,
-            item.episode_number, integration="import",
+            user,
+            item.media_id,
+            item.source,
+            item.season_number,
+            item.episode_number,
+            integration="import",
         )
         if targets is None:
             ordered_episodes.append(episode)
@@ -526,12 +532,14 @@ def bulk_create_media(bulk_media_list, user, *, backfill_completed=True):
     # alternate orders may split or combine those groups.
     active_shows = set(
         app.models.TV.objects.filter(
-            user=user, active_episode_order__isnull=False,
+            user=user,
+            active_episode_order__isnull=False,
         ).values_list("item__source", "item__media_id"),
     )
     if MediaTypes.SEASON.value in bulk_media_list:
         bulk_media_list[MediaTypes.SEASON.value] = [
-            season for season in bulk_media_list[MediaTypes.SEASON.value]
+            season
+            for season in bulk_media_list[MediaTypes.SEASON.value]
             if season.item.episode_order_id
             or (season.item.source, season.item.media_id) not in active_shows
         ]

@@ -137,7 +137,9 @@ class CeleryDispatchRoutingTests(SimpleTestCase):
             # already registered, so the injected real implementation has to be
             # unregistered first or the stand-in silently never takes effect.
             self.app.tasks.pop(name, None)
-            return self.app.task(name=name, ignore_result=True, shared=False, typing=False)(task_body)
+            return self.app.task(
+                name=name, ignore_result=True, shared=False, typing=False
+            )(task_body)
 
         self.background_task = _register("Backfill item metadata")
         self.followup_task = _register("Import from Radarr (Recurring)")

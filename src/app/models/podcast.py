@@ -42,7 +42,9 @@ class PodcastShow(models.Model):
         blank=True, default="", help_text="RSS feed URL for fetching full episode list"
     )
     website_url = models.URLField(
-        blank=True, default="", help_text="Podcast homepage URL from the RSS <link> element"
+        blank=True,
+        default="",
+        help_text="Podcast homepage URL from the RSS <link> element",
     )
 
     class Meta:

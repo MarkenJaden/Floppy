@@ -99,14 +99,18 @@ class ImageCacheServiceTests(TestCase):
             return_value=_response(body, **{"Content-Length": str(len(body))}),
         ):
             self.assertEqual(
-                self.client.get(reverse("image_cache", kwargs={"token": token})).status_code,
+                self.client.get(
+                    reverse("image_cache", kwargs={"token": token})
+                ).status_code,
                 200,
             )
 
         image_cache.set_enabled(False)
         with patch("app.image_cache.requests.get") as fetch:
             self.assertEqual(
-                self.client.get(reverse("image_cache", kwargs={"token": token})).status_code,
+                self.client.get(
+                    reverse("image_cache", kwargs={"token": token})
+                ).status_code,
                 200,
             )
             missing_token = image_cache._token_for_url(
@@ -127,12 +131,16 @@ class ImageCacheServiceTests(TestCase):
         )
         tampered_token = f"{valid_token[:-1]}x"
         self.assertEqual(
-            self.client.get(reverse("image_cache", kwargs={"token": tampered_token})).status_code,
+            self.client.get(
+                reverse("image_cache", kwargs={"token": tampered_token})
+            ).status_code,
             404,
         )
         unknown_token = image_cache._token_for_url("https://example.com/image.jpg")
         self.assertEqual(
-            self.client.get(reverse("image_cache", kwargs={"token": unknown_token})).status_code,
+            self.client.get(
+                reverse("image_cache", kwargs={"token": unknown_token})
+            ).status_code,
             404,
         )
 
@@ -145,7 +153,9 @@ class ImageCacheServiceTests(TestCase):
         )
         with patch("app.image_cache.requests.get", return_value=redirect) as fetch:
             self.assertEqual(
-                self.client.get(reverse("image_cache", kwargs={"token": token})).status_code,
+                self.client.get(
+                    reverse("image_cache", kwargs={"token": token})
+                ).status_code,
                 404,
             )
         fetch.assert_called_once()
@@ -153,7 +163,9 @@ class ImageCacheServiceTests(TestCase):
         non_image = _response(b"not an image", content_type="text/html")
         with patch("app.image_cache.requests.get", return_value=non_image):
             self.assertEqual(
-                self.client.get(reverse("image_cache", kwargs={"token": token})).status_code,
+                self.client.get(
+                    reverse("image_cache", kwargs={"token": token})
+                ).status_code,
                 404,
             )
 
@@ -206,5 +218,7 @@ class ImageCacheServiceTests(TestCase):
         result = json.loads(rendered)
 
         self.assertTrue(result["image"].startswith("http://testserver/image-cache/"))
-        self.assertEqual(result["nested"][0]["image_url"], "https://example.com/manual.jpg")
+        self.assertEqual(
+            result["nested"][0]["image_url"], "https://example.com/manual.jpg"
+        )
         self.assertEqual(set(result), set(payload))

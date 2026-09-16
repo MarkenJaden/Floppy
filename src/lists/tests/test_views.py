@@ -741,8 +741,7 @@ class ListDetailViewTests(TestCase):
         TV.objects.create(item=self.tv_item, status=None, user=self.user)
 
         response = self.client.get(
-            reverse("list_detail", args=[self.custom_list.id])
-            + "?status=no_status",
+            reverse("list_detail", args=[self.custom_list.id]) + "?status=no_status",
         )
 
         self.assertEqual(response.status_code, 200)
@@ -1303,7 +1302,9 @@ class ListDetailViewTests(TestCase):
         ]
         Item.objects.bulk_create(items)
         items = list(
-            Item.objects.filter(media_id__startswith="smart-batch-movie-").order_by("id")
+            Item.objects.filter(media_id__startswith="smart-batch-movie-").order_by(
+                "id"
+            )
         )
         Movie.objects.bulk_create(
             [
@@ -1325,8 +1326,7 @@ class ListDetailViewTests(TestCase):
         )
 
         response = self.client.get(
-            reverse("list_detail", args=[smart_list.public_reference])
-            + "?page=2",
+            reverse("list_detail", args=[smart_list.public_reference]) + "?page=2",
         )
 
         self.assertEqual(response.status_code, 200)
@@ -1502,7 +1502,9 @@ class ListDetailViewTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "lists/components/list_table.html")
-        self.assertContains(response, 'class="w-full bg-[var(--color-surface)] media-table"')
+        self.assertContains(
+            response, 'class="w-full bg-[var(--color-surface)] media-table"'
+        )
 
     @patch.object(get_user_model(), "update_preference")
     @patch.object(CustomList, "user_can_view")
@@ -2440,7 +2442,9 @@ class ListDetailViewTests(TestCase):
             media_type=MediaTypes.TV.value,
             image=settings.IMG_NONE,
         )
-        tv = TV.objects.create(item=tv_item, user=self.user, status=Status.IN_PROGRESS.value)
+        tv = TV.objects.create(
+            item=tv_item, user=self.user, status=Status.IN_PROGRESS.value
+        )
         season = Season.objects.create(
             item=season_item,
             user=self.user,
@@ -4455,7 +4459,9 @@ class CollectionAddToListTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
     @patch("lists.views_list_actions.services.get_media_metadata")
-    def test_collection_submit_adds_items_and_handles_duplicates(self, mock_get_metadata):
+    def test_collection_submit_adds_items_and_handles_duplicates(
+        self, mock_get_metadata
+    ):
         """Submitting adds items to the custom list, creates Item objects, and ignores existing items."""
         mock_get_metadata.return_value = {
             "related": {
@@ -4497,10 +4503,14 @@ class CollectionAddToListTests(TestCase):
         # Check total items in custom list is 3 (1 existing + 2 newly added)
         self.assertEqual(self.custom_list.items.count(), 3)
         self.assertTrue(
-            self.custom_list.items.filter(media_id="604", title="The Matrix Reloaded").exists()
+            self.custom_list.items.filter(
+                media_id="604", title="The Matrix Reloaded"
+            ).exists()
         )
         self.assertTrue(
-            self.custom_list.items.filter(media_id="605", title="The Matrix Revolutions").exists()
+            self.custom_list.items.filter(
+                media_id="605", title="The Matrix Revolutions"
+            ).exists()
         )
 
         # Check ListActivity records
@@ -4509,4 +4519,3 @@ class CollectionAddToListTests(TestCase):
             activity_type=ListActivityType.ITEM_ADDED,
         )
         self.assertEqual(activities.count(), 2)
-

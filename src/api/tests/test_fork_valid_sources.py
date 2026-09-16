@@ -44,7 +44,9 @@ class ForkExtraSourcesTests(FloppyApiTestCase):
         # Books are deliberately untouched: `_storyteller_book` and friends
         # resolve, but nothing on this deployment tracks one, so widening that
         # entry would close a hole no client can reach.
-        self.assertNotIn(Sources.STORYTELLER.value, VALID_SOURCES[MediaTypes.BOOK.value])
+        self.assertNotIn(
+            Sources.STORYTELLER.value, VALID_SOURCES[MediaTypes.BOOK.value]
+        )
 
     def test_an_unroutable_source_is_still_refused(self):
         """The gate still gates — this widens the table, it does not open it."""

@@ -69,16 +69,22 @@ class DeliveryReceiptGatewayTests(FloppyApiTestCase):
         self.assertEqual(response.data, {"status": "ok"})
         mock_fn.assert_called_once()
 
-        receipt = IntegrationEventReceipt.objects.get(user=self.user1, client_event_id="evt-001")
+        receipt = IntegrationEventReceipt.objects.get(
+            user=self.user1, client_event_id="evt-001"
+        )
         self.assertEqual(receipt.response_status_code, 200)
         self.assertEqual(receipt.response_body, {"status": "ok"})
         self.assertEqual(receipt.payload_digest, calculate_payload_digest(payload))
         self.assertIsNone(receipt.token)
-        self.assertEqual(str(receipt), f"IntegrationEventReceipt({self.user1.username}, evt-001)")
+        self.assertEqual(
+            str(receipt), f"IntegrationEventReceipt({self.user1.username}, evt-001)"
+        )
 
     def test_replay_returns_cached_response_without_reexecution(self):
         """Identical payload on existing client_event_id returns cached response without callback."""
-        mock_fn = MagicMock(return_value=Response({"detail": "processed"}, status=HTTP.OK))
+        mock_fn = MagicMock(
+            return_value=Response({"detail": "processed"}, status=HTTP.OK)
+        )
         payload = {"action": "stop", "media_type": "movie"}
 
         # First call
@@ -160,10 +166,14 @@ class DeliveryReceiptGatewayTests(FloppyApiTestCase):
         self.assertEqual(res1.data, {"user": 1})
         self.assertEqual(res2.data, {"user": 2})
         self.assertTrue(
-            IntegrationEventReceipt.objects.filter(user=self.user1, client_event_id="shared-evt-id").exists()
+            IntegrationEventReceipt.objects.filter(
+                user=self.user1, client_event_id="shared-evt-id"
+            ).exists()
         )
         self.assertTrue(
-            IntegrationEventReceipt.objects.filter(user=self.user2, client_event_id="shared-evt-id").exists()
+            IntegrationEventReceipt.objects.filter(
+                user=self.user2, client_event_id="shared-evt-id"
+            ).exists()
         )
 
     def test_token_association_persisted(self):
@@ -179,7 +189,9 @@ class DeliveryReceiptGatewayTests(FloppyApiTestCase):
             token=token,
         )
 
-        receipt = IntegrationEventReceipt.objects.get(user=self.user1, client_event_id="evt-with-token")
+        receipt = IntegrationEventReceipt.objects.get(
+            user=self.user1, client_event_id="evt-with-token"
+        )
         self.assertEqual(receipt.token, token)
 
 
@@ -209,13 +221,19 @@ class ScrobbleIdempotencyTests(FloppyApiTestCase):
         self.assertEqual(res1.status_code, HTTP.OK)
         self.assertEqual(res1.data, {"detail": "accepted"})
 
-        receipt = IntegrationEventReceipt.objects.get(user=self.user1, client_event_id="scrobble-key-1")
+        receipt = IntegrationEventReceipt.objects.get(
+            user=self.user1, client_event_id="scrobble-key-1"
+        )
         self.assertEqual(receipt.response_status_code, HTTP.OK)
         self.assertEqual(receipt.token, self.token)
 
         # 2. Replay with identical payload returns cached 200 without reprocessing
-        with patch("api.fork_views_scrobble.ScrobbleView._update_live_playback") as mock_live:
-            res2 = self.call_api("post", "api_scrobble", payload=payload, headers=headers)
+        with patch(
+            "api.fork_views_scrobble.ScrobbleView._update_live_playback"
+        ) as mock_live:
+            res2 = self.call_api(
+                "post", "api_scrobble", payload=payload, headers=headers
+            )
             self.assertEqual(res2.status_code, HTTP.OK)
             self.assertEqual(res2.data, {"detail": "accepted"})
             mock_live.assert_not_called()
@@ -224,7 +242,11 @@ class ScrobbleIdempotencyTests(FloppyApiTestCase):
         res3 = self.call_api(
             "post",
             "api_scrobble",
-            payload={"action": "stop", "media_type": "movie", "ids": {"tmdb": movie_item.media_id}},
+            payload={
+                "action": "stop",
+                "media_type": "movie",
+                "ids": {"tmdb": movie_item.media_id},
+            },
             headers=headers,
         )
         self.assertEqual(res3.status_code, HTTP.CONFLICT)
@@ -240,20 +262,31 @@ class ScrobbleIdempotencyTests(FloppyApiTestCase):
             "ids": {"tmdb": movie_item.media_id},
         }
 
-        res1 = self.call_api("post", "api_scrobble", payload=payload, headers=self.integration_headers)
+        res1 = self.call_api(
+            "post", "api_scrobble", payload=payload, headers=self.integration_headers
+        )
         self.assertEqual(res1.status_code, HTTP.OK)
 
         self.assertTrue(
-            IntegrationEventReceipt.objects.filter(user=self.user1, client_event_id="body-event-99").exists()
+            IntegrationEventReceipt.objects.filter(
+                user=self.user1, client_event_id="body-event-99"
+            ).exists()
         )
 
         # Replay identical payload
-        res2 = self.call_api("post", "api_scrobble", payload=payload, headers=self.integration_headers)
+        res2 = self.call_api(
+            "post", "api_scrobble", payload=payload, headers=self.integration_headers
+        )
         self.assertEqual(res2.status_code, HTTP.OK)
 
         # Conflict on same client_event_id with different payload
         conflict_payload = {**payload, "action": "stop"}
-        res3 = self.call_api("post", "api_scrobble", payload=conflict_payload, headers=self.integration_headers)
+        res3 = self.call_api(
+            "post",
+            "api_scrobble",
+            payload=conflict_payload,
+            headers=self.integration_headers,
+        )
         self.assertEqual(res3.status_code, HTTP.CONFLICT)
 
 
@@ -279,7 +312,9 @@ class PlaybackProgressIdempotencyTests(FloppyApiTestCase):
         }
         headers = {**self.integration_headers, "HTTP_IDEMPOTENCY_KEY": "progress-put-1"}
 
-        res1 = self.call_api("put", "api_playback_progress", payload=payload, headers=headers)
+        res1 = self.call_api(
+            "put", "api_playback_progress", payload=payload, headers=headers
+        )
         self.assertEqual(res1.status_code, HTTP.OK)
         self.assertEqual(res1.data["position_seconds"], 350)
 
@@ -289,7 +324,9 @@ class PlaybackProgressIdempotencyTests(FloppyApiTestCase):
 
         # Replay identical PUT
         with patch("api.fork_views_playback.upsert_playback_progress") as mock_upsert:
-            res2 = self.call_api("put", "api_playback_progress", payload=payload, headers=headers)
+            res2 = self.call_api(
+                "put", "api_playback_progress", payload=payload, headers=headers
+            )
             self.assertEqual(res2.status_code, HTTP.OK)
             self.assertEqual(res2.data["position_seconds"], 350)
             mock_upsert.assert_not_called()
@@ -312,7 +349,11 @@ class PlaybackProgressIdempotencyTests(FloppyApiTestCase):
         res1 = self.call_api(
             "put",
             "api_playback_progress",
-            payload={"media_type": "movie", "ids": {"tmdb": movie_item.media_id}, "position_seconds": 100},
+            payload={
+                "media_type": "movie",
+                "ids": {"tmdb": movie_item.media_id},
+                "position_seconds": 100,
+            },
             headers={**self.auth_headers, "HTTP_IDEMPOTENCY_KEY": key},
         )
         self.assertEqual(res1.status_code, HTTP.OK)
@@ -320,7 +361,11 @@ class PlaybackProgressIdempotencyTests(FloppyApiTestCase):
         res2 = self.call_api(
             "put",
             "api_playback_progress",
-            payload={"media_type": "movie", "ids": {"tmdb": movie_item.media_id}, "position_seconds": 200},
+            payload={
+                "media_type": "movie",
+                "ids": {"tmdb": movie_item.media_id},
+                "position_seconds": 200,
+            },
             headers={**self.auth_headers2, "HTTP_IDEMPOTENCY_KEY": key},
         )
         self.assertEqual(res2.status_code, HTTP.OK)
@@ -333,15 +378,23 @@ class PlaybackProgressIdempotencyTests(FloppyApiTestCase):
     def test_playback_progress_delete_idempotency(self):
         """Playback progress DELETE supports Idempotency-Key and replays cleanly."""
         movie_item = self.items_by_type["movie"][0]
-        PlaybackProgress.objects.create(user=self.user1, item=movie_item, position_seconds=300)
+        PlaybackProgress.objects.create(
+            user=self.user1, item=movie_item, position_seconds=300
+        )
 
         payload = {"media_type": "movie", "ids": {"tmdb": movie_item.media_id}}
         headers = {**self.auth_headers, "HTTP_IDEMPOTENCY_KEY": "del-key-1"}
 
-        res1 = self.call_api("delete", "api_playback_progress", payload=payload, headers=headers)
+        res1 = self.call_api(
+            "delete", "api_playback_progress", payload=payload, headers=headers
+        )
         self.assertEqual(res1.status_code, HTTP.NO_CONTENT)
-        self.assertFalse(PlaybackProgress.objects.filter(user=self.user1, item=movie_item).exists())
+        self.assertFalse(
+            PlaybackProgress.objects.filter(user=self.user1, item=movie_item).exists()
+        )
 
         # Replay delete
-        res2 = self.call_api("delete", "api_playback_progress", payload=payload, headers=headers)
+        res2 = self.call_api(
+            "delete", "api_playback_progress", payload=payload, headers=headers
+        )
         self.assertEqual(res2.status_code, HTTP.NO_CONTENT)

@@ -523,7 +523,7 @@ def _bgg_hot_candidates(
 ) -> list[CandidateItem]:
     endpoint = "/xmlapi2/hot"
     params = {"type": "boardgame"}
-    headers = {"Authorization": f"Bearer {credentials.get("bgg", "token")}"}
+    headers = {"Authorization": f"Bearer {credentials.get('bgg', 'token')}"}
 
     def fetcher() -> list[dict]:
         root = services.api_request(

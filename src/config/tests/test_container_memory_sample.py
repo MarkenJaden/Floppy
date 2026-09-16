@@ -28,8 +28,10 @@ _ON_LINUX = skipUnless(sys.platform == "linux", "needs a real /proc and cgroup")
 # CI. The sampler now reports absent accounting as unknown instead of raising;
 # these tests assert on a real measured sample, so they need a host that
 # actually accounts memory.
-_HAS_CGROUP_MEMORY = (Path("/sys/fs/cgroup/memory.current").exists()
-                      or Path("/sys/fs/cgroup/memory/memory.usage_in_bytes").exists())
+_HAS_CGROUP_MEMORY = (
+    Path("/sys/fs/cgroup/memory.current").exists()
+    or Path("/sys/fs/cgroup/memory/memory.usage_in_bytes").exists()
+)
 _WITH_CGROUP_MEMORY = skipUnless(
     _HAS_CGROUP_MEMORY,
     "needs a host cgroup that accounts memory",
@@ -272,8 +274,13 @@ class RollUpTests(SimpleTestCase):
         roles = sampler._roll_up(
             [
                 process(1, "gunicorn", "gunicorn", role="gunicorn-worker"),
-                process(2, "gunicorn", "gunicorn", role="gunicorn-worker",
-                        uptime_seconds=99.0),
+                process(
+                    2,
+                    "gunicorn",
+                    "gunicorn",
+                    role="gunicorn-worker",
+                    uptime_seconds=99.0,
+                ),
             ],
         )
         worker = roles["gunicorn-worker"]

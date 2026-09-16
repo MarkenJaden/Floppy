@@ -26,7 +26,7 @@ class HorizontalScrollContractTests(SimpleTestCase):
     def test_base_loads_the_horizontal_drag_controller_once(self):
         base = self.read("templates/base.html")
 
-        script_tag = '<script src="{% static \'js/horizontal-scroll.js\' %}'
+        script_tag = "<script src=\"{% static 'js/horizontal-scroll.js' %}"
         self.assertEqual(base.count(script_tag), 1)
 
     def test_drag_styles_use_theme_tokens(self):

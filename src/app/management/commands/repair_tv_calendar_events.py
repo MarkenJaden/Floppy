@@ -95,8 +95,9 @@ class Command(BaseCommand):
             )
 
         self.stdout.write(
-            "\nUpdated: {updated}  Unchanged: {unchanged}  "
-            "Failed: {failed}".format(**counts),
+            "\nUpdated: {updated}  Unchanged: {unchanged}  Failed: {failed}".format(
+                **counts
+            ),
         )
 
     def _find_candidates(
@@ -207,8 +208,7 @@ class Command(BaseCommand):
             return "failed", 0
 
         changed_count = sum(
-            previous_events.get((event.item_id, event.content_number))
-            != event.datetime
+            previous_events.get((event.item_id, event.content_number)) != event.datetime
             for event in events_bulk
         )
         save_events(events_bulk)

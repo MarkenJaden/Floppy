@@ -454,8 +454,7 @@ def get_cached_history_window(
     total_days = len(normalized_day_keys)
     page_day_keys = normalized_day_keys[offset : offset + limit]
     payload_keys = [
-        _day_cache_key(user.id, logging_style, day_key)
-        for day_key in page_day_keys
+        _day_cache_key(user.id, logging_style, day_key) for day_key in page_day_keys
     ]
     payloads = cache.get_many(payload_keys) if payload_keys else {}
     cache_hits = len(payloads)

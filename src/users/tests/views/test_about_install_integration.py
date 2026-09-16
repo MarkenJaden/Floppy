@@ -161,7 +161,9 @@ class AboutInstallSectionTests(StaticLiveServerTestCase):
         expect(self.install_button(page)).to_be_hidden()
 
     def panel(self, page, heading):
-        return page.get_by_role("heading", name=heading).locator("xpath=ancestor::div[1]")
+        return page.get_by_role("heading", name=heading).locator(
+            "xpath=ancestor::div[1]"
+        )
 
     def test_only_the_visitors_platform_panel_is_shown(self):
         for name, kwargs, visible, hidden in (
@@ -181,7 +183,9 @@ class AboutInstallSectionTests(StaticLiveServerTestCase):
         expect(page.get_by_text("Installing on a phone instead?")).to_be_visible()
 
     def test_about_page_does_not_scroll_sideways_on_a_phone(self):
-        page = self.open_about(viewport={"width": 390, "height": 844}, user_agent=IOS_UA)
+        page = self.open_about(
+            viewport={"width": 390, "height": 844}, user_agent=IOS_UA
+        )
 
         widths = page.evaluate(
             "() => ({view: document.documentElement.clientWidth,"

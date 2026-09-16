@@ -275,8 +275,7 @@ class NuvioConformanceTests(FloppyApiTestCase):
         cursor = page.data["next_cursor"]
 
         self.client.get(
-            f"{PROGRESS_CHANGES}?cursor={cursor}"
-            f"&connection={self.binding.origin_key}",
+            f"{PROGRESS_CHANGES}?cursor={cursor}&connection={self.binding.origin_key}",
             **self.headers,
         )
 

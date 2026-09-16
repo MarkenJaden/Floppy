@@ -21,7 +21,9 @@ requires_proc_fd_backup = skipUnless(
 class WriteDatabaseSnapshotTaskTests(SimpleTestCase):
     @override_settings(USING_SQLITE_DATABASE=True, DB_SNAPSHOT_ENABLED=False)
     def test_skips_when_disabled(self):
-        with mock.patch("app.tasks_db_backup.create_live_database_snapshot") as snapshot:
+        with mock.patch(
+            "app.tasks_db_backup.create_live_database_snapshot"
+        ) as snapshot:
             result = write_database_snapshot()
 
         snapshot.assert_not_called()
@@ -29,7 +31,9 @@ class WriteDatabaseSnapshotTaskTests(SimpleTestCase):
 
     @override_settings(USING_SQLITE_DATABASE=False, DB_SNAPSHOT_ENABLED=True)
     def test_skips_on_postgres(self):
-        with mock.patch("app.tasks_db_backup.create_live_database_snapshot") as snapshot:
+        with mock.patch(
+            "app.tasks_db_backup.create_live_database_snapshot"
+        ) as snapshot:
             result = write_database_snapshot()
 
         snapshot.assert_not_called()

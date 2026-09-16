@@ -71,9 +71,7 @@ def get_adapter(binding):
 def _capability_for(watched):
     """Return the capability a write of this shape requires."""
     return (
-        CAPABILITY_WATCHED_PUSH_PLAYED
-        if watched
-        else CAPABILITY_WATCHED_PUSH_UNPLAYED
+        CAPABILITY_WATCHED_PUSH_PLAYED if watched else CAPABILITY_WATCHED_PUSH_UNPLAYED
     )
 
 

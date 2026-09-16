@@ -26,9 +26,15 @@ from lists.models import CustomList, CustomListItem
 class CollaboratorSyncTests(TestCase):
     def setUp(self):
         user_model = get_user_model()
-        self.user1 = user_model.objects.create_user(username="user1", password="password")
-        self.user2 = user_model.objects.create_user(username="user2", password="password")
-        self.user3 = user_model.objects.create_user(username="user3", password="password")
+        self.user1 = user_model.objects.create_user(
+            username="user1", password="password"
+        )
+        self.user2 = user_model.objects.create_user(
+            username="user2", password="password"
+        )
+        self.user3 = user_model.objects.create_user(
+            username="user3", password="password"
+        )
 
         # Shared list between user1 and user2
         self.shared_list = CustomList.objects.create(
@@ -58,9 +64,13 @@ class CollaboratorSyncTests(TestCase):
         )
 
         # Add movie_item to shared_list
-        CustomListItem.objects.create(custom_list=self.shared_list, item=self.movie_item)
+        CustomListItem.objects.create(
+            custom_list=self.shared_list, item=self.movie_item
+        )
         # Add solo_movie_item to private_list
-        CustomListItem.objects.create(custom_list=self.private_list, item=self.solo_movie_item)
+        CustomListItem.objects.create(
+            custom_list=self.private_list, item=self.solo_movie_item
+        )
 
     def test_get_collaborators_for_item(self):
         collabs = get_collaborators_for_item(self.movie_item, self.user1)
@@ -90,13 +100,17 @@ class CollaboratorSyncTests(TestCase):
         sync_media_to_list_collaborators(media1, self.user1)
 
         # user2 should now have Inception completed
-        user2_movie = Movie.objects.filter(user=self.user2, item=self.movie_item).first()
+        user2_movie = Movie.objects.filter(
+            user=self.user2, item=self.movie_item
+        ).first()
         self.assertIsNotNone(user2_movie)
         self.assertEqual(user2_movie.status, Status.COMPLETED.value)
         self.assertEqual(user2_movie.end_date, now)
 
         # user3 was not a collaborator, so no record
-        self.assertFalse(Movie.objects.filter(user=self.user3, item=self.movie_item).exists())
+        self.assertFalse(
+            Movie.objects.filter(user=self.user3, item=self.movie_item).exists()
+        )
 
     def test_movie_completion_from_collaborator_syncs_to_owner(self):
         # user2 (collaborator) completes Inception
@@ -110,7 +124,9 @@ class CollaboratorSyncTests(TestCase):
         sync_media_to_list_collaborators(media2, self.user2)
 
         # user1 (owner) should now have Inception completed
-        user1_movie = Movie.objects.filter(user=self.user1, item=self.movie_item).first()
+        user1_movie = Movie.objects.filter(
+            user=self.user1, item=self.movie_item
+        ).first()
         self.assertIsNotNone(user1_movie)
         self.assertEqual(user1_movie.status, Status.COMPLETED.value)
 
@@ -125,7 +141,9 @@ class CollaboratorSyncTests(TestCase):
         sync_media_to_list_collaborators(media1, self.user1)
 
         # user2 must not have this movie
-        self.assertFalse(Movie.objects.filter(user=self.user2, item=self.solo_movie_item).exists())
+        self.assertFalse(
+            Movie.objects.filter(user=self.user2, item=self.solo_movie_item).exists()
+        )
 
     def test_existing_record_preserves_score_and_notes(self):
         # user2 already had Inception In Progress with a personal score and note
@@ -161,7 +179,9 @@ class CollaboratorSyncTests(TestCase):
         sync_media_to_list_collaborators(media1, self.user1)
 
         # user2 should NOT have a record created
-        self.assertFalse(Movie.objects.filter(user=self.user2, item=self.movie_item).exists())
+        self.assertFalse(
+            Movie.objects.filter(user=self.user2, item=self.movie_item).exists()
+        )
 
     @patch("app.models.tv.providers.services.get_media_metadata")
     def test_tv_show_completion_syncs_to_collaborator(self, mock_metadata):
@@ -232,10 +252,17 @@ class CollaboratorSyncTests(TestCase):
 
     @patch("app.fork_services_episode.create_episode_watch")
     @patch("app.fork_services_episode.resolve_or_create_season")
-    def test_episode_watch_syncs_to_collaborator(self, mock_resolve_season, mock_create_watch):
+    def test_episode_watch_syncs_to_collaborator(
+        self, mock_resolve_season, mock_create_watch
+    ):
         mock_season = Season(
             user=self.user2,
-            item=Item(media_type=MediaTypes.SEASON.value, media_id="1396", source=Sources.TMDB.value, season_number=1),
+            item=Item(
+                media_type=MediaTypes.SEASON.value,
+                media_id="1396",
+                source=Sources.TMDB.value,
+                season_number=1,
+            ),
         )
         mock_resolve_season.return_value = mock_season
 
@@ -284,6 +311,8 @@ class CollaboratorSyncTests(TestCase):
         )
         self.assertIn(response.status_code, (200, 302))
 
-        user2_movie = Movie.objects.filter(user=self.user2, item=self.movie_item).first()
+        user2_movie = Movie.objects.filter(
+            user=self.user2, item=self.movie_item
+        ).first()
         self.assertIsNotNone(user2_movie)
         self.assertEqual(user2_movie.status, Status.COMPLETED.value)

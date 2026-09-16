@@ -2815,14 +2815,12 @@ class TestGetTargetSections(TestCase):
 
     def test_multiple_specific_libraries_returns_only_matches(self):
         """Selecting several specific libraries returns exactly those sections."""
-        sections = self._importer(
-            ["machine::1", "machine::3"]
-        )._get_target_sections()
+        sections = self._importer(["machine::1", "machine::3"])._get_target_sections()
 
         self.assertEqual({s["id"] for s in sections}, {"1", "3"})
 
     def test_all_sentinel_in_list_returns_every_section(self):
-        """"all" alongside other values still means every library."""
+        """ "all" alongside other values still means every library."""
         sections = self._importer(["all", "machine::1"])._get_target_sections()
 
         self.assertEqual(len(sections), 3)

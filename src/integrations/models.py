@@ -1382,8 +1382,6 @@ class IntegrationEventReceipt(models.Model):
         return f"IntegrationEventReceipt({self.user.username}, {self.client_event_id})"
 
 
-
-
 class CatalogGrant(models.Model):
     """A revocable, per-resource grant for published read-only catalogs.
 
@@ -1638,9 +1636,9 @@ class SyncBinding(models.Model):
         """
         if not self.is_operational():
             return False
-        return direction in (
-            self.approved_directions or []
-        ) and self.has_capability(capability)
+        return direction in (self.approved_directions or []) and self.has_capability(
+            capability
+        )
 
 
 class SyncCheckpoint(models.Model):

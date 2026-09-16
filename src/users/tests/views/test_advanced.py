@@ -401,7 +401,9 @@ class CacheClearButtonsTests(TestCase):
         messages = list(get_messages(response.wsgi_request))
         self.assertIn("Also removed 1 metadata entry", str(messages[0]))
 
-    def test_delete_media_type_with_metadata_flag_keeps_item_tracked_by_other_user(self):
+    def test_delete_media_type_with_metadata_flag_keeps_item_tracked_by_other_user(
+        self,
+    ):
         """An Item still tracked by another user must survive metadata cleanup."""
         item = Item.objects.create(
             media_id="shared-movie",
@@ -433,7 +435,9 @@ class CacheClearButtonsTests(TestCase):
             library_media_type=MediaTypes.TV.value,
             title="Show",
         )
-        tv = TV.objects.create(item=tv_item, user=self.user, status=Status.PLANNING.value)
+        tv = TV.objects.create(
+            item=tv_item, user=self.user, status=Status.PLANNING.value
+        )
         season_item = Item.objects.create(
             media_id="tv-show",
             source=Sources.TVDB.value,

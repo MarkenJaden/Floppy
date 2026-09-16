@@ -134,7 +134,9 @@ class Command(BaseCommand):
                 else:
                     report["summary"]["failed"] += 1
                     entry["result"] = "target_bucket_collision"
-            except Exception as error:  # pragma: no cover - provider failure is environment-specific
+            except (
+                Exception
+            ) as error:  # pragma: no cover - provider failure is environment-specific
                 report["summary"]["failed"] += 1
                 entry["result"] = "failed"
                 entry["error"] = str(error)

@@ -112,7 +112,9 @@ class MediaListFilterParityTests(FloppyApiTestCase):
             direction="asc",
         )
         self.assertEqual(response.status_code, HTTP.OK)
-        results = {entry["item"]["media_id"]: entry for entry in response.json()["results"]}
+        results = {
+            entry["item"]["media_id"]: entry for entry in response.json()["results"]
+        }
         self.assertIn("1001", results, response.json())
         self.assertEqual(results["1001"]["next_episode"]["season_number"], 1)
         self.assertEqual(results["1001"]["next_episode"]["episode_number"], 2)
@@ -143,7 +145,9 @@ class MediaListFilterParityTests(FloppyApiTestCase):
             direction="asc",
         )
         self.assertEqual(response.status_code, HTTP.OK)
-        results = {entry["item"]["media_id"]: entry for entry in response.json()["results"]}
+        results = {
+            entry["item"]["media_id"]: entry for entry in response.json()["results"]
+        }
         next_episode = results["1001"]["next_episode"]
         self.assertIsNone(next_episode["title"])
         self.assertIsNone(next_episode["image"])
@@ -262,10 +266,14 @@ class MediaListFilterParityTests(FloppyApiTestCase):
         movie_item = self.items_by_type["movie"][0]
         movie = self.movie_medias[0]
         Item.objects.filter(pk=movie_item.pk).update(
-            release_datetime=timezone.datetime(1999, 1, 1, tzinfo=timezone.get_default_timezone()),
+            release_datetime=timezone.datetime(
+                1999, 1, 1, tzinfo=timezone.get_default_timezone()
+            ),
         )
         movie.__class__.objects.filter(pk=movie.pk).update(
-            end_date=timezone.datetime(2025, 6, 15, tzinfo=timezone.get_default_timezone()),
+            end_date=timezone.datetime(
+                2025, 6, 15, tzinfo=timezone.get_default_timezone()
+            ),
         )
 
         response = self.client.get(
@@ -472,9 +480,7 @@ class MediaListTagSqlFilterTests(FloppyApiTestCase):
         self.assertIn(tagged_item.media_id, result_media_ids)
         # Untagged episode shares the same media_id/source (same show) — the
         # tag filter still narrows to the exact tagged Item row.
-        untagged_ids = {
-            entry["item"].get("id") for entry in response.json()["results"]
-        }
+        untagged_ids = {entry["item"].get("id") for entry in response.json()["results"]}
         self.assertNotIn(untagged_item.id, untagged_ids)
 
     def test_anime_type_filters_grouped_entries_by_tag(self):
@@ -611,7 +617,9 @@ class MediaListSqlPushdownTests(FloppyApiTestCase):
 
     def _ordering_for(self, params):
         response = self.client.get(
-            "/api/v1/media/game/", params, **self.auth_headers,
+            "/api/v1/media/game/",
+            params,
+            **self.auth_headers,
         )
         self.assertEqual(response.status_code, HTTP.OK)
         return [entry["item"]["media_id"] for entry in response.json()["results"]]
@@ -630,14 +638,32 @@ class MediaListSqlPushdownTests(FloppyApiTestCase):
         item_a = self._make_item_with_plays(
             "repeats-a",
             [
-                (Status.DROPPED.value, timezone.datetime(2020, 1, 1, tzinfo=timezone.get_default_timezone()), None),
-                (Status.IN_PROGRESS.value, timezone.datetime(2023, 1, 1, tzinfo=timezone.get_default_timezone()), None),
+                (
+                    Status.DROPPED.value,
+                    timezone.datetime(
+                        2020, 1, 1, tzinfo=timezone.get_default_timezone()
+                    ),
+                    None,
+                ),
+                (
+                    Status.IN_PROGRESS.value,
+                    timezone.datetime(
+                        2023, 1, 1, tzinfo=timezone.get_default_timezone()
+                    ),
+                    None,
+                ),
             ],
         )
         item_b = self._make_item_with_plays(
             "repeats-b",
             [
-                (Status.IN_PROGRESS.value, timezone.datetime(2022, 6, 1, tzinfo=timezone.get_default_timezone()), None),
+                (
+                    Status.IN_PROGRESS.value,
+                    timezone.datetime(
+                        2022, 6, 1, tzinfo=timezone.get_default_timezone()
+                    ),
+                    None,
+                ),
             ],
         )
 
@@ -649,7 +675,8 @@ class MediaListSqlPushdownTests(FloppyApiTestCase):
         }
         fast_path_order = self._ordering_for(params)
         with mock.patch(
-            "app.media_list_filters.can_paginate_in_sql", return_value=False,
+            "app.media_list_filters.can_paginate_in_sql",
+            return_value=False,
         ):
             fallback_order = self._ordering_for(params)
 
@@ -669,12 +696,16 @@ class MediaListSqlPushdownTests(FloppyApiTestCase):
             [
                 (
                     Status.DROPPED.value,
-                    timezone.datetime(2020, 1, 1, tzinfo=timezone.get_default_timezone()),
+                    timezone.datetime(
+                        2020, 1, 1, tzinfo=timezone.get_default_timezone()
+                    ),
                     Decimal("3.0"),
                 ),
                 (
                     Status.IN_PROGRESS.value,
-                    timezone.datetime(2024, 1, 1, tzinfo=timezone.get_default_timezone()),
+                    timezone.datetime(
+                        2024, 1, 1, tzinfo=timezone.get_default_timezone()
+                    ),
                     None,
                 ),
             ],
@@ -684,7 +715,9 @@ class MediaListSqlPushdownTests(FloppyApiTestCase):
             [
                 (
                     Status.IN_PROGRESS.value,
-                    timezone.datetime(2022, 6, 1, tzinfo=timezone.get_default_timezone()),
+                    timezone.datetime(
+                        2022, 6, 1, tzinfo=timezone.get_default_timezone()
+                    ),
                     Decimal("8.0"),
                 ),
             ],
@@ -693,7 +726,8 @@ class MediaListSqlPushdownTests(FloppyApiTestCase):
         params = {"status": "1", "limit": 10, "sort": "score", "direction": "desc"}
         fast_path_order = self._ordering_for(params)
         with mock.patch(
-            "app.media_list_filters.can_paginate_in_sql", return_value=False,
+            "app.media_list_filters.can_paginate_in_sql",
+            return_value=False,
         ):
             fallback_order = self._ordering_for(params)
 
@@ -712,7 +746,9 @@ class MediaListSqlPushdownTests(FloppyApiTestCase):
             {"status": "1", "sort": "author"},
         ):
             response = self.client.get(
-                "/api/v1/media/game/", params, **self.auth_headers,
+                "/api/v1/media/game/",
+                params,
+                **self.auth_headers,
             )
             self.assertEqual(response.status_code, HTTP.OK, params)
 
@@ -732,38 +768,52 @@ class MediaListSqlPushdownTests(FloppyApiTestCase):
 
         self.assertFalse(
             can_paginate_in_sql(
-                replace(base, include_no_status=True), MediaTypes.GAME.value, "title",
+                replace(base, include_no_status=True),
+                MediaTypes.GAME.value,
+                "title",
             ),
         )
         self.assertFalse(
             can_paginate_in_sql(
-                replace(base, rating="rated"), MediaTypes.GAME.value, "title",
+                replace(base, rating="rated"),
+                MediaTypes.GAME.value,
+                "title",
             ),
         )
         self.assertFalse(
             can_paginate_in_sql(
-                replace(base, collection="collected"), MediaTypes.GAME.value, "title",
+                replace(base, collection="collected"),
+                MediaTypes.GAME.value,
+                "title",
             ),
         )
         self.assertFalse(
             can_paginate_in_sql(
-                replace(base, format="digital"), MediaTypes.GAME.value, "title",
+                replace(base, format="digital"),
+                MediaTypes.GAME.value,
+                "title",
             ),
         )
         # Game platforms are SQL-filterable; other types' aren't.
         self.assertTrue(
             can_paginate_in_sql(
-                replace(base, platforms=("PC",)), MediaTypes.GAME.value, "title",
+                replace(base, platforms=("PC",)),
+                MediaTypes.GAME.value,
+                "title",
             ),
         )
         self.assertFalse(
             can_paginate_in_sql(
-                replace(base, platforms=("PC",)), MediaTypes.MOVIE.value, "title",
+                replace(base, platforms=("PC",)),
+                MediaTypes.MOVIE.value,
+                "title",
             ),
         )
         # Tags are SQL-safe unconditionally now (#1004) — do not force fallback.
         self.assertTrue(
             can_paginate_in_sql(
-                replace(base, tags=("favorite",)), MediaTypes.GAME.value, "title",
+                replace(base, tags=("favorite",)),
+                MediaTypes.GAME.value,
+                "title",
             ),
         )

@@ -18,6 +18,7 @@ from integrations.models import XboxAccount
 
 XBOX_RECURRING_TASK_NAME = "Import from Xbox (Recurring)"
 
+
 # OpenXBL wraps every v2 payload in {"content": ..., "code": ...}.
 def envelope(payload):
     """Wrap a payload the way the live OpenXBL v2 API does."""
@@ -339,7 +340,11 @@ class ImportXbox(TestCase):
 
         self.assertEqual(imported_counts[MediaTypes.GAME.value], 1)
         self.assertEqual(
-            list(Game.objects.filter(user=self.user).values_list("item__media_id", flat=True)),
+            list(
+                Game.objects.filter(user=self.user).values_list(
+                    "item__media_id", flat=True
+                )
+            ),
             ["2"],
         )
 

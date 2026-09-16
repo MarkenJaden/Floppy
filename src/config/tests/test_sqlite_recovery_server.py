@@ -22,7 +22,9 @@ from config.sqlite_integrity import check_database_integrity, write_startup_stat
 class RecoveryPageTests(SimpleTestCase):
     def setUp(self):
         super().setUp()
-        self.env_patcher = mock.patch.dict(os.environ, {"FLOPPY_SQLITE_AUTO_REPAIR": "false"})
+        self.env_patcher = mock.patch.dict(
+            os.environ, {"FLOPPY_SQLITE_AUTO_REPAIR": "false"}
+        )
         self.env_patcher.start()
 
     def tearDown(self):
@@ -570,8 +572,12 @@ class RecoveryPageTests(SimpleTestCase):
 
             with urllib.request.urlopen(f"{base}/backup") as response:  # noqa: S310
                 self.assertEqual(response.status, 200)
-                self.assertEqual(response.headers.get("Content-Type"), "application/x-sqlite3")
-                self.assertIn("attachment", response.headers.get("Content-Disposition", ""))
+                self.assertEqual(
+                    response.headers.get("Content-Type"), "application/x-sqlite3"
+                )
+                self.assertIn(
+                    "attachment", response.headers.get("Content-Disposition", "")
+                )
                 body = response.read()
                 self.assertGreater(len(body), 0)
                 # Verify downloaded content is valid sqlite file
@@ -585,7 +591,9 @@ class RecoveryPageTests(SimpleTestCase):
     def test_corrupt_status_renders_physical_corruption_card(self):
         report = {
             "status": "corrupt",
-            "unsafe_reasons": ["Physical corruption detected: quick_check returned 'malformed'"],
+            "unsafe_reasons": [
+                "Physical corruption detected: quick_check returned 'malformed'"
+            ],
             "can_quarantine": False,
         }
         page = recovery.render_page(report, interactive=True)

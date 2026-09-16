@@ -149,9 +149,7 @@ def import_media(
 def _run_arr_import(service_name, importer_func, user_id, mode, instance_id=None):
     """Run ARR imports without surfacing expected connection failures as task tracebacks."""
     try:
-        return import_media(
-            importer_func, None, user_id, mode, instance_id=instance_id
-        )
+        return import_media(importer_func, None, user_id, mode, instance_id=instance_id)
     except helpers.MediaImportError as exc:
         logger.warning("%s import failed for user %s: %s", service_name, user_id, exc)
         return f"{service_name} import failed: {exc}"

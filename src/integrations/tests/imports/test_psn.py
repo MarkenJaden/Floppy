@@ -194,8 +194,16 @@ class ImportPSN(TestCase):
         old = timezone.now() - timedelta(days=100)
         mock_psnawp.side_effect = FakePSNAWP(
             [
-                stats("CUSA10001_00", "Ghost of Tsushima", PlatformCategory.PS4, 900, old),
-                stats("PPSA10002_00", "Ghost of Tsushima", PlatformCategory.PS5, 300, recent),
+                stats(
+                    "CUSA10001_00", "Ghost of Tsushima", PlatformCategory.PS4, 900, old
+                ),
+                stats(
+                    "PPSA10002_00",
+                    "Ghost of Tsushima",
+                    PlatformCategory.PS5,
+                    300,
+                    recent,
+                ),
             ],
         )
         mock_search.side_effect = self.search_stub(media_id="1")
@@ -369,7 +377,9 @@ class ImportPSN(TestCase):
                     900,
                     recent,
                 ),
-                stats("PPSA00001_00", "Halo Infinite", PlatformCategory.PS5, 300, recent),
+                stats(
+                    "PPSA00001_00", "Halo Infinite", PlatformCategory.PS5, 300, recent
+                ),
             ],
         )
         good = self.search_stub(media_id="1")

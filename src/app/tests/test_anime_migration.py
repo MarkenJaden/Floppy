@@ -210,6 +210,7 @@ class AnimeMigrationTests(TestCase):
                 "tvdb_epoffset": 0,
             },
         ]
+
         def media_metadata(media_type, *_args, **_kwargs):
             if media_type == MediaTypes.SEASON.value:
                 return {

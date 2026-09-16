@@ -26,7 +26,11 @@ class PlexImportMultiLibraryViewTests(TestCase):
     def test_multiple_libraries_are_queued_as_a_list(self, mock_delay):
         self.client.post(
             reverse("import_plex"),
-            {"mode": "new", "frequency": "once", "library": ["machine::1", "machine::2"]},
+            {
+                "mode": "new",
+                "frequency": "once",
+                "library": ["machine::1", "machine::2"],
+            },
         )
 
         mock_delay.assert_called_once_with(

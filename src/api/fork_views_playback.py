@@ -725,7 +725,6 @@ class PlaybackProgressView(drf_views.APIView):
 
         return _execute()
 
-
     def _clear(self, request):
         """Delete the stored position for the identified media."""
         data = request.data

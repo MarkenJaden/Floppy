@@ -182,14 +182,17 @@ class FetchTests(TestCase):
         )
         session = Mock(get=Mock(return_value=redirect))
 
-        with patch.object(
-            safe_fetch,
-            "resolve_public_addresses",
-            side_effect=[
-                [ipaddress.ip_address("93.184.216.34")],
-                UnsafeUrlError("forbidden_address", "no"),
-            ],
-        ), self.assertRaises(UnsafeUrlError) as caught:
+        with (
+            patch.object(
+                safe_fetch,
+                "resolve_public_addresses",
+                side_effect=[
+                    [ipaddress.ip_address("93.184.216.34")],
+                    UnsafeUrlError("forbidden_address", "no"),
+                ],
+            ),
+            self.assertRaises(UnsafeUrlError) as caught,
+        ):
             fetch("https://example.com/m.json", session=session)
 
         self.assertEqual(caught.exception.reason_code, "forbidden_address")

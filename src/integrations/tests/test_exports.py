@@ -37,7 +37,9 @@ from lists.models import CustomList, CustomListItem
 class ExportCSVTest(TestCase):
     """Test exporting media to CSV."""
 
-    @patch("app.providers.services.get_media_metadata", return_value={"max_progress": None})
+    @patch(
+        "app.providers.services.get_media_metadata", return_value={"max_progress": None}
+    )
     def setUp(self, _mock_get_media_metadata):
         """Create necessary data for the tests."""
         self.credentials = {"username": "test", "password": "12345"}
@@ -622,7 +624,9 @@ class ExportCSVTest(TestCase):
 class LetterboxdExportCSVTest(TestCase):
     """Test exporting watched movies to a Letterboxd-import-ready CSV."""
 
-    @patch("app.providers.services.get_media_metadata", return_value={"max_progress": None})
+    @patch(
+        "app.providers.services.get_media_metadata", return_value={"max_progress": None}
+    )
     def setUp(self, _mock_get_media_metadata):
         """Create a superuser and log in."""
         self.credentials = {"username": "test", "password": "12345"}
@@ -701,7 +705,8 @@ class LetterboxdExportCSVTest(TestCase):
                 end_date=datetime(2023, 1, 1, 0, 0, tzinfo=UTC),
             )
             MoviePlay.objects.create(
-                movie=movie_unrated, end_date=movie_unrated.end_date,
+                movie=movie_unrated,
+                end_date=movie_unrated.end_date,
             )
 
             item_zero = Item.objects.create(
@@ -768,13 +773,16 @@ class LetterboxdExportCSVTest(TestCase):
                 end_date=datetime(2023, 6, 3, 0, 0, tzinfo=UTC),
             )
             MoviePlay.objects.create(
-                movie=movie, end_date=datetime(2023, 6, 1, 0, 0, tzinfo=UTC),
+                movie=movie,
+                end_date=datetime(2023, 6, 1, 0, 0, tzinfo=UTC),
             )
             MoviePlay.objects.create(
-                movie=movie, end_date=datetime(2023, 6, 2, 0, 0, tzinfo=UTC),
+                movie=movie,
+                end_date=datetime(2023, 6, 2, 0, 0, tzinfo=UTC),
             )
             MoviePlay.objects.create(
-                movie=movie, end_date=datetime(2023, 6, 3, 0, 0, tzinfo=UTC),
+                movie=movie,
+                end_date=datetime(2023, 6, 3, 0, 0, tzinfo=UTC),
             )
 
         rows = sorted(self._get_rows(), key=lambda r: r["WatchedDate"])
@@ -987,7 +995,8 @@ class LetterboxdExportCSVTest(TestCase):
                 end_date=datetime(2023, 6, 1, 0, 0, tzinfo=UTC),
             )
             MoviePlay.objects.create(
-                movie=movie_with_imdb, end_date=movie_with_imdb.end_date,
+                movie=movie_with_imdb,
+                end_date=movie_with_imdb.end_date,
             )
 
             item_without_imdb = Item.objects.create(
@@ -1004,7 +1013,8 @@ class LetterboxdExportCSVTest(TestCase):
                 end_date=datetime(2023, 6, 1, 0, 0, tzinfo=UTC),
             )
             MoviePlay.objects.create(
-                movie=movie_without_imdb, end_date=movie_without_imdb.end_date,
+                movie=movie_without_imdb,
+                end_date=movie_without_imdb.end_date,
             )
 
         rows = {row["Title"]: row for row in self._get_rows()}
@@ -1013,7 +1023,9 @@ class LetterboxdExportCSVTest(TestCase):
         self.assertEqual(rows["Without IMDb"]["tmdbID"], "10495")
         self.assertEqual(rows["Without IMDb"]["imdbID"], "")
 
-    @patch("app.providers.services.get_media_metadata", return_value={"max_progress": None})
+    @patch(
+        "app.providers.services.get_media_metadata", return_value={"max_progress": None}
+    )
     def test_non_movie_media_types_excluded(self, _mock_get_media_metadata):
         """Only movies are exported; other media types are excluded."""
         with disable_fetch_releases():

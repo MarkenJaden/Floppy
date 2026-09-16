@@ -56,7 +56,7 @@ def _foreign_key_definition(
         return None
 
     column = conn.execute(
-        'SELECT name, "notnull" FROM pragma_table_xinfo(?, \'main\') WHERE name = ?',
+        "SELECT name, \"notnull\" FROM pragma_table_xinfo(?, 'main') WHERE name = ?",
         [table, child_column],
     ).fetchone()
     if not column:

@@ -397,7 +397,9 @@ class MediaSearchViewTests(TestCase):
             "results": [],
         }
 
-        response = self.client.get(reverse("search_group") + "?media_type=movie&q=nonexistent")
+        response = self.client.get(
+            reverse("search_group") + "?media_type=movie&q=nonexistent"
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content.decode(), "")

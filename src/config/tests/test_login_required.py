@@ -129,10 +129,21 @@ class LoginRequiredConfigurationTests(TestCase):
     def test_anonymous_private_list_endpoints_return_404(self):
         """Private lists must return 404 to anonymous requests."""
         for ref in [str(self.private_list.id), self.private_list.public_slug]:
-            self.assertEqual(self.client.get(reverse("list_detail", args=[ref])).status_code, 404)
-            self.assertEqual(self.client.get(reverse("list_rss", args=[ref])).status_code, 404)
-            self.assertEqual(self.client.get(reverse("list_json", args=[ref]) + "?arr=radarr").status_code, 404)
-            self.assertEqual(self.client.get(reverse("list_export_csv", args=[ref])).status_code, 404)
+            self.assertEqual(
+                self.client.get(reverse("list_detail", args=[ref])).status_code, 404
+            )
+            self.assertEqual(
+                self.client.get(reverse("list_rss", args=[ref])).status_code, 404
+            )
+            self.assertEqual(
+                self.client.get(
+                    reverse("list_json", args=[ref]) + "?arr=radarr"
+                ).status_code,
+                404,
+            )
+            self.assertEqual(
+                self.client.get(reverse("list_export_csv", args=[ref])).status_code, 404
+            )
 
     def test_anonymous_protected_routes_redirect_to_login(self):
         """Protected application routes must redirect anonymous requests to the login page."""

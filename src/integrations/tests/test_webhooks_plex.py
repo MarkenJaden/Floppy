@@ -1964,6 +1964,7 @@ class PlexWebhookTests(TestCase):
         mock_search,
     ):
         """An episode-only TMDB rating ID can resolve through the series title."""
+
         def fake_tv(media_id):
             if str(media_id) == "1515183":
                 raise Exception("TMDB episode 404")
@@ -2040,7 +2041,9 @@ class PlexWebhookTests(TestCase):
         tv_instance = TV.objects.create(item=tv_item, user=self.user, score=8)
 
         processor = PlexWebhookProcessor()
-        processor._remove_rating({}, self.user, {"tmdb_id": "1396"}, MediaTypes.TV.value)
+        processor._remove_rating(
+            {}, self.user, {"tmdb_id": "1396"}, MediaTypes.TV.value
+        )
 
         tv_instance.refresh_from_db()
         self.assertIsNone(tv_instance.score)
@@ -2965,7 +2968,9 @@ class PlexWebhookTests(TestCase):
                 "tvdb_id": None,
                 "title": title,
                 "image": "",
-                "related": {"seasons": [{"season_number": sn} for sn in season_numbers]},
+                "related": {
+                    "seasons": [{"season_number": sn} for sn in season_numbers]
+                },
                 **seasons,
             }
 

@@ -340,7 +340,9 @@ class MalCourCardTests(TestCase):
     def test_card_links_to_the_anime_details_page(self):
         self._seed()
         card = live_playback.build_home_playback_card(self.user)
-        self.assertIn(f"/{Sources.MAL.value}/{MediaTypes.ANIME.value}/849/", card["details_url"])
+        self.assertIn(
+            f"/{Sources.MAL.value}/{MediaTypes.ANIME.value}/849/", card["details_url"]
+        )
         self.assertEqual(card["image"], "https://example.com/haruhi.jpg")
         self.assertEqual(card["episode_code"], "E03")
 

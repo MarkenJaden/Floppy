@@ -643,9 +643,7 @@ def _build_podcast_entries(user, podcast_history_records, podcasts_lookup):
                 "item": _serialize_item(podcast.item),
                 "show": _serialize_show(show),
                 "show_podcast_uuid": show_podcast_uuid,
-                "website_url": podcast.episode.website_url
-                if podcast.episode
-                else "",
+                "website_url": podcast.episode.website_url if podcast.episode else "",
                 "show_slug": show_slug,
                 "poster": poster,
                 "title": podcast.item.title,
@@ -1240,9 +1238,7 @@ def build_history_days(
     if process_podcasts and podcast_ids:
         podcasts_lookup = {
             p.id: p
-            for p in Podcast.objects.filter(
-                id__in=podcast_ids, user=user
-            )
+            for p in Podcast.objects.filter(id__in=podcast_ids, user=user)
             .select_related("item", "episode", "episode__show", "show")
             .defer(*history_deferred_item_fields("item"))
         }

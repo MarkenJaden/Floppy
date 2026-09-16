@@ -97,7 +97,9 @@ def apply_targets(user, targets, *, watched_at=None, unplayed=False):
             retract_watch(user, item)
         elif watched_at is not None:
             existing = play_dedupe.existing_episode_play_times(
-                user, media_ids=[item.media_id], source=item.source,
+                user,
+                media_ids=[item.media_id],
+                source=item.source,
             )
             key = (item.media_id, item.season_number, item.episode_number)
             if not existing.is_duplicate(key, watched_at):

@@ -52,7 +52,9 @@ def cleanup_task_results(batch_size=5000):
 
     # Reapply the age/state filter after selecting IDs so a task that completed
     # between the two queries is not deleted as an abandoned result.
-    deleted, _ = TaskResult.objects.filter(pk__in=candidate_ids).filter(eligible).delete()
+    deleted, _ = (
+        TaskResult.objects.filter(pk__in=candidate_ids).filter(eligible).delete()
+    )
     return deleted
 
 
@@ -101,6 +103,7 @@ def repair_celery_broker_bindings():
             summary["removed"],
         )
     return summary
+
 
 # ---------------------------------------------------------------------------
 # Modular task re-exports

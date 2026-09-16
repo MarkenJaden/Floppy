@@ -205,7 +205,10 @@ def _integration_redirect(request, *, connected_slug=None, next_url=None):
     if connected_slug:
         user = request.user
         if connected_slug not in user.onboarding_connected_sources:
-            user.onboarding_connected_sources = [*user.onboarding_connected_sources, connected_slug]
+            user.onboarding_connected_sources = [
+                *user.onboarding_connected_sources,
+                connected_slug,
+            ]
             user.save(update_fields=["onboarding_connected_sources"])
     destination = next_url or request.POST.get("next") or request.GET.get("next")
     return redirect(destination or "import_data")
@@ -1174,7 +1177,7 @@ def simkl_oauth(request):
     request.session[state_token] = state
 
     return redirect(
-        f"{url}?client_id={credentials.get("simkl", "client_id")}&redirect_uri={redirect_uri}&response_type=code&state={state_token}",
+        f"{url}?client_id={credentials.get('simkl', 'client_id')}&redirect_uri={redirect_uri}&response_type=code&state={state_token}",
     )
 
 
@@ -1265,7 +1268,7 @@ def anilist_oauth(request):
     request.session[state_token] = state
 
     return redirect(
-        f"{url}?client_id={credentials.get("anilist", "client_id")}&redirect_uri={redirect_uri}&response_type=code&state={state_token}",
+        f"{url}?client_id={credentials.get('anilist', 'client_id')}&redirect_uri={redirect_uri}&response_type=code&state={state_token}",
     )
 
 
@@ -1383,14 +1386,17 @@ def import_yamtrack(request):
         return _integration_redirect(request)
 
     mode = request.POST["mode"]
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_yamtrack,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=mode,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_yamtrack,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=mode,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="yamtrack")
     messages.info(
         request,
@@ -1418,15 +1424,18 @@ def import_clz(request):
         messages.error(request, "Unknown media type for the CLZ import.")
         return _integration_redirect(request)
 
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_clz,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=request.POST.get("mode", "new"),
-        media_type=media_type,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_clz,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=request.POST.get("mode", "new"),
+            media_type=media_type,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="clz")
     messages.info(
         request,
@@ -1457,19 +1466,21 @@ def import_trakt_export_file(request):
 
     mode = request.POST["mode"]
     payloads = [
-        (upload.name, path)
-        for upload, path in zip(uploads, staged_files, strict=True)
+        (upload.name, path) for upload, path in zip(uploads, staged_files, strict=True)
     ]
 
     if len(payloads) == 1 and not _is_trakt_export_payload(*payloads[0]):
-        if _queue_staged_task_or_message(
-            request,
-            tasks.import_trakt_collection_csv,
-            user_id=request.user.id,
-            file=payloads[0][1],
-            mode=mode,
-            staged_paths=tuple(staged_files),
-        ) is False:
+        if (
+            _queue_staged_task_or_message(
+                request,
+                tasks.import_trakt_collection_csv,
+                user_id=request.user.id,
+                file=payloads[0][1],
+                mode=mode,
+                staged_paths=tuple(staged_files),
+            )
+            is False
+        ):
             return _integration_redirect(request, connected_slug="trakt")
         messages.info(
             request,
@@ -1495,14 +1506,17 @@ def import_trakt_export_file(request):
         for path in staged_files:
             discard_staged_upload(path)
 
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_trakt_export,
-        user_id=request.user.id,
-        file=archive_path,
-        mode=mode,
-        staged_paths=(archive_path,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_trakt_export,
+            user_id=request.user.id,
+            file=archive_path,
+            mode=mode,
+            staged_paths=(archive_path,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="trakt")
     messages.info(
         request,
@@ -1530,14 +1544,17 @@ def import_hltb(request):
         return _integration_redirect(request)
 
     mode = request.POST["mode"]
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_hltb,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=mode,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_hltb,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=mode,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="hltb")
     messages.info(
         request,
@@ -1560,14 +1577,17 @@ def import_grouvee(request):
         return _integration_redirect(request)
 
     mode = request.POST["mode"]
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_grouvee,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=mode,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_grouvee,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=mode,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="grouvee")
     messages.info(
         request,
@@ -1636,7 +1656,9 @@ def radarr_connect(request):
         return _integration_redirect(request)
 
     _ensure_arr_schedule(instance, RADARR_RECURRING_TASK_NAME, "Radarr")
-    tasks.import_radarr.delay(user_id=request.user.id, mode="new", instance_id=instance.id)
+    tasks.import_radarr.delay(
+        user_id=request.user.id, mode="new", instance_id=instance.id
+    )
     messages.success(
         request,
         "Connected Radarr. Initial import queued and recurring sync enabled.",
@@ -1675,7 +1697,9 @@ def import_radarr(request):
         RadarrInstance, pk=request.POST.get("instance_id"), user=request.user
     )
 
-    tasks.import_radarr.delay(user_id=request.user.id, mode="new", instance_id=instance.id)
+    tasks.import_radarr.delay(
+        user_id=request.user.id, mode="new", instance_id=instance.id
+    )
     _ensure_arr_schedule(instance, RADARR_RECURRING_TASK_NAME, "Radarr")
     messages.info(request, "Radarr import queued.")
     return redirect("import_data")
@@ -1714,7 +1738,9 @@ def sonarr_connect(request):
         return _integration_redirect(request)
 
     _ensure_arr_schedule(instance, SONARR_RECURRING_TASK_NAME, "Sonarr")
-    tasks.import_sonarr.delay(user_id=request.user.id, mode="new", instance_id=instance.id)
+    tasks.import_sonarr.delay(
+        user_id=request.user.id, mode="new", instance_id=instance.id
+    )
     messages.success(
         request,
         "Connected Sonarr. Initial import queued and recurring sync enabled.",
@@ -1753,7 +1779,9 @@ def import_sonarr(request):
         SonarrInstance, pk=request.POST.get("instance_id"), user=request.user
     )
 
-    tasks.import_sonarr.delay(user_id=request.user.id, mode="new", instance_id=instance.id)
+    tasks.import_sonarr.delay(
+        user_id=request.user.id, mode="new", instance_id=instance.id
+    )
     _ensure_arr_schedule(instance, SONARR_RECURRING_TASK_NAME, "Sonarr")
     messages.info(request, "Sonarr import queued.")
     return redirect("import_data")
@@ -1919,7 +1947,9 @@ def jellyfin_playback_reporting_import(request):
     """Queue a manual Playback Reporting TSV import for the connected user."""
     account = getattr(request.user, "jellyfin_account", None)
     if not account or not account.is_connected:
-        messages.error(request, "Connect Jellyfin before importing Playback Reporting data.")
+        messages.error(
+            request, "Connect Jellyfin before importing Playback Reporting data."
+        )
         return redirect("integrations")
 
     uploaded_file = request.FILES.get("playback_reporting_file")
@@ -1943,14 +1973,17 @@ def jellyfin_playback_reporting_import(request):
     if staged_file is None:
         return redirect("integrations")
 
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_jellyfin_playback_reporting,
-        staged_file,
-        request.user.id,
-        "new",
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_jellyfin_playback_reporting,
+            staged_file,
+            request.user.id,
+            "new",
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return redirect("integrations")
     messages.info(request, "Jellyfin Playback Reporting import queued.")
     return redirect("integrations")
@@ -3929,14 +3962,17 @@ def import_imdb(request):
         return _integration_redirect(request)
 
     mode = request.POST["mode"]
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_imdb,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=mode,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_imdb,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=mode,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="imdb")
     messages.info(
         request,
@@ -3959,14 +3995,17 @@ def import_goodreads(request):
         return _integration_redirect(request)
 
     mode = request.POST["mode"]
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_goodreads,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=mode,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_goodreads,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=mode,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="goodreads")
     messages.info(
         request,
@@ -3995,14 +4034,17 @@ def import_hardcover(request):
             return _integration_redirect(request, connected_slug="hardcover")
 
         mode = request.POST["mode"]
-        if _queue_staged_task_or_message(
-            request,
-            tasks.import_hardcover,
-            user_id=request.user.id,
-            file=staged_file,
-            mode=mode,
-            staged_paths=(staged_file,),
-        ) is False:
+        if (
+            _queue_staged_task_or_message(
+                request,
+                tasks.import_hardcover,
+                user_id=request.user.id,
+                file=staged_file,
+                mode=mode,
+                staged_paths=(staged_file,),
+            )
+            is False
+        ):
             return _integration_redirect(request, connected_slug="hardcover")
         messages.info(
             request,
@@ -4026,14 +4068,17 @@ def import_storygraph(request):
         return _integration_redirect(request)
 
     mode = request.POST["mode"]
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_storygraph,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=mode,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_storygraph,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=mode,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="storygraph")
     messages.info(
         request,
@@ -4065,27 +4110,33 @@ def import_tvtime(request):
     if shows_file:
         staged_file = staged_files[staged_index]
         staged_index += 1
-        if _queue_staged_task_or_message(
-            request,
-            tasks.import_tvtime_shows,
-            user_id=request.user.id,
-            file=staged_file,
-            mode=mode,
-            staged_paths=(staged_file,),
-        ) is False:
+        if (
+            _queue_staged_task_or_message(
+                request,
+                tasks.import_tvtime_shows,
+                user_id=request.user.id,
+                file=staged_file,
+                mode=mode,
+                staged_paths=(staged_file,),
+            )
+            is False
+        ):
             for path in staged_files[staged_index:]:
                 discard_staged_upload(path)
             return _integration_redirect(request, connected_slug="tvtime")
     if movies_file:
         staged_file = staged_files[staged_index]
-        if _queue_staged_task_or_message(
-            request,
-            tasks.import_tvtime_movies,
-            user_id=request.user.id,
-            file=staged_file,
-            mode=mode,
-            staged_paths=(staged_file,),
-        ) is False:
+        if (
+            _queue_staged_task_or_message(
+                request,
+                tasks.import_tvtime_movies,
+                user_id=request.user.id,
+                file=staged_file,
+                mode=mode,
+                staged_paths=(staged_file,),
+            )
+            is False
+        ):
             return _integration_redirect(request, connected_slug="tvtime")
     messages.info(
         request,
@@ -4380,9 +4431,7 @@ STREMIO_ADDON_MANIFEST = {
     "id": "org.yamtrack.scrobbler",
     "version": "1.2.0",
     "name": "Floppy",
-    "description": (
-        "Floppy Watchlist catalogs and playback scrobbling for Stremio."
-    ),
+    "description": ("Floppy Watchlist catalogs and playback scrobbling for Stremio."),
     "resources": ["catalog", "meta", "subtitles"],
     "types": ["movie", "series"],
     "idPrefixes": ["tt"],
@@ -4806,9 +4855,11 @@ def _match_reference_ids(user, source_item):
     return list(
         ExternalReference.objects.filter(
             user=user,
-        ).filter(
+        )
+        .filter(
             Q(matched_item_id__in=item_ids) | Q(corrected_item_id__in=item_ids),
-        ).values_list("id", flat=True),
+        )
+        .values_list("id", flat=True),
     )
 
 
@@ -4874,7 +4925,9 @@ def match_fix(request, item_id):
         elif action == "apply":
             stored = request.session.get("match_correction_preview") or {}
             if stored.get("source_item_id") != source_item.pk:
-                messages.error(request, "Refresh the correction preview before applying.")
+                messages.error(
+                    request, "Refresh the correction preview before applying."
+                )
             else:
                 try:
                     mapping = json.loads(request.POST.get("mapping_json") or "{}")
@@ -4918,9 +4971,7 @@ def match_fix(request, item_id):
         "candidates": candidate_rows,
         "preview": preview,
         "preview_mapping_json": (
-            json.dumps(preview["episode_mapping"], sort_keys=True)
-            if preview
-            else ""
+            json.dumps(preview["episode_mapping"], sort_keys=True) if preview else ""
         ),
         "reference_count": len(_match_reference_ids(request.user, source_item)),
     }

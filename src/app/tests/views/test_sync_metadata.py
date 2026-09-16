@@ -333,7 +333,9 @@ class SyncMetadataViewTests(TestCase):
     @patch("app.metadata_sync_views.history_cache.invalidate_history_cache")
     @patch("app.metadata_sync_views._sync_plex_rating")
     @patch("app.views.Item.fetch_releases")
-    @patch("app.services.metadata_sync.trakt_popularity_service.refresh_trakt_popularity")
+    @patch(
+        "app.services.metadata_sync.trakt_popularity_service.refresh_trakt_popularity"
+    )
     @patch(
         "app.metadata_sync_views.metadata_resolution.get_preferred_provider",
         return_value=Sources.TVDB.value,

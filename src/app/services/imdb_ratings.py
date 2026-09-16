@@ -201,13 +201,16 @@ def sync_season_ratings() -> int:
         else:
             episode_qs = episode_qs.exclude(library_media_type=MediaTypes.ANIME.value)
         episode_ratings = episode_qs.values_list(
-            "season_number", "imdb_rating", "imdb_rating_count",
+            "season_number",
+            "imdb_rating",
+            "imdb_rating_count",
         )
 
         totals_by_season = {}
         for season_number, rating, rating_count in episode_ratings:
             weighted_sum, vote_count = totals_by_season.setdefault(
-                season_number, [0.0, 0],
+                season_number,
+                [0.0, 0],
             )
             totals_by_season[season_number] = [
                 weighted_sum + rating * rating_count,

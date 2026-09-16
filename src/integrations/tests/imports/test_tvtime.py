@@ -97,7 +97,9 @@ class ImportTvTimeShows(TestCase):
 
     @patch("integrations.imports.trakt.services.search")
     @patch("integrations.imports.tvtime.TvTimeShowImporter._get_metadata")
-    def test_last_episode_completes_season_and_show(self, mock_get_metadata, mock_search):
+    def test_last_episode_completes_season_and_show(
+        self, mock_get_metadata, mock_search
+    ):
         """Watching a season's last episode marks the season and show Completed."""
         mock_search.return_value = {
             "results": [{"media_id": 222, "title": "A Show", "year": 2020}],
@@ -285,7 +287,7 @@ class ImportTvTimeMovies(TestCase):
     @patch("integrations.imports.trakt.services.search")
     @patch("integrations.imports.tvtime.TvTimeMovieImporter._get_metadata")
     def test_new_mode_skips_already_tracked_movie(self, mock_get_metadata, mock_search):
-        """"new" mode leaves an already-tracked movie untouched."""
+        """ "new" mode leaves an already-tracked movie untouched."""
         mock_search.return_value = {
             "results": [{"media_id": 666, "title": "A Movie", "year": 2019}],
         }

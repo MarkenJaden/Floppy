@@ -227,7 +227,9 @@ class ProcessWebhookTaskTests(TestCase):
             recipient_enabled=False,
         )
 
-        tasks.process_webhook("plex", {"event": "media.scrobble"}, recipient.id, share_id=share.id)
+        tasks.process_webhook(
+            "plex", {"event": "media.scrobble"}, recipient.id, share_id=share.id
+        )
 
         mock_process.assert_not_called()
 

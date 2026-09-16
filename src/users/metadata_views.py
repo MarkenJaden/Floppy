@@ -150,7 +150,9 @@ def _promote_command(username):
     """
     if preflight.in_container():
         container = os.environ.get("HOST_CONTAINERNAME", "floppy")
-        return f"docker exec -it {container} python manage.py promote_superuser {username}"
+        return (
+            f"docker exec -it {container} python manage.py promote_superuser {username}"
+        )
     return f"python src/manage.py promote_superuser {username}"
 
 

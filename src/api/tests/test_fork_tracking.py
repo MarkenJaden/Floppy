@@ -647,7 +647,9 @@ class HistoryTimelineTests(FloppyApiTestCase):
         days = response.json()["results"]
         self.assertEqual(len(days), 1)
         day = days[0]
-        self.assertLessEqual(len(day["entries"]), history_cache.HISTORY_ENTRIES_PER_DAY_PAGE)
+        self.assertLessEqual(
+            len(day["entries"]), history_cache.HISTORY_ENTRIES_PER_DAY_PAGE
+        )
         self.assertEqual(day["entry_count"], entry_count)
         self.assertTrue(day["entries_truncated"])
 
@@ -854,9 +856,7 @@ class HistoryTimelineTests(FloppyApiTestCase):
                     for entry in day["entries"]
                 ]
                 history_entry = next(
-                    entry
-                    for entry in entries
-                    if entry["instance_id"] == episode.id
+                    entry for entry in entries if entry["instance_id"] == episode.id
                 )
                 self.assertEqual(history_entry["title"], "Pilot")
                 self.assertEqual(history_entry["show"]["title"], "TV Show 1")
@@ -922,16 +922,16 @@ class HistoryTimelineTests(FloppyApiTestCase):
 
         self.assertEqual(response.status_code, HTTP.OK)
         entries = [
-            entry
-            for day in response.json()["results"]
-            for entry in day["entries"]
+            entry for day in response.json()["results"] for entry in day["entries"]
         ]
         self.assertTrue(entries)
         self.assertEqual(
             {entry["media_type"] for entry in entries},
             {MediaTypes.EPISODE.value, MediaTypes.MOVIE.value},
         )
-        sql = "\n".join(query["sql"].lower() for query in captured_queries.captured_queries)
+        sql = "\n".join(
+            query["sql"].lower() for query in captured_queries.captured_queries
+        )
         for table_name in (
             "app_game",
             "app_music",
@@ -992,9 +992,7 @@ class HistoryTimelineTests(FloppyApiTestCase):
 
         self.assertEqual(response.status_code, HTTP.OK)
         entries = [
-            entry
-            for day in response.json()["results"]
-            for entry in day["entries"]
+            entry for day in response.json()["results"] for entry in day["entries"]
         ]
         self.assertTrue(
             any(entry["instance_id"] == new_movie.id for entry in entries),
@@ -1026,9 +1024,7 @@ class HistoryTimelineTests(FloppyApiTestCase):
 
         self.assertEqual(response.status_code, HTTP.OK)
         entries = [
-            entry
-            for day in response.json()["results"]
-            for entry in day["entries"]
+            entry for day in response.json()["results"] for entry in day["entries"]
         ]
         self.assertTrue(
             any(entry["instance_id"] == new_movie.id for entry in entries),

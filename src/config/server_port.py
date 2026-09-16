@@ -63,10 +63,7 @@ def config_path(
 
 
 def _invalid_port_message(source: str) -> str:
-    return (
-        f"{source} must be an integer from {MIN_SERVER_PORT} "
-        f"to {MAX_SERVER_PORT}."
-    )
+    return f"{source} must be an integer from {MIN_SERVER_PORT} to {MAX_SERVER_PORT}."
 
 
 def validate_port(value: object, *, source: str = "server port") -> int:
@@ -391,7 +388,9 @@ def _execute(args: argparse.Namespace) -> int:
             output["saved_value_removed"] = removed
             _write_line(sys.stdout, json.dumps(output, sort_keys=True))
         else:
-            message = "Saved server port removed." if removed else "No saved server port."
+            message = (
+                "Saved server port removed." if removed else "No saved server port."
+            )
             _write_line(sys.stdout, message)
             _print_status(status, stream=sys.stdout)
             _write_line(sys.stdout, "Restart Floppy if the effective port changed.")

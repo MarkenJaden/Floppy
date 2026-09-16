@@ -701,7 +701,9 @@ class DiscoverViewTests(TestCase):
     @patch("app.views.discover_tab_cache.invalidate_for_media_change")
     @patch("app.views.discover_tab_cache.update_undo_snapshot")
     @patch("app.views.discover_tab_cache.apply_cached_action")
-    @patch("app.views.discover_tab_cache.store_undo_snapshot", return_value="undo-music")
+    @patch(
+        "app.views.discover_tab_cache.store_undo_snapshot", return_value="undo-music"
+    )
     @patch("app.views.ensure_item_metadata")
     def test_discover_action_planning_music_creates_album_tracker(
         self,

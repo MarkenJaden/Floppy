@@ -3,7 +3,9 @@ from django.urls import path
 from users import metadata_views, onboarding_views, server_port_views, views
 
 urlpatterns = [
-    path("setup/", onboarding_views.onboarding_media_types, name="onboarding_media_types"),
+    path(
+        "setup/", onboarding_views.onboarding_media_types, name="onboarding_media_types"
+    ),
     path(
         "setup/services/<int:index>/",
         onboarding_views.onboarding_services,
@@ -40,7 +42,9 @@ urlpatterns = [
         name="onboarding_skip_integration",
     ),
     path("setup/resume/", onboarding_views.onboarding_resume, name="onboarding_resume"),
-    path("setup/restart/", onboarding_views.onboarding_restart, name="onboarding_restart"),
+    path(
+        "setup/restart/", onboarding_views.onboarding_restart, name="onboarding_restart"
+    ),
     path("accounts/password/recover/", views.password_recover, name="password_recover"),
     path("settings/account", views.account, name="account"),
     path("settings/notifications", views.notifications, name="notifications"),

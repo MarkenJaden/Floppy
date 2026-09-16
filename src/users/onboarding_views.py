@@ -75,9 +75,12 @@ def _wizard_progress(active_step):
         "onboarding_completed_steps": step_order[:active_index],
     }
 
+
 # Order in which enabled media types are walked during the "services" step.
 _MEDIA_TYPE_WALK_ORDER = [
-    mt for mt in MediaTypes.values if mt not in (MediaTypes.EPISODE.value, MediaTypes.SEASON.value)
+    mt
+    for mt in MediaTypes.values
+    if mt not in (MediaTypes.EPISODE.value, MediaTypes.SEASON.value)
 ]
 
 

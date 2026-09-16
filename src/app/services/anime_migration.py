@@ -243,10 +243,13 @@ def _completed_target(
         target.media_type == MediaTypes.TV.value
         and target.library_media_type == MediaTypes.ANIME.value
     )
-    if not target_is_valid or not TV.objects.filter(
-        user_id=user_id,
-        item=target,
-    ).exists():
+    if (
+        not target_is_valid
+        or not TV.objects.filter(
+            user_id=user_id,
+            item=target,
+        ).exists()
+    ):
         raise _migration_error(
             AnimeMigrationState.PROVABLY_PARTIAL,
             PARTIAL_CODE,
@@ -694,7 +697,10 @@ def _persist_preflight_once(
         latest_notes_entry = None
         created_seasons: dict[int, Season] = {}
         history_days = set()
-        smart_list_item_ids = {grouped_item.id, *(anime.item_id for anime in locked_rows)}
+        smart_list_item_ids = {
+            grouped_item.id,
+            *(anime.item_id for anime in locked_rows),
+        }
         for entry in preflight.entries:
             source_item = by_id[entry.anime_id].item
             _upsert_provider_link(

@@ -1351,9 +1351,7 @@ def get_release_for_group(release_group_id):
             # than an arbitrary browse-order pick.
             best = max(
                 releases,
-                key=lambda r: _release_summary(r, include_image=False)[
-                    "track_count"
-                ],
+                key=lambda r: _release_summary(r, include_image=False)["track_count"],
             )
             release_id = best.get("id")
             cache.set(cache_key, release_id, 60 * 60 * 24 * 7)
@@ -1376,9 +1374,7 @@ def get_release_for_group(release_group_id):
         if releases:
             best = max(
                 releases,
-                key=lambda r: _release_summary(r, include_image=False)[
-                    "track_count"
-                ],
+                key=lambda r: _release_summary(r, include_image=False)["track_count"],
             )
             release_id = best.get("id")
             logger.info(

@@ -17,11 +17,20 @@ class AnimeMappingSnapshotTests(SimpleTestCase):
     def test_same_revision_reuses_compiled_snapshot(self):
         """A cache hit avoids rebuilding the reverse indexes."""
         data = {"show": {"mal_id": "1", "tmdb_show_id": "10"}}
-        with patch.object(anime_mapping, "_load_source_data", return_value=(
-            data,
-            "revision-a",
-            "digest-a",
-        )), patch.object(anime_mapping, "_build_snapshot", wraps=anime_mapping._build_snapshot) as build:
+        with (
+            patch.object(
+                anime_mapping,
+                "_load_source_data",
+                return_value=(
+                    data,
+                    "revision-a",
+                    "digest-a",
+                ),
+            ),
+            patch.object(
+                anime_mapping, "_build_snapshot", wraps=anime_mapping._build_snapshot
+            ) as build,
+        ):
             first = anime_mapping.load_mapping_snapshot()
             second = anime_mapping.load_mapping_snapshot()
 
@@ -33,10 +42,19 @@ class AnimeMappingSnapshotTests(SimpleTestCase):
     def test_new_revision_rebuilds_once(self):
         """Changing the approved revision uses a separate compiled cache key."""
         data = {"show": {"mal_id": "1", "tvdb_id": "10"}}
-        with patch.object(anime_mapping, "_load_source_data", side_effect=[
-            (data, "revision-a", "digest-a"),
-            (data, "revision-b", "digest-b"),
-        ]), patch.object(anime_mapping, "_build_snapshot", wraps=anime_mapping._build_snapshot) as build:
+        with (
+            patch.object(
+                anime_mapping,
+                "_load_source_data",
+                side_effect=[
+                    (data, "revision-a", "digest-a"),
+                    (data, "revision-b", "digest-b"),
+                ],
+            ),
+            patch.object(
+                anime_mapping, "_build_snapshot", wraps=anime_mapping._build_snapshot
+            ) as build,
+        ):
             first = anime_mapping.load_mapping_snapshot()
             second = anime_mapping.load_mapping_snapshot()
 

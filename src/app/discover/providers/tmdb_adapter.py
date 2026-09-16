@@ -15,12 +15,15 @@ from app.providers import credentials, services
 logger = logging.getLogger(__name__)
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
+
+
 def tmdb_base_params():
     """Return TMDB auth params, resolved per call so UI changes take effect."""
     return {
         "api_key": credentials.get("tmdb", "api_key"),
         "language": settings.TMDB_LANG,
     }
+
 
 TRENDING_TTL = 60 * 60
 CURRENT_CYCLE_TTL = 60 * 60

@@ -200,7 +200,9 @@ class Command(BaseCommand):
         # regression that only shows up after the cache warms (or only on
         # page >= 2) is visible instead of averaged away.
         if MEDIALIST_SCROLL_PATHS:
-            self.stdout.write("Scroll reproduction (issue #865): cold load + N page requests")
+            self.stdout.write(
+                "Scroll reproduction (issue #865): cold load + N page requests"
+            )
             self.stdout.write(divider)
             for path in MEDIALIST_SCROLL_PATHS:
                 for page in range(1, SCROLL_PAGES + 2):
@@ -209,7 +211,9 @@ class Command(BaseCommand):
                     client.get(path, {"page": page} if page > 1 else {})
                     wall_ms = (time.perf_counter() - t0) * 1000
                     n_queries = len(connection.queries)
-                    label = f"{path} page={page}" + (" (first load)" if page == 1 else "")
+                    label = f"{path} page={page}" + (
+                        " (first load)" if page == 1 else ""
+                    )
                     self.stdout.write(
                         f"{label:<{col_w[0]}} | {n_queries:>{col_w[1]}} | "
                         f"{'':>{col_w[2]}} | {'':>{col_w[3]}} | "

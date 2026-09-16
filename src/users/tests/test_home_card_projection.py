@@ -31,7 +31,8 @@ class HomeCardProjectionTests(TestCase):
             password="12345",
         )
         cls.custom_list = CustomList.objects.create(
-            name="Projection List", owner=cls.user,
+            name="Projection List",
+            owner=cls.user,
         )
         for index in range(ITEM_COUNT):
             item = Item.objects.create(
@@ -42,7 +43,9 @@ class HomeCardProjectionTests(TestCase):
                 watch_providers=PROVIDERS,
             )
             Movie.objects.create(
-                item=item, user=cls.user, status=Status.COMPLETED.value,
+                item=item,
+                user=cls.user,
+                status=Status.COMPLETED.value,
             )
             CustomListItem.objects.create(custom_list=cls.custom_list, item=item)
         cls.row = HomeScreenRow.objects.create(

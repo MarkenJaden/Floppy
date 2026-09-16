@@ -119,9 +119,9 @@ class BaseTemplateIconReferenceTests(SimpleTestCase):
                     )
 
     def test_base_captures_the_install_prompt_before_the_body_renders(self):
-        source = (
-            Path(settings.BASE_DIR) / "templates" / "base.html"
-        ).read_text(encoding="utf-8")
+        source = (Path(settings.BASE_DIR) / "templates" / "base.html").read_text(
+            encoding="utf-8"
+        )
         head = source.split("</head>", 1)[0]
 
         # hx-boost swaps the body only, so a body-scoped listener would miss

@@ -1549,7 +1549,9 @@ class AudiobookshelfImporterTests(TestCase):
         mock_item.assert_not_called()
 
         # ...but it is retried once the cooldown lapses.
-        item.metadata_fetched_at = timezone.now() - (BOOK_REPAIR_COOLDOWN + timedelta(days=1))
+        item.metadata_fetched_at = timezone.now() - (
+            BOOK_REPAIR_COOLDOWN + timedelta(days=1)
+        )
         item.save(update_fields=["metadata_fetched_at"])
         mock_item.return_value = {
             "media": {"duration": 12_000, "metadata": {"title": "Unmatchable"}},

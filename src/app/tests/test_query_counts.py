@@ -89,7 +89,9 @@ HOME_ROW_FRAGMENT_MAX_QUERIES = (
 CUSTOM_LIST_DETAIL_MAX_QUERIES = 34  # +3 from prefilled release-year metadata;
 # +1 from the custom-list collaborators prefetch
 SEASON_PAGE_FIRST_VIEW_EPISODE_COUNT = 18
-SEASON_PAGE_FIRST_VIEW_MAX_QUERIES = 46  # +1 from the per-item metadata language override lookup (#1009)
+SEASON_PAGE_FIRST_VIEW_MAX_QUERIES = (
+    46  # +1 from the per-item metadata language override lookup (#1009)
+)
 SESSION_HISTORY_MODAL_MAX_QUERIES = 60
 
 
@@ -409,9 +411,7 @@ class QueryCountTests(TestCase):
     def test_movie_list_cache_hit_query_budget(self):
         """Second movie list request hits the media-list cache (issue #865)."""
         self.client.get("/medialist/movie")  # warm the cache
-        self._assert_query_budget(
-            "/medialist/movie", 12, "movie list cache hit"
-        )
+        self._assert_query_budget("/medialist/movie", 12, "movie list cache hit")
 
     def test_movie_list_cache_hit_page_two_query_budget(self):
         """A cache-hit page-2 movie request hydrates only its own page."""
@@ -493,7 +493,9 @@ class QueryCountTests(TestCase):
                 media_type=MediaTypes.GAME.value,
                 title=f"Query Count Start Date Game {index}",
             )
-            Game.objects.create(item=item, user=self.user, status=Status.IN_PROGRESS.value)
+            Game.objects.create(
+                item=item, user=self.user, status=Status.IN_PROGRESS.value
+            )
 
         with CaptureQueriesContext(connection) as context:
             response = self.client.get(
@@ -505,7 +507,8 @@ class QueryCountTests(TestCase):
         # >= not ==: setUpTestData's seed_game_library also seeds
         # IN_PROGRESS games shared by every test in this class.
         self.assertGreaterEqual(
-            response.json()["pagination"]["total"], GAME_LIST_START_DATE_SORT_LIBRARY_SIZE,
+            response.json()["pagination"]["total"],
+            GAME_LIST_START_DATE_SORT_LIBRARY_SIZE,
         )
         count = len(context.captured_queries)
         self.assertLessEqual(

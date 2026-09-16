@@ -2260,7 +2260,9 @@ def sort_home_entries(
 
 
 def _library_query_entries(
-    user, row: HomeScreenRow, collection_context_cache: dict | None = None,
+    user,
+    row: HomeScreenRow,
+    collection_context_cache: dict | None = None,
 ) -> list[HomeRowEntry]:
     normalized_filters = _normalized_filter_payload(row.filters or {}, row.media_type)
     if row.media_type == MediaTypes.MUSIC.value:
@@ -2507,7 +2509,9 @@ def _build_row_section(
         entries = _recently_unrated_entries(user, row)
     else:
         entries = _library_query_entries(
-            user, row, collection_context_cache=collection_context_cache,
+            user,
+            row,
+            collection_context_cache=collection_context_cache,
         )
 
     if not entries:
@@ -2525,7 +2529,9 @@ def _build_row_section(
         ):
             image = entry.podcast_show.image
         else:
-            image = getattr(entry.media, "card_image_override", None) or entry.item.image
+            image = (
+                getattr(entry.media, "card_image_override", None) or entry.item.image
+            )
         return not image or image == settings.IMG_NONE
 
     poll_for_covers = media_type in SQUARE_HOME_MEDIA_TYPES and any(

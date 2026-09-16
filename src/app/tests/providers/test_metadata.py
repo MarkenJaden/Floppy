@@ -1990,9 +1990,7 @@ class Metadata(TestCase):
         self.assertEqual(result[0]["title"], "Issue One")
         self.assertEqual(result[0]["image"], "https://example.com/1.jpg")
         self.assertEqual(result[0]["cover_date"], "2024-01-01")
-        self.assertEqual(
-            result[0]["site_detail_url"], "https://example.com/1"
-        )
+        self.assertEqual(result[0]["site_detail_url"], "https://example.com/1")
         self.assertEqual(result[0]["history"], [])
         self.assertEqual(
             mock_api_request.call_args.kwargs["params"]["sort"],

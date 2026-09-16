@@ -47,7 +47,9 @@ class CapabilityHonestyTests(TestCase):
         If this fails, some adapter has started claiming it can write before
         anyone verified that it can.
         """
-        self.assertIn(CAPABILITY_WATCHED_WRITE_PLAYED, JellyfinStateAdapter.CAPABILITIES)
+        self.assertIn(
+            CAPABILITY_WATCHED_WRITE_PLAYED, JellyfinStateAdapter.CAPABILITIES
+        )
         self.assertIn(CAPABILITY_WATCHED_PUSH_PLAYED, JellyfinStateAdapter.CAPABILITIES)
 
         for adapter in (EmbyStateAdapter, KodiStateAdapter):

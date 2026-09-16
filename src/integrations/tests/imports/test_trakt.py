@@ -1343,7 +1343,9 @@ class ImportTrakt(TestCase):
             "season/1": {
                 "image": "",
                 "season_number": 1,
-                "episodes": [{"episode_number": i} for i in range(1, TOTAL_EPISODES + 1)],
+                "episodes": [
+                    {"episode_number": i} for i in range(1, TOTAL_EPISODES + 1)
+                ],
             },
         }
 
@@ -1524,7 +1526,9 @@ class ImportTrakt(TestCase):
             "season/1": {
                 "image": "",
                 "season_number": 1,
-                "episodes": [{"episode_number": i} for i in range(1, TOTAL_EPISODES + 1)],
+                "episodes": [
+                    {"episode_number": i} for i in range(1, TOTAL_EPISODES + 1)
+                ],
             },
         }
 

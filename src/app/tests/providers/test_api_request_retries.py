@@ -216,7 +216,8 @@ class InteractiveRequestScopeTests(CooldownIsolationMixin, SimpleTestCase):
         total = sum(call.args[0] for call in sleep.call_args_list)
         self.assertLessEqual(
             total,
-            RATE_LIMIT_MAX_RETRIES_INTERACTIVE * RATE_LIMIT_MAX_WAIT_SECONDS_INTERACTIVE,
+            RATE_LIMIT_MAX_RETRIES_INTERACTIVE
+            * RATE_LIMIT_MAX_WAIT_SECONDS_INTERACTIVE,
         )
 
     def test_scope_is_reset_after_use(self):

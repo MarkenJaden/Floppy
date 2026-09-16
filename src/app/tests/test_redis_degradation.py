@@ -151,12 +151,8 @@ class RateLimiterDegradationTests(SimpleTestCase):
                 return_value=mock_response,
             ) as mock_fallback,
         ):
-            services.api_request(
-                Sources.TVDB.value, "GET", "https://example.test/api"
-            )
-            services.api_request(
-                Sources.TVDB.value, "GET", "https://example.test/api"
-            )
+            services.api_request(Sources.TVDB.value, "GET", "https://example.test/api")
+            services.api_request(Sources.TVDB.value, "GET", "https://example.test/api")
 
         self.assertEqual(mock_fallback.call_count, 2)
 

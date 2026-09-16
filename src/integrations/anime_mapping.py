@@ -29,8 +29,7 @@ logger = logging.getLogger(__name__)
 APPROVED_REVISION = "049cd475b567d282886e7ce81f4168dbdec33c14"
 APPROVED_DIGEST = "0ba1a83c4512da9c6770c47aa03843f906ad3d607eb077a06b366f64b23865b6"
 MAPPING_URL_TEMPLATE = (
-    "https://raw.githubusercontent.com/Kometa-Team/Anime-IDs/{revision}/"
-    "anime_ids.json"
+    "https://raw.githubusercontent.com/Kometa-Team/Anime-IDs/{revision}/anime_ids.json"
 )
 SNAPSHOT_CACHE_PREFIX = "anime_mapping_snapshot_v2"
 LAST_GOOD_CACHE_KEY = f"{SNAPSHOT_CACHE_PREFIX}:last-good"

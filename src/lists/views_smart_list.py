@@ -288,11 +288,14 @@ def _smart_list_detail_response(
     sort_config = media_sort_config.get(sort_by)
     if sort_config:
         if sort_by == ListDetailSortChoices.PLATFORM:
+
             def value_getter(item, platforms):
                 return _platform_sort_value(item, platforms)
         else:
+
             def value_getter(item, _platforms):
                 return sort_config["key"](item)
+
         items_page, filtered_items_count, collection_platforms_by_item_id = (
             _paginate_python_sorted_items(
                 items,
@@ -410,9 +413,7 @@ def _smart_list_detail_response(
         "sort_choices": sort_choices,
         "status_choices": status_choices,
         "public_view": public_view,
-        "public_list_reference": custom_list.public_reference
-        if is_public_view
-        else "",
+        "public_list_reference": custom_list.public_reference if is_public_view else "",
         "show_public_notes": not is_public_view or custom_list.include_notes,
         "can_edit": can_edit,
         "enable_bulk_select": can_edit,

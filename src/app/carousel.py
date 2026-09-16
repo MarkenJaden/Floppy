@@ -13,7 +13,11 @@ from django.core.cache import cache
 from app.models import MediaTypes, Sources
 from app.providers import tmdb
 
-_TMDB_CAROUSEL_TYPES = (MediaTypes.MOVIE.value, MediaTypes.TV.value, MediaTypes.SEASON.value)
+_TMDB_CAROUSEL_TYPES = (
+    MediaTypes.MOVIE.value,
+    MediaTypes.TV.value,
+    MediaTypes.SEASON.value,
+)
 
 
 def carousel_supported(media_type, source):
@@ -31,7 +35,9 @@ def confirmed_empty(media_type, source, media_id, *, season_number=None) -> bool
     up front instead of paying for the lazy carousel round trip again.
     """
     if source == Sources.TMDB.value and media_type in _TMDB_CAROUSEL_TYPES:
-        data = tmdb.peek_carousel_media(media_type, media_id, season_number=season_number)
+        data = tmdb.peek_carousel_media(
+            media_type, media_id, season_number=season_number
+        )
     elif source == Sources.IGDB.value and media_type == MediaTypes.GAME.value:
         data = cache.get(f"igdb_carousel_v2_{media_id}")
     else:
@@ -39,14 +45,18 @@ def confirmed_empty(media_type, source, media_id, *, season_number=None) -> bool
     return data is not None and not data["video"] and not data["photos"]
 
 
-def resolve_carousel_media(media_type, source, media_id, *, season_number=None) -> dict | None:
+def resolve_carousel_media(
+    media_type, source, media_id, *, season_number=None
+) -> dict | None:
     """Return {"video": {...}|None, "photos": [{"url", "thumb_url"}, ...]} or None."""
     if source == Sources.TMDB.value and media_type in _TMDB_CAROUSEL_TYPES:
         data = tmdb.carousel_media(media_type, media_id, season_number=season_number)
         photos = [
             {
                 "url": tmdb.get_carousel_image_url(photo["file_path"], size="w1280"),
-                "thumb_url": tmdb.get_carousel_image_url(photo["file_path"], size="w300"),
+                "thumb_url": tmdb.get_carousel_image_url(
+                    photo["file_path"], size="w300"
+                ),
             }
             for photo in data["photos"]
         ]

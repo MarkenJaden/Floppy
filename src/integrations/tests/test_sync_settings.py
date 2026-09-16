@@ -75,7 +75,9 @@ class DirectionSettingsTests(TestCase):
             sorted(self.binding.approved_directions),
             [SyncDirection.INBOUND.value, SyncDirection.OUTBOUND.value],
         )
-        self.assertIn(CAPABILITY_WATCHED_PUSH_PLAYED, self.binding.approved_capabilities)
+        self.assertIn(
+            CAPABILITY_WATCHED_PUSH_PLAYED, self.binding.approved_capabilities
+        )
 
     def test_inbound_grants_no_outbound_capability(self):
         self._post(settings_view.DIRECTION_INBOUND)

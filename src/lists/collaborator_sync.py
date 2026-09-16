@@ -13,7 +13,11 @@ logger = logging.getLogger(__name__)
 
 def get_collaborators_for_item(item, source_user):
     """Find other users who share a list with source_user containing item."""
-    if not item or not source_user or not getattr(source_user, "is_authenticated", False):
+    if (
+        not item
+        or not source_user
+        or not getattr(source_user, "is_authenticated", False)
+    ):
         return set()
 
     q_items = Q(items=item)
@@ -35,7 +39,8 @@ def get_collaborators_for_item(item, source_user):
     shared_lists = (
         CustomList.objects.filter(q_items)
         .filter(
-            Q(owner=source_user, collaborators__isnull=False) | Q(collaborators=source_user)
+            Q(owner=source_user, collaborators__isnull=False)
+            | Q(collaborators=source_user)
         )
         .distinct()
         .prefetch_related("collaborators", "owner")
@@ -129,8 +134,14 @@ def _sync_generic_media(media, model_class, collab_user):
         if collab_media.status != Status.COMPLETED.value:
             collab_media.status = Status.COMPLETED.value
             if "end_date" in field_names and not collab_media.end_date:
-                collab_media.end_date = getattr(media, "end_date", None) or timezone.now()
-            if "start_date" in field_names and not collab_media.start_date and getattr(media, "start_date", None):
+                collab_media.end_date = (
+                    getattr(media, "end_date", None) or timezone.now()
+                )
+            if (
+                "start_date" in field_names
+                and not collab_media.start_date
+                and getattr(media, "start_date", None)
+            ):
                 collab_media.start_date = media.start_date
             if "progress" in field_names and getattr(media, "progress", None):
                 collab_media.progress = media.progress
@@ -146,7 +157,9 @@ def _sync_generic_media(media, model_class, collab_user):
         if "start_date" in field_names and getattr(media, "start_date", None):
             create_kwargs["start_date"] = media.start_date
         if "end_date" in field_names:
-            create_kwargs["end_date"] = getattr(media, "end_date", None) or timezone.now()
+            create_kwargs["end_date"] = (
+                getattr(media, "end_date", None) or timezone.now()
+            )
         if "progress" in field_names and getattr(media, "progress", None):
             create_kwargs["progress"] = media.progress
         model_class.objects.create(**create_kwargs)
@@ -192,7 +205,9 @@ def sync_episode_to_list_collaborators(episode, source_user):
                     status=Status.COMPLETED.value,
                 ).exists()
             if not already_watched:
-                with contextlib.suppress(fork_services_episode.EpisodeWatchConflictError):
+                with contextlib.suppress(
+                    fork_services_episode.EpisodeWatchConflictError
+                ):
                     fork_services_episode.create_episode_watch(
                         collab_season,
                         episode.item,
@@ -201,9 +216,8 @@ def sync_episode_to_list_collaborators(episode, source_user):
                         score=None,
                         notes="",
                     )
-                    if (
-                        getattr(collab_season, "pk", None)
-                        and hasattr(collab_season, "_sync_status_after_episode_change")
+                    if getattr(collab_season, "pk", None) and hasattr(
+                        collab_season, "_sync_status_after_episode_change"
                     ):
                         collab_season._sync_status_after_episode_change()
 

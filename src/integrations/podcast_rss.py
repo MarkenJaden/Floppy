@@ -119,9 +119,7 @@ def _extract_show_metadata(root: Element) -> dict:
         if link_elem is not None and link_elem.text:
             metadata["website_url"] = link_elem.text.strip()
         else:
-            for candidate in channel.findall(
-                "{http://www.w3.org/2005/Atom}link"
-            ):
+            for candidate in channel.findall("{http://www.w3.org/2005/Atom}link"):
                 rel = candidate.get("rel")
                 href = candidate.get("href")
                 if rel in (None, "alternate") and href:

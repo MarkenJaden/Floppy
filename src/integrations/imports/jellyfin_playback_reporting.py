@@ -106,7 +106,7 @@ def _parse_datetime(value: str) -> datetime:
     match = re.search(r"\.(\d+)(?P<suffix>(?:[+-]\d\d:\d\d)?)$", value)
     if match:
         fraction = match.group(1)[:6].ljust(6, "0")
-        value = f"{value[:match.start() + 1]}{fraction}{match.group('suffix')}"
+        value = f"{value[: match.start() + 1]}{fraction}{match.group('suffix')}"
 
     parsed = datetime.fromisoformat(value.replace(" ", "T", 1))
     if timezone.is_naive(parsed):
@@ -164,7 +164,9 @@ def parse_tsv(payload: bytes | str) -> PlaybackReportingParseResult:
 
         parts = line.split("\t")
         if line_number == 1 and parts[0].strip().casefold() == "datecreated":
-            _append_warning(warnings, "Line 1: skipped a Playback Reporting header row.")
+            _append_warning(
+                warnings, "Line 1: skipped a Playback Reporting header row."
+            )
             continue
         if len(parts) < MIN_COLUMNS:
             rejected_count += 1
@@ -335,7 +337,9 @@ class JellyfinPlaybackReportingImporter:
         for index, row in enumerate(parse_result.rows, start=1):
             import_progress.report(index, total, "Jellyfin Playback Reporting")
             if row.user_id != user_id:
-                self._skip(f"Line {row.line_number}: row belongs to another Jellyfin user.")
+                self._skip(
+                    f"Line {row.line_number}: row belongs to another Jellyfin user."
+                )
                 continue
             self._import_row(row, library)
 
@@ -469,13 +473,19 @@ class JellyfinPlaybackReportingImporter:
         item = library.get(row.item_id)
         normalized_type = row.item_type.casefold()
         if item is None:
-            self._skip(f"Line {row.line_number}: Jellyfin item {row.item_id} was not found.")
+            self._skip(
+                f"Line {row.line_number}: Jellyfin item {row.item_id} was not found."
+            )
             return
         if normalized_type not in {"movie", "episode"}:
-            self._skip(f"Line {row.line_number}: unsupported item type {row.item_type!r}.")
+            self._skip(
+                f"Line {row.line_number}: unsupported item type {row.item_type!r}."
+            )
             return
         if str(item.get("Type", "")).casefold() != normalized_type:
-            self._skip(f"Line {row.line_number}: Jellyfin item type did not match the export.")
+            self._skip(
+                f"Line {row.line_number}: Jellyfin item type did not match the export."
+            )
             return
 
         candidates = _provider_candidates(item)
@@ -484,11 +494,18 @@ class JellyfinPlaybackReportingImporter:
         if normalized_type == "episode":
             series_item = library.get(str(item.get("SeriesId")))
             episode_numbers = _episode_numbers(item)
-            if series_item is None or str(series_item.get("Type", "")).casefold() != "series":
-                self._skip(f"Line {row.line_number}: parent Jellyfin series was not found.")
+            if (
+                series_item is None
+                or str(series_item.get("Type", "")).casefold() != "series"
+            ):
+                self._skip(
+                    f"Line {row.line_number}: parent Jellyfin series was not found."
+                )
                 return
             if episode_numbers is None:
-                self._skip(f"Line {row.line_number}: season/episode numbers were invalid.")
+                self._skip(
+                    f"Line {row.line_number}: season/episode numbers were invalid."
+                )
                 return
             candidates = _provider_candidates(series_item)
 

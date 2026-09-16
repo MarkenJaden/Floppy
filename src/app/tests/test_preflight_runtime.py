@@ -336,13 +336,15 @@ class RunningTopologyTests(SimpleTestCase):
 
     def test_summary_names_the_processes_that_were_started(self):
         """A worker absent at boot must not be listed as resident now."""
-        self._write_boot_sizing({
-            "tier": "minimal",
-            "profile": "tier=minimal mem=1.0GiB",
-            "web_concurrency": 1,
-            "gunicorn_threads": 2,
-            "expected_programs": ["nginx", "gunicorn", "celery"],
-        })
+        self._write_boot_sizing(
+            {
+                "tier": "minimal",
+                "profile": "tier=minimal mem=1.0GiB",
+                "web_concurrency": 1,
+                "gunicorn_threads": 2,
+                "expected_programs": ["nginx", "gunicorn", "celery"],
+            }
+        )
         with patch.dict("os.environ", {"FLOPPY_RESOURCE_TIER": "standard"}):
             result = check_runtime()
 
@@ -356,11 +358,13 @@ class RunningTopologyTests(SimpleTestCase):
 
     def test_the_fresh_probe_is_kept_for_comparison(self):
         """Drift is only diagnosable if both readings are reported."""
-        self._write_boot_sizing({
-            "tier": "minimal",
-            "profile": "tier=minimal mem=1.0GiB",
-            "expected_programs": ["nginx", "gunicorn", "celery"],
-        })
+        self._write_boot_sizing(
+            {
+                "tier": "minimal",
+                "profile": "tier=minimal mem=1.0GiB",
+                "expected_programs": ["nginx", "gunicorn", "celery"],
+            }
+        )
         with patch.dict("os.environ", {"FLOPPY_RESOURCE_TIER": "standard"}):
             result = check_runtime()
 

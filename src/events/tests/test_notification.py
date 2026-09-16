@@ -803,7 +803,9 @@ class NotificationTests(TestCase):
 
         notification_text = format_notification([self.season1_event])
 
-        self.assertIn("Test TV Show - Season 1 S1 E5 * Season Finale", notification_text)
+        self.assertIn(
+            "Test TV Show - Season 1 S1 E5 * Season Finale", notification_text
+        )
         self.assertNotIn("(11:59)", notification_text)
 
     def test_format_notification_html(self):
@@ -1501,9 +1503,7 @@ class CrossBucketAnimeNotificationTests(TestCase):
 
         with patch(
             "events.models.resolve_provider_series_id",
-            side_effect=lambda mal_id, provider: (
-                "1396" if provider == "tmdb" else None
-            ),
+            side_effect=lambda mal_id, provider: "1396" if provider == "tmdb" else None,
         ):
             user_releases = get_user_releases(users_with_notifications, target_events)
 

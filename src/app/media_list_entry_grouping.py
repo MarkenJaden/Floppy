@@ -132,10 +132,10 @@ def _get_separate_media_list(
     if not sort_filter:
         return list(queryset)
 
-    if (
-        sort_filter in _POST_SORT_KEYS
-        and media_type not in {MediaTypes.TV.value, MediaTypes.SEASON.value}
-    ):
+    if sort_filter in _POST_SORT_KEYS and media_type not in {
+        MediaTypes.TV.value,
+        MediaTypes.SEASON.value,
+    }:
         queryset = list(queryset)
 
     return list(
