@@ -487,6 +487,42 @@ class CalendarViewTests(TestCase):
             response.context["available_media_types"],
         )
 
+    @patch("events.models.Event.objects.get_user_events")
+    @patch.object(get_user_model(), "update_preference")
+    def test_calendar_filter_media_types_include_season_when_tv_enabled(
+        self,
+        mock_update_preference,
+        mock_get_user_events,
+    ):
+        """Season releases should stay filterable when TV Shows is enabled, even if TV Seasons is disabled."""
+        mock_update_preference.return_value = "grid"
+
+        season_item = Item.objects.create(
+            media_id="tv-season-1",
+            source=Sources.MANUAL.value,
+            media_type=MediaTypes.SEASON.value,
+            title="Episodic Show",
+            season_number=1,
+        )
+        today = timezone.localdate()
+        mock_get_user_events.return_value = [
+            Event(
+                item=season_item,
+                datetime=timezone.make_aware(
+                    timezone.datetime(today.year, today.month, 15, 12, 0),
+                ),
+            ),
+        ]
+
+        self.user.tv_enabled = True
+        self.user.season_enabled = False
+        self.user.save(update_fields=["tv_enabled", "season_enabled"])
+
+        response = self.client.get(reverse("calendar"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(MediaTypes.SEASON.value, response.context["filter_media_types"])
+
     @patch("events.tasks.reload_calendar.delay")
     def test_reload_calendar(self, mock_reload_task):
         """Test the reload_calendar view."""

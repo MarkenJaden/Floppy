@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
@@ -59,6 +61,42 @@ class ImportRunProvenanceTests(TestCase):
         run = ImportRun.objects.get(user=self.user)
         self.assertEqual(run.status, ImportRun.Status.FAILED)
         self.assertIsNotNone(run.finished_at)
+
+    @patch("app.statistics_cache.schedule_all_ranges_refresh")
+    @patch("integrations.tasks._media_imports.history_cache.invalidate_history_cache")
+    @patch("events.tasks.reload_calendar.delay")
+    def test_unchanged_import_preserves_caches(self, calendar, invalidate, refresh):
+        def importer(*args):
+            # Older importers report per-media counts and may only return a
+            # skipped metric when every source row already exists.
+            return {
+                "skipped": 12,
+                "failed": 2,
+                "rejected": 3,
+                "skipped_ignored": 1,
+                "skipped_numbering_mismatch": 1,
+            }, []
+
+        import_media(importer, None, self.user.id, "new")
+        calendar.assert_not_called()
+        invalidate.assert_not_called()
+        refresh.assert_not_called()
+        run = ImportRun.objects.get(user=self.user)
+        self.assertEqual(run.status, ImportRun.Status.COMPLETED)
+        self.assertEqual(run.skipped_count, 12)
+        self.assertEqual(run.failed_count, 2)
+
+    @patch("app.statistics_cache.schedule_all_ranges_refresh")
+    @patch("integrations.tasks._media_imports.history_cache.invalidate_history_cache")
+    @patch("events.tasks.reload_calendar.delay")
+    def test_updated_import_refreshes_caches(self, calendar, invalidate, refresh):
+        def importer(*args):
+            return {"created": 0, "updated": 1, "skipped": 12}, []
+
+        import_media(importer, None, self.user.id, "overwrite")
+        calendar.assert_called_once_with()
+        invalidate.assert_called_once_with(self.user.id, force=True)
+        refresh.assert_called_once_with(self.user.id)
 
     def test_bulk_create_media_leaves_import_run_null_outside_tracking(self):
         """Calling bulk_create_media directly (no import_media wrapper) tags nothing."""

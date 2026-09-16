@@ -166,6 +166,7 @@ def _install_media_list_policy() -> None:
         list_sql_filters=None,
         sql_limit=None,
         sql_offset=None,
+        needs_watch_providers=False,
     ):
         """Return media rows under the active entry-grouping policy.
 
@@ -190,6 +191,7 @@ def _install_media_list_policy() -> None:
                 list_sql_filters=list_sql_filters,
                 sql_limit=sql_limit,
                 sql_offset=sql_offset,
+                needs_watch_providers=needs_watch_providers,
             )
 
         return _get_separate_media_list(

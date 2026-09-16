@@ -1,7 +1,11 @@
+import shutil
+import tempfile
+from pathlib import Path
+
 from django.contrib.auth import get_user_model
 from django.contrib.messages import get_messages
 from django.core.cache import cache
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -670,3 +674,52 @@ class CacheClearButtonsTests(TestCase):
         ):
             response = self.client.get(reverse(url_name))
             self.assertEqual(response.status_code, 405)
+
+
+class ExportLogsTests(TestCase):
+    """Tests for the sanitized log export on Settings > Advanced."""
+
+    def setUp(self):
+        """Create a user and an isolated log directory to read from."""
+        self.credentials = {"username": "test", "password": "12345"}
+        self.user = get_user_model().objects.create_user(**self.credentials)
+        self.client.login(**self.credentials)
+
+        log_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, log_dir, ignore_errors=True)
+        self.log_file = log_dir / "floppy.log"
+
+    def test_export_logs_includes_rotated_backups_oldest_first(self):
+        """The download should span rotated backups, not just the active file."""
+        (self.log_file.with_suffix(".log.2")).write_text("oldest entry\n")
+        (self.log_file.with_suffix(".log.1")).write_text("middle entry\n")
+        self.log_file.write_text("newest entry\n")
+
+        with override_settings(LOG_FILE=str(self.log_file)):
+            response = self.client.get(reverse("export_logs"))
+
+        body = response.content.decode()
+        self.assertLess(body.index("oldest entry"), body.index("middle entry"))
+        self.assertLess(body.index("middle entry"), body.index("newest entry"))
+
+    def test_export_logs_redacts_secrets_across_all_files(self):
+        """Redaction must apply to rotated backups too, not just the active file."""
+        (self.log_file.with_suffix(".log.1")).write_text(
+            "Authorization: Bearer sk-secret-value\n"
+        )
+        self.log_file.write_text("plain entry\n")
+
+        with override_settings(LOG_FILE=str(self.log_file)):
+            response = self.client.get(reverse("export_logs"))
+
+        self.assertNotIn("sk-secret-value", response.content.decode())
+
+    def test_export_logs_handles_missing_backups(self):
+        """A fresh install with no rotated backups should still download fine."""
+        self.log_file.write_text("only entry\n")
+
+        with override_settings(LOG_FILE=str(self.log_file)):
+            response = self.client.get(reverse("export_logs"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("only entry", response.content.decode())

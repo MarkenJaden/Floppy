@@ -1077,6 +1077,76 @@ class HomeScreenViewTests(TestCase):
             ).exists(),
         )
 
+    def test_home_screen_get_omits_smart_list_only_filter_keys(self):
+        self._set_enabled_media_types(MediaTypes.TV.value)
+
+        response = self.client.get(reverse("home_screen"))
+
+        sections = {
+            section["media_type"]: section
+            for section in json.loads(response.context["home_screen_sections_json"])
+        }
+        tv_filters = sections[MediaTypes.TV.value]["rows"][0]["filters"]
+        for key in (
+            "completed_date_within_unit",
+            "completed_date_from",
+            "completed_date_to",
+            "completed_date_within",
+            "release_date_from",
+            "rating_min",
+            "rating_max",
+            "sort",
+            "list",
+        ):
+            self.assertNotIn(key, tv_filters)
+
+    def test_home_screen_post_round_trips_seeded_filters_without_error(self):
+        """Regression test for #1177: saving unmodified seeded filters must not
+        fail with e.g. "Filter 'completed_date_within_unit' is not available".
+        """
+        self._set_enabled_media_types(MediaTypes.TV.value)
+
+        get_response = self.client.get(reverse("home_screen"))
+        sections = {
+            section["media_type"]: section
+            for section in json.loads(
+                get_response.context["home_screen_sections_json"],
+            )
+        }
+        tv_row = sections[MediaTypes.TV.value]["rows"][0]
+
+        payload = [
+            {
+                "media_type": MediaTypes.TV.value,
+                "rows": [
+                    {
+                        "enabled": True,
+                        "row_type": HomeScreenRowTypeChoices.LIBRARY_QUERY,
+                        "sort_by": tv_row["sort_by"],
+                        "direction": tv_row["direction"],
+                        "filters": tv_row["filters"],
+                    },
+                ],
+            },
+        ]
+
+        response = self.client.post(
+            reverse("home_screen"),
+            {"home_screen_sections": json.dumps(payload)},
+        )
+
+        self.assertRedirects(response, reverse("home_screen"))
+        messages = list(get_messages(response.wsgi_request))
+        self.assertEqual(len(messages), 1)
+        self.assertIn("updated successfully", str(messages[0]))
+        self.assertTrue(
+            HomeScreenRow.objects.filter(
+                user=self.user,
+                media_type=MediaTypes.TV.value,
+                row_type=HomeScreenRowTypeChoices.LIBRARY_QUERY,
+            ).exists(),
+        )
+
     def test_home_screen_get_upgrades_legacy_seeded_defaults(self):
         self._set_enabled_media_types(
             MediaTypes.SEASON.value,

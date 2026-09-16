@@ -18,6 +18,7 @@ from django.shortcuts import render
 from django.urls import reverse
 
 from app import helpers
+from app.bulk_actions import build_bulk_action_data
 from app.columns import (
     resolve_column_config,
     resolve_columns,
@@ -30,6 +31,7 @@ from lists.forms import CustomListForm
 from lists.models import CustomListItem
 from lists.views_helpers import (
     _adapt_list_items_for_table,
+    _attach_kometa_episode_urls,
     _attach_media_with_aggregation,
     _build_collection_platforms_by_item_id,
     _build_list_count_trigger,
@@ -311,6 +313,7 @@ def _smart_list_detail_response(
         filtered_items_count = paginator.count
         _attach_media_with_aggregation(items_page, media_user)
 
+    _attach_kometa_episode_urls(items_page)
     prefill_display_release_years(items_page)
 
     if layout == "table":
@@ -412,6 +415,19 @@ def _smart_list_detail_response(
         else "",
         "show_public_notes": not is_public_view or custom_list.include_notes,
         "can_edit": can_edit,
+        "enable_bulk_select": can_edit,
+        "bulk_action_data": (
+            build_bulk_action_data(
+                request.user,
+                request=request,
+                status_url=reverse("bulk_status_update"),
+                list_url=reverse("bulk_list_add"),
+                collection_url=reverse("bulk_collection_quick_add"),
+                tag_url=reverse("tag_bulk_toggle"),
+            )
+            if can_edit
+            else {},
+        ),
         "list_ordering_enabled": can_edit and sort_by == ListDetailSortChoices.CUSTOM,
         "is_public_view": is_public_view,
         "recommendation_count": recommendation_count,

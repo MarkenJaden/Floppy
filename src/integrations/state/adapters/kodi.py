@@ -96,6 +96,11 @@ class KodiStateAdapter:
         The id is encoded as ``movie:123`` / ``episode:456`` because Kodi's
         library ids are only unique within a media type.
         """
+        # The server's numbering is independent of the personal tracking
+        # order. Without an explicit reverse mapping this must need review.
+        if getattr(item, "episode_order_id", None):
+            return None
+
         key = _UNIQUE_ID_BY_SOURCE.get(item.source)
         if not key:
             return None

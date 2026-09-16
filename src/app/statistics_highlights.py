@@ -281,7 +281,7 @@ def _get_today_release_entry(user, media_type_filter=None):
     include_episodes = not media_type_filter or media_type_filter == MediaTypes.TV.value
     Episode = apps.get_model("app", "Episode")
     episode_qs = (
-        Episode.objects.filter(
+        Episode.all_objects.filter(
             related_season__user=user,
             item__release_datetime__isnull=False,
         )

@@ -2482,6 +2482,84 @@ class PlexWebhookTests(TestCase):
         self.assertEqual(movie.count(), 1)
         self.assertEqual(movie[0].status, Status.COMPLETED.value)
 
+    @patch("app.providers.tmdb.search")
+    @patch("app.providers.tmdb.tv_with_seasons")
+    def test_repeated_scrobble_via_title_search_is_one_play(
+        self,
+        mock_tv_with_seasons,
+        mock_tmdb_search,
+    ):
+        """Two scrobbles of one episode stay one play even when each has to
+        resolve its show ID through title search rather than a stable Plex
+        identity.
+
+        Regression test for #1181: a payload with no `ratingKey` and no
+        `plex://` Guid (common — see the many fixtures elsewhere in this
+        file that only carry imdb/tvdb Guids) never populates the
+        ExternalReference match cache, so every scrobble re-runs title
+        search independently. If that search is not perfectly deterministic
+        between calls (a real possibility against the live TMDB API), the
+        two scrobbles can resolve to two different show ids and the
+        runtime-window dedup — keyed on that id — never gets a chance to
+        recognize them as the same play.
+        """
+        # A dict (not a fixed side_effect list) because a single webhook call
+        # can run the title search more than once internally (e.g. season
+        # recovery); every search during one POST must resolve to the same
+        # show, only the id shifts between the two separate POSTs below.
+        resolved_show = {"media_id": 111}
+
+        def fake_tmdb_search(*_args, **_kwargs):
+            return {
+                "results": [
+                    {"media_id": resolved_show["media_id"], "title": "Secret Team"},
+                ],
+            }
+
+        mock_tmdb_search.side_effect = fake_tmdb_search
+
+        def fake_tv_with_seasons(media_id, _seasons):
+            return {
+                "title": "Secret Team",
+                "image": "",
+                "season/2": {
+                    "image": "",
+                    "episodes": [{"episode_number": 8, "runtime": 23}],
+                },
+                "related": {"seasons": [{"season_number": 2}]},
+            }
+
+        mock_tv_with_seasons.side_effect = fake_tv_with_seasons
+
+        payload = {
+            "event": "media.scrobble",
+            "Account": {"title": "testuser"},
+            "Metadata": {
+                "type": "episode",
+                "grandparentTitle": "Secret Team",
+                "title": "Secret Team",
+                "index": 8,
+                "parentIndex": 2,
+                "Guid": [{"id": "imdb://tt99887766"}],
+            },
+        }
+        data = {"payload": json.dumps(payload)}
+
+        response = self.client.post(self.url, data=data, format="multipart")
+        self.assertEqual(response.status_code, 200)
+
+        resolved_show["media_id"] = 222
+        response = self.client.post(self.url, data=data, format="multipart")
+        self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(
+            Episode.objects.filter(
+                item__season_number=2,
+                item__episode_number=8,
+            ).count(),
+            1,
+        )
+
     @patch("integrations.webhooks.plex.music_scrobble.record_music_playback")
     def test_music_play_event(self, mock_scrobble):
         """Test Plex music play delegates to the scrobble service."""
@@ -2593,7 +2671,7 @@ class PlexWebhookTests(TestCase):
                     self.assertEqual(response.status_code, 200)
                     self.assertEqual(Movie.objects.count(), 0)
 
-    @patch.object(PlexWebhookProcessor, "_process_media")
+    @patch.object(PlexWebhookProcessor, "_process_media", return_value=None)
     @patch.object(
         PlexWebhookProcessor,
         "resolve_external_ids",

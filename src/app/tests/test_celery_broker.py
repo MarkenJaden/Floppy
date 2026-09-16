@@ -124,35 +124,25 @@ class CeleryDispatchRoutingTests(SimpleTestCase):
         def task_body(*args, **kwargs):
             return None
 
+        # Finalize first. Celery replays every @shared_task onto a newly
+        # finalized app, so the real implementations of these names land here
+        # -- and dispatching then reaches the real task and fails its signature
+        # check (`import_radarr_recurring() missing 1 required positional
+        # argument`). This only bites when app and integrations tests share a
+        # process, which is why running the suite serially surfaced it.
         self.app.finalize()
-        for task_name in (
-            "Backfill item metadata",
-            "Import from Radarr (Recurring)",
-            "Process media server webhook",
-            "Unclassified priority test task",
-        ):
-            self.app._tasks.pop(task_name, None)
-            self.app.task(
-                name=task_name,
-                ignore_result=True,
-                typing=False,
-            )(task_body)
+        
+        def _register(name):
+            # _task_from_fun returns the *existing* task when the name is
+            # already registered, so the injected real implementation has to be
+            # unregistered first or the stand-in silently never takes effect.
+            self.app.tasks.pop(name, None)
+            return self.app.task(name=name, ignore_result=True, shared=False)(task_body)
 
-    @property
-    def background_task(self):
-        return self.app.tasks["Backfill item metadata"]
-
-    @property
-    def followup_task(self):
-        return self.app.tasks["Import from Radarr (Recurring)"]
-
-    @property
-    def interactive_task(self):
-        return self.app.tasks["Process media server webhook"]
-
-    @property
-    def fallback_task(self):
-        return self.app.tasks["Unclassified priority test task"]
+        self.background_task = _register("Backfill item metadata")
+        self.followup_task = _register("Import from Radarr (Recurring)")
+        self.interactive_task = _register("Process media server webhook")
+        self.fallback_task = _register("Unclassified priority test task")
 
     def _dispatch_and_capture(self, dispatch):
         with patch.object(self.app.amqp, "send_task_message") as publish:

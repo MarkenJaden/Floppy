@@ -14,8 +14,9 @@ hosts.
 import base64
 import binascii
 
+from django.conf import settings
 from django.core.signing import BadSignature, Signer
-from django.urls import reverse
+from django.urls import get_script_prefix, reverse
 
 SIGNER_SALT = "floppy.abs-cover"
 
@@ -32,7 +33,20 @@ def build_cover_proxy_url(account_id, library_item_id):
     payload = f"{account_id}:{library_item_id}"
     token = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
     signed = _signer().sign(token)
-    return reverse("audiobookshelf_cover", kwargs={"token": signed})
+    path = reverse(
+        "audiobookshelf_cover", kwargs={"token": signed}, urlconf="config.urls"
+    )
+    # This always runs inside a Celery worker (even a manual "sync now" is
+    # queued), whose ROOT_URLCONF is deliberately empty since it never serves
+    # HTTP - hence the explicit urlconf above. Celery also never handles a
+    # request, so the script-prefix thread-local reverse() applies stays at
+    # its "/" default and never picks up a configured BASE_URL subpath the
+    # way a real request would. Add it by hand only when that default is
+    # still in effect, so a future request-context caller with the real
+    # prefix already set isn't double-prefixed.
+    if get_script_prefix() == "/" and settings.FORCE_SCRIPT_NAME:
+        return settings.FORCE_SCRIPT_NAME.rstrip("/") + path
+    return path
 
 
 def resolve_cover_proxy_token(token):

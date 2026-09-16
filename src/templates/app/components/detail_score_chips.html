@@ -45,7 +45,7 @@
             <span class="text-[12px] font-semibold text-[var(--color-text-muted)] sm:text-sm">-</span>
           {% endif %}
           <span class="text-[12px] text-[var(--color-text-muted)] sm:text-sm">|</span>
-          <span class="truncate text-[12px] text-[var(--color-text-secondary)] sm:text-sm">{% blocktranslate trimmed with value_1=media.score_count|intcomma count count=media.score_count %}{{ value_1 }} vote{% plural %}{{ value_1 }} votes{% endblocktranslate %}</span>
+          <span class="truncate text-[12px] text-[var(--color-text-secondary)] sm:text-sm">{% blocktranslate trimmed with value_1=media.score_count|intcomma count count=media.score_count|safe_count %}{{ value_1 }} vote{% plural %}{{ value_1 }} votes{% endblocktranslate %}</span>
         </button>
         {% if provider_series_graph_data %}
           {% include "app/components/series_graph_tooltip.html" with graph_data=provider_series_graph_data provider_label=display_provider only %}

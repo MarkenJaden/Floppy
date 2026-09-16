@@ -1945,3 +1945,46 @@ class SafeCountFilterTests(TestCase):
 
     def test_non_numeric_string_defaults_to_zero(self):
         self.assertEqual(app_tags.safe_count("TBA"), 0)
+
+
+class DetailScoreChipsTemplateTests(TestCase):
+    """Non-numeric provider score_count must not crash blocktranslate (#1147).
+
+    Season metadata is a plain dict assembled by different code paths per
+    provider/sync state, so score_count isn't guaranteed to be a real int
+    even when it isn't None (e.g. a freshly-migrated TVDB season). Without
+    the `|safe_count` filter this raises
+    `TemplateSyntaxError: 'count' argument to 'blocktranslate' tag must be a
+    number.` and 500s the season detail page.
+    """
+
+    def _render(self, score_count):
+        return render_to_string(
+            "app/components/detail_score_chips.html",
+            {
+                "media": {"media_id": "1", "source": "tvdb", "score_count": score_count},
+                "display_provider": Sources.TVDB.value,
+                "Sources": Sources,
+                "MediaTypes": MediaTypes,
+                "trakt_score": None,
+                "imdb_score": None,
+                "mal_score": None,
+                "user_medias": None,
+                "current_instance": None,
+                "public_view": False,
+                "media_type": MediaTypes.SEASON.value,
+                "provider_series_graph_data": None,
+                "trakt_series_graph_data": None,
+                "imdb_series_graph_data": None,
+                "csrf_token": "x",
+                "user": None,
+            },
+        )
+
+    def test_non_numeric_score_count_does_not_crash(self):
+        html = self._render("")
+        self.assertIn("votes", html)
+
+    def test_numeric_score_count_still_renders(self):
+        html = self._render(42)
+        self.assertIn("42", html)

@@ -99,8 +99,11 @@ def calendar(request):
         if status.value not in INACTIVE_TRACKING_STATUSES
     ]
 
+    filter_media_types = set(request.user.get_enabled_media_types())
+    if MediaTypes.TV.value in filter_media_types:
+        filter_media_types.add(MediaTypes.SEASON.value)
     filter_media_types = sorted(
-        request.user.get_enabled_media_types(),
+        filter_media_types,
         key=lambda media_type: MediaTypes(media_type).label,
     )
 

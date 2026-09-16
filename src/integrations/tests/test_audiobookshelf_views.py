@@ -372,3 +372,22 @@ class AudiobookshelfCoverProxyTests(TestCase):
         output = "\n".join(logs.output)
         self.assertNotIn("sneaky-token-value", output)
         self.assertNotIn("WARNING", output)
+
+
+class AudiobookshelfCoverProxyUrlCeleryTests(TestCase):
+    """build_cover_proxy_url must work from a Celery worker (#1199).
+
+    Every Audiobookshelf import - including a manual "sync now" - runs
+    inside a Celery worker, whose ROOT_URLCONF is deliberately empty since
+    it never serves HTTP. reverse() must not depend on that setting.
+    """
+
+    @override_settings(ROOT_URLCONF="config.celery_urls")
+    def test_builds_url_under_the_empty_celery_urlconf(self):
+        url = audiobookshelf_cover.build_cover_proxy_url(1, "item-1")
+        self.assertTrue(url.startswith(audiobookshelf_cover.PROXY_PATH_PREFIX))
+
+    @override_settings(ROOT_URLCONF="config.celery_urls", FORCE_SCRIPT_NAME="/floppy")
+    def test_applies_base_url_subpath_when_no_request_set_it(self):
+        url = audiobookshelf_cover.build_cover_proxy_url(1, "item-1")
+        self.assertTrue(url.startswith("/floppy" + audiobookshelf_cover.PROXY_PATH_PREFIX))

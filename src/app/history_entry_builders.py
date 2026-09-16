@@ -161,6 +161,7 @@ def _get_episode_display_title(episode, episode_title_map=None):
             getattr(episode_item, "source", None),
             getattr(episode_item, "season_number", None),
             getattr(episode_item, "episode_number", None),
+            getattr(episode_item, "library_media_type", None),
         )
 
     if episode_title_map and key in episode_title_map:

@@ -156,7 +156,7 @@ class NotificationsTests(FloppyApiTestCase):
         )
         self.assertEqual(response.status_code, HTTP.BAD_REQUEST)
 
-    @patch("api.fork_views_users.apprise.Apprise")
+    @patch("apprise.Apprise")
     def test_notification_test_sends(self, mock_apprise):
         """With URLs configured the apprise notify path runs."""
         self.user1.notification_urls = "json://localhost/webhook"

@@ -4,9 +4,10 @@ import logging
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from app.models import Book, Item, MediaTypes, Music, Sources, Status
+from integrations import plex_cover
 from integrations.imports.plex import PlexHistoryImporter
 from integrations.models import PlexAccount
 
@@ -380,3 +381,23 @@ class TestAlbumCacheScoping(PlexAudiobookImportTestCase):
             importer._album_cache_key("/library/metadata/100"),
             ("server-a", "100"),
         )
+
+
+class PlexCoverProxyUrlCeleryTests(TestCase):
+    """build_cover_proxy_url must work from a Celery worker (#1199).
+
+    The scheduled/manual Plex import runs inside a Celery worker, whose
+    ROOT_URLCONF is deliberately empty since it never serves HTTP. reverse()
+    must not depend on that setting the way the Plex webhook view (a real
+    request) implicitly does.
+    """
+
+    @override_settings(ROOT_URLCONF="config.celery_urls")
+    def test_builds_url_under_the_empty_celery_urlconf(self):
+        url = plex_cover.build_cover_proxy_url(1, MACHINE_ID, "/library/metadata/1")
+        self.assertTrue(url.startswith(plex_cover.PROXY_PATH_PREFIX))
+
+    @override_settings(ROOT_URLCONF="config.celery_urls", FORCE_SCRIPT_NAME="/floppy")
+    def test_applies_base_url_subpath_when_no_request_set_it(self):
+        url = plex_cover.build_cover_proxy_url(1, MACHINE_ID, "/library/metadata/1")
+        self.assertTrue(url.startswith("/floppy" + plex_cover.PROXY_PATH_PREFIX))
