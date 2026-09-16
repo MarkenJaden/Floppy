@@ -9,7 +9,7 @@
     </h3>
     <button type="button"
             @click="selectedType = mediaTypes.find(t => t.value === '{{ media_type }}') || selectedType; $nextTick(() => htmx.trigger('#add-item-search-form', 'submit'))"
-            class="text-xs text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer transition-colors">
+            class="text-xs text-[var(--color-link)] hover:text-[var(--color-link-hover)] font-medium cursor-pointer transition-colors">
       {% blocktranslate trimmed with type=media_type|media_type_readable_plural %}View all {{ type }}{% endblocktranslate %}
     </button>
   </div>
