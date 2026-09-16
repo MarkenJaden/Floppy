@@ -1,3 +1,4 @@
+import datetime
 import json
 import logging
 from collections import defaultdict
@@ -205,6 +206,13 @@ class YamtrackImporter:
         # this run (overwrite mode wipes once per item, then recreates
         # every CSV copy).
         self._collection_overwritten_item_ids = set()
+        # (parent_type, source, media_id) keys already queued for their
+        # one-time overwrite-mode wipe this run. Without this, a repeat
+        # watch of the same item arriving in a later batch would look
+        # "existing" again (existing_media is intentionally never updated
+        # mid-run, see _flush_media_batch) and get re-queued for deletion,
+        # wiping the repeat an earlier batch had already recreated.
+        self._overwrite_wiped_media_keys = set()
         self.collection_field_resolver = ImportedFieldResolver(
             user,
             "yamtrack",
@@ -364,25 +372,22 @@ class YamtrackImporter:
                 backfill_completed=False,
             ),
         )
+        # existing_media/existing_children are intentionally left as the
+        # pre-import snapshot from __init__ and not updated with what this
+        # loop just created: a repeat watch of an already-tracked item is a
+        # legitimate new row (issue #1183), and treating media created
+        # earlier in this same run as "already existing" would incorrectly
+        # block it once a batch boundary separates the two rows. Duplicate
+        # rows within this run are still caught by seen_media_keys (which
+        # spans the whole run, not just one batch), and any row that would
+        # violate a real one-row-per-item DB constraint (TV, Season) is
+        # merged by helpers.bulk_create_media before insert.
         for media_type, media_list in batch.items():
             self.imported_counts[media_type] += len(media_list)
-            for media in media_list:
-                item = getattr(media, "item", None)
-                if item is None:
-                    continue
-                if media_type in (MediaTypes.SEASON.value, MediaTypes.EPISODE.value):
-                    if media_type == MediaTypes.SEASON.value:
-                        self.existing_children[media_type][item.source][
-                            (item.media_id, item.season_number)
-                        ] = media
-                        if media.status == Status.COMPLETED.value and media.pk:
-                            self.completed_season_ids.add(media.pk)
-                    else:
-                        self.existing_children[media_type][item.source][
-                            (item.media_id, item.season_number, item.episode_number)
-                        ] = media
-                else:
-                    self.existing_media[media_type][item.source][item.media_id] = media
+            if media_type == MediaTypes.SEASON.value:
+                for media in media_list:
+                    if media.status == Status.COMPLETED.value and media.pk:
+                        self.completed_season_ids.add(media.pk)
         self.bulk_media.clear()
 
     def _cleanup_pending_overwrite(self):
@@ -415,9 +420,44 @@ class YamtrackImporter:
                 item__season_number=season_number,
             ).exclude(status=status).update(status=status)
 
+    @staticmethod
+    def _normalize_source(row):
+        """Return the row's source, lowercased and stripped."""
+        return (row.get("source") or "").strip().lower()
+
+    def is_valid_source(self, row):
+        """Return whether the row's source is acceptable.
+
+        An empty source is allowed (it is resolved by title/ISBN later); a
+        non-empty source must be a member of the Sources enum. On rejection a
+        warning is recorded and ``False`` is returned.
+        """
+        source = self._normalize_source(row)
+        if source == "" or source in Sources.values:
+            return True
+
+        error_msg = (
+            f"Skipping entry with invalid source '{source}' "
+            f"({row.get('media_type') or 'unknown'}): "
+            f"source must be one of {Sources.values}"
+        )
+        self.warnings.append(error_msg)
+        logger.warning(
+            "Yamtrack CSV import rejected row with invalid source=%s "
+            "media_type=%s media_id=%s",
+            source,
+            row.get("media_type"),
+            row.get("media_id"),
+        )
+        return False
+
     def _process_row(self, row):
         """Process a single row from the CSV file."""
         row_type = (row.get("row_type") or "").strip().lower()
+        if row_type in ("", "media", "list_item", "collection"):
+            row["source"] = self._normalize_source(row)
+            if not self.is_valid_source(row):
+                return
         if row_type == "list":
             self._process_list_row(row)
             return
@@ -467,7 +507,6 @@ class YamtrackImporter:
 
         library_media_type = (row.get("library_media_type") or "").strip().lower()
         row["media_type"] = media_type
-        row["source"] = (row.get("source") or "").strip().lower()
         normalized_status = _normalize_status(row.get("status"))
         if normalized_status is not None:
             # An exported blank means the media has no tracking status (a
@@ -480,6 +519,14 @@ class YamtrackImporter:
         episode_number = (
             int(row["episode_number"]) if row["episode_number"] != "" else None
         )
+        # A rewatch of the same item is exported as another row sharing the
+        # same media_id/season/episode, distinguished only by its watch date
+        # (issue #1183) - so the watch date has to be part of the dedup key,
+        # or every repeat watch after the first collapses into it.
+        progressed_at = row.get("progressed_at") or row.get("end_date")
+        watch_instance = parse_datetime(progressed_at) if progressed_at else None
+        if watch_instance is None:
+            watch_instance = progressed_at
         media_key = (
             media_type,
             row["source"],
@@ -487,6 +534,7 @@ class YamtrackImporter:
             library_media_type,
             season_number,
             episode_number,
+            watch_instance,
         )
         if media_key in self.seen_media_keys:
             return
@@ -509,6 +557,20 @@ class YamtrackImporter:
             row["media_id"],
             self.mode,
         )
+        if self.mode == "overwrite":
+            overwrite_key = (parent_type, row["source"], row["media_id"])
+            if row["media_id"] in self.to_delete[parent_type][row["source"]]:
+                if overwrite_key in self._overwrite_wiped_media_keys:
+                    # Already wiped once this run - a repeat watch of this
+                    # item landed in a later batch (existing_media still
+                    # shows it as pre-existing, by design). Undo the re-queue
+                    # so the next cleanup doesn't delete what an earlier
+                    # batch already recreated.
+                    self.to_delete[parent_type][row["source"]].discard(
+                        row["media_id"],
+                    )
+                else:
+                    self._overwrite_wiped_media_keys.add(overwrite_key)
         if (
             not should_process
             and self.mode == "new"
@@ -560,11 +622,8 @@ class YamtrackImporter:
 
         if form.is_valid():
             self.seen_media_keys.add(media_key)
-            progressed_at = row.get("progressed_at") or row.get("end_date")
-            if progressed_at:
-                parsed_date = parse_datetime(progressed_at)
-                if parsed_date:
-                    form.instance._history_date = parsed_date
+            if isinstance(watch_instance, datetime.datetime):
+                form.instance._history_date = watch_instance
             if media_type in (MediaTypes.TV.value, MediaTypes.SEASON.value):
                 status_value = row.get("status")
                 if status_value:
@@ -721,7 +780,9 @@ class YamtrackImporter:
 
         library_media_type = (row.get("library_media_type") or "").strip().lower()
 
-        season_number = int(row["season_number"]) if row.get("season_number") else None
+        season_number = (
+            int(row["season_number"]) if row.get("season_number") else None
+        )
         episode_number = (
             int(row["episode_number"]) if row.get("episode_number") else None
         )
@@ -952,7 +1013,6 @@ class YamtrackImporter:
             return
 
         row["media_type"] = media_type
-        row["source"] = (row.get("source") or "").strip().lower()
         library_media_type = (row.get("library_media_type") or "").strip().lower()
 
         season_number = int(row["season_number"]) if row.get("season_number") else None

@@ -339,7 +339,7 @@ def list_json(request, list_reference):
             custom_list=custom_list,
             item__source=Sources.TMDB.value,
             item__media_type=MediaTypes.MOVIE.value,
-        ).select_related("item")
+        ).select_related("item").order_by("date_added", "pk")
 
         json_data = [{"id": int(item.item.media_id)} for item in items]
     else:  # sonarr
@@ -348,7 +348,7 @@ def list_json(request, list_reference):
             custom_list=custom_list,
             item__source=Sources.TMDB.value,
             item__media_type=MediaTypes.TV.value,
-        ).select_related("item")
+        ).select_related("item").order_by("date_added", "pk")
 
         json_data = []
         for list_item in items:

@@ -452,6 +452,9 @@ class MetadataSourceDefaultChoices(models.TextChoices):
     TMDB = Sources.TMDB.value, Sources.TMDB.label
     TVDB = Sources.TVDB.value, Sources.TVDB.label
     MAL = Sources.MAL.value, Sources.MAL.label
+    HARDCOVER = Sources.HARDCOVER.value, Sources.HARDCOVER.label
+    OPENLIBRARY = Sources.OPENLIBRARY.value, Sources.OPENLIBRARY.label
+    GOOGLEBOOKS = Sources.GOOGLEBOOKS.value, Sources.GOOGLEBOOKS.label
 
 
 class AnimeLibraryModeChoices(models.TextChoices):
@@ -879,6 +882,25 @@ class User(AbstractUser):
         default=AnimeLibraryModeChoices.ANIME,
         choices=AnimeLibraryModeChoices.choices,
         help_text="Where grouped anime entries should surface in the UI.",
+    )
+    book_metadata_source_default = models.CharField(
+        max_length=20,
+        default=MetadataSourceDefaultChoices.HARDCOVER,
+        choices=[
+            (
+                MetadataSourceDefaultChoices.HARDCOVER,
+                MetadataSourceDefaultChoices.HARDCOVER.label,
+            ),
+            (
+                MetadataSourceDefaultChoices.OPENLIBRARY,
+                MetadataSourceDefaultChoices.OPENLIBRARY.label,
+            ),
+            (
+                MetadataSourceDefaultChoices.GOOGLEBOOKS,
+                MetadataSourceDefaultChoices.GOOGLEBOOKS.label,
+            ),
+        ],
+        help_text="Default metadata provider for Book details and search tabs.",
     )
     stats_split_tv_anime = models.BooleanField(
         default=False,
@@ -1429,6 +1451,16 @@ class User(AbstractUser):
                 name="anime_library_mode_valid",
                 condition=models.Q(
                     anime_library_mode__in=AnimeLibraryModeChoices.values
+                ),
+            ),
+            models.CheckConstraint(
+                name="book_metadata_source_default_valid",
+                condition=models.Q(
+                    book_metadata_source_default__in=[
+                        MetadataSourceDefaultChoices.HARDCOVER,
+                        MetadataSourceDefaultChoices.OPENLIBRARY,
+                        MetadataSourceDefaultChoices.GOOGLEBOOKS,
+                    ],
                 ),
             ),
             models.CheckConstraint(

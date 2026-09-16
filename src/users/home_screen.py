@@ -125,13 +125,6 @@ HOME_ONLY_SORTS = {
     HomeSortChoices.COMPLETION,
     HomeSortChoices.EPISODES_LEFT,
 }
-HOME_SCREEN_FILTER_KEYS = tuple(
-    dict.fromkeys(
-        key
-        for key in (*smart_rules.SMART_FILTER_KEYS, "progress", "subview")
-        if key != "search"
-    ),
-)
 STATUS_FILTER_VALUES = {"all", *Status.values}
 STATUS_FILTER_ALIASES = {"all": "all"}
 for _status_choice in Status:
@@ -161,6 +154,15 @@ HOME_QUERY_DEFAULT_FILTERS = {
     "tag": [],
     "tag_mode": "or",
 }
+# Home Screen only ever supports the query filters above, plus "subview"
+# (music-only). It must NOT be derived from smart_rules.SMART_FILTER_KEYS:
+# that set includes smart-list-only fields (completed_date_within_unit,
+# release_date_from, rating_min, sort, ...) which have no Home Screen UI and
+# would otherwise round-trip back from the browser and fail validation in
+# validate_library_row_filters() for every media type.
+HOME_SCREEN_FILTER_KEYS = tuple(
+    dict.fromkeys((*HOME_QUERY_DEFAULT_FILTERS.keys(), "subview")),
+)
 SUPPORTED_FILTERS_BY_MEDIA_TYPE = {
     MediaTypes.TV.value: {
         "status",
@@ -1461,6 +1463,14 @@ def search_home_screen_lists(user, query: str, media_type: str) -> list[dict]:
     ]
 
 
+# Only the detail page renders watch providers; no home card does. The column
+# holds TMDB's availability for every region it knows, around 146 KiB a title,
+# and a custom-list row hydrates every item in the list before slicing ten
+# cards -- twice, once for the items and once for their media. On an
+# 11,008-item list that is the row's whole memory cost.
+HOME_CARD_UNREAD_ITEM_FIELDS = ("watch_providers",)
+
+
 def _item_matches_home_media_type(item: Item, media_type: str) -> bool:
     library_media_type = getattr(item, "library_media_type", "") or ""
     return media_type in (library_media_type, item.media_type)
@@ -1773,15 +1783,23 @@ def _media_lookup_for_items(
         model = apps.get_model("app", actual_media_type)
         item_ids = [item.id for item in type_items]
         if actual_media_type == MediaTypes.EPISODE.value:
-            queryset = model.objects.filter(
-                related_season__user=user,
-                item_id__in=item_ids,
-            ).select_related("item")
+            queryset = (
+                model.objects.filter(
+                    related_season__user=user,
+                    item_id__in=item_ids,
+                )
+                .select_related("item")
+                .defer(*(f"item__{field}" for field in HOME_CARD_UNREAD_ITEM_FIELDS))
+            )
         else:
-            queryset = model.objects.filter(
-                user=user,
-                item_id__in=item_ids,
-            ).select_related("item")
+            queryset = (
+                model.objects.filter(
+                    user=user,
+                    item_id__in=item_ids,
+                )
+                .select_related("item")
+                .defer(*(f"item__{field}" for field in HOME_CARD_UNREAD_ITEM_FIELDS))
+            )
         if actual_media_type == MediaTypes.PODCAST.value:
             queryset = queryset.select_related("show", "episode")
         if actual_media_type == MediaTypes.MUSIC.value:
@@ -2325,6 +2343,7 @@ def _custom_list_entries(user, row: HomeScreenRow) -> list[HomeRowEntry]:
         items = list(
             Item.objects.filter(customlistitem__custom_list=custom_list)
             .distinct()
+            .defer(*HOME_CARD_UNREAD_ITEM_FIELDS)
             .order_by("customlistitem__date_added", "id"),
         )
 

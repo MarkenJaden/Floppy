@@ -57,6 +57,7 @@ urlpatterns = [
     ),
     path("test_notification", views.test_notification, name="test_notification"),
     path("settings/ui", views.ui_preferences, name="ui_preferences"),
+    path("settings/appearance", views.appearance, name="appearance"),
     path("settings/sidebar", views.sidebar, name="sidebar"),
     path("settings/home-screen", views.home_screen, name="home_screen"),
     path(
@@ -106,6 +107,11 @@ urlpatterns = [
         "settings/metadata/<str:slug>/personal",
         metadata_views.save_personal_credential,
         name="save_personal_credential",
+    ),
+    path(
+        "settings/metadata/provider-default/<str:media_type>",
+        metadata_views.set_media_type_provider,
+        name="set_media_type_provider",
     ),
     path("settings/import", views.import_data, name="import_data"),
     path(

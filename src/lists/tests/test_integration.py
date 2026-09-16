@@ -300,5 +300,11 @@ class IntegrationTest(StaticLiveServerTestCase):
             self.assertEqual(len(toggle_requests), 1)
             self.assertEqual(toggle_statuses, [200])
             self.assertEqual(len(refresh_requests), 1)
-            self.assertEqual(page.evaluate("window.__listCountUpdates"), 1)
+            # listCountUpdated fires when the refresh response is swapped in,
+            # which is after the request this assertion follows. Reading the
+            # counter without waiting raced that swap and saw 0. Wait for the
+            # event, let the count settle, and only then assert it fired
+            # exactly once - which is what this test is actually about.
+            page.wait_for_function("window.__listCountUpdates >= 1")
             expect(count).to_have_text("0 items")
+            self.assertEqual(page.evaluate("window.__listCountUpdates"), 1)

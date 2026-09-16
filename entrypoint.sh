@@ -312,6 +312,12 @@ export FLOPPY_CELERY_ROLE="${FLOPPY_CELERY_ROLE:-background}"
 export FLOPPY_START_INTERACTIVE_WORKER="${FLOPPY_START_INTERACTIVE_WORKER:-true}"
 export FLOPPY_START_DISCOVER_WORKER="${FLOPPY_START_DISCOVER_WORKER:-true}"
 
+# Record what this boot decided. A later `docker exec ... floppy_preflight`
+# does not inherit the exports above, so without this it would re-probe the
+# host and report a tier the running processes were never started with.
+python -c 'import json, sys; from config.runtime_profile import sizing_report; sys.stdout.write(json.dumps(sizing_report()))' \
+    >/tmp/floppy-boot-sizing.json 2>/dev/null || rm -f /tmp/floppy-boot-sizing.json
+
 if [ "$FLOPPY_START_INTERACTIVE_WORKER" = "true" ]; then
     interactive_topology="on(interactive)"
 else

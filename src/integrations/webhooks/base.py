@@ -1647,6 +1647,24 @@ class BaseWebhookProcessor:
     ):
         """Handle TV episode playback event."""
         from app.services import metadata_resolution
+        from integrations.episode_orders import apply_targets, resolve_incoming
+
+        targets = resolve_incoming(
+            user, media_id, Sources.TMDB.value, season_number, episode_number,
+            integration=type(self).__name__,
+        )
+        if targets is not None:
+            apply_targets(
+                user,
+                targets,
+                watched_at=(
+                    self._get_played_at(payload) or timezone.now().replace(
+                        second=0, microsecond=0,
+                    )
+                ) if self._is_played(payload) else None,
+                unplayed=self._is_unplayed(payload),
+            )
+            return targets[0] if targets else None
 
         if self._is_unplayed(payload):
             # As above: retract the latest play, keep the rest. Also scoped to

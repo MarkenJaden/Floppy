@@ -202,7 +202,7 @@
             {% translate "Configure the webhook with the following settings:" %}
             <ul class="list-disc list-inside ml-6 mt-2 space-y-1 text-[var(--color-text-muted)]">
               <li>{% translate "Name:" %} <strong>{% translate "Floppy" %}</strong></li>
-              <li>{% translate "Notification Type:" %} <strong>{% translate "Playback Start" %}</strong>, <strong>{% translate "Playback Stop" %}</strong>, <strong>{% translate "Playback Progress" %}</strong>, <strong>{% translate "Item Added" %}</strong>{% translate ", and" %} <strong>{% translate "Item Deleted" %}</strong></li>
+              <li>{% translate "Notification Type:" %} <strong>{% translate "Playback Start" %}</strong>, <strong>{% translate "Playback Stop" %}</strong>, <strong>{% translate "Playback Progress" %}</strong>, <strong>{% translate "User Data Saved" %}</strong>, <strong>{% translate "Item Added" %}</strong>{% translate ", and" %} <strong>{% translate "Item Deleted" %}</strong></li>
               <li>{% translate "User Filter: your Jellyfin user" %}</li>
             </ul>
           </li>
@@ -222,7 +222,7 @@
             <div class="relative mt-2">
               <textarea readonly id="jellyfin-json-template" class="w-full bg-[var(--color-surface-strong)] rounded-md text-[var(--color-text-secondary)] text-sm border-0 focus:ring-0 outline-none font-mono p-3 resize-none overflow-auto max-h-72" rows="14">
 {% verbatim %}{
-  "Event": "{{#if_equals NotificationType 'PlaybackStart'}}Play{{/if_equals}}{{#if_equals NotificationType 'PlaybackStop'}}Stop{{/if_equals}}{{#if_equals NotificationType 'PlaybackProgress'}}{{#if IsPaused}}Pause{{else}}Play{{/if}}{{/if_equals}}{{#if_equals NotificationType 'ItemAdded'}}ItemAdded{{/if_equals}}{{#if_equals NotificationType 'ItemDeleted'}}ItemDeleted{{/if_equals}}",
+  "Event": "{{#if_equals NotificationType 'PlaybackStart'}}Play{{/if_equals}}{{#if_equals NotificationType 'PlaybackStop'}}Stop{{/if_equals}}{{#if_equals NotificationType 'PlaybackProgress'}}{{#if IsPaused}}Pause{{else}}Play{{/if}}{{/if_equals}}{{#if_equals NotificationType 'UserDataSaved'}}UserDataSaved{{/if_equals}}{{#if_equals NotificationType 'ItemAdded'}}ItemAdded{{/if_equals}}{{#if_equals NotificationType 'ItemDeleted'}}ItemDeleted{{/if_equals}}",
   "PlaybackPositionTicks": "{{PlaybackPositionTicks}}",
   "Item": {
     "Id": "{{ItemId}}",
@@ -236,7 +236,8 @@
     },
     "UserData": {
       "Played": {{#if_equals PlayedToCompletion 'True'}}true{{else}}false{{/if_equals}},
-      "LastPlayedDate": "{{LastPlayedDate}}"
+      "LastPlayedDate": "{{LastPlayedDate}}"{{#if_equals NotificationType 'UserDataSaved'}}{{#if Rating}},
+      "Rating": {{Rating}}{{/if}}{{/if_equals}}
     }{{#if_equals ItemType 'Episode'}},
     "SeriesName": "{{SeriesName}}",
     "ParentIndexNumber": {{SeasonNumber}},

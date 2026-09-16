@@ -1,10 +1,11 @@
 
 {% load i18n %}
+{% load l10n %}
 {% load app_tags %}
 
 <div id="detail-score-chip-{{ current_instance.id }}"
      {% if score_chip_oob %}hx-swap-oob="outerHTML"{% endif %}
-     x-data="{ showRatingPopup: false, rating: {{ current_instance.score|score_display:user|default:'null' }}, ratingScaleMax: {{ user|rating_scale_max }}, hoverRating: null, isHovering: false, formatRating(value) { if (value === null || value === undefined || value === '') { return ''; } return this.ratingScaleMax === 5 ? String(value) + '/5' : String(value); } }"
+     x-data="{ showRatingPopup: false, rating: {% localize off %}{{ current_instance.score|score_display:user|default:'null' }}{% endlocalize %}, ratingScaleMax: {{ user|rating_scale_max }}, hoverRating: null, isHovering: false, formatRating(value) { if (value === null || value === undefined || value === '') { return ''; } return this.ratingScaleMax === 5 ? String(value) + '/5' : String(value); } }"
      class="relative min-w-0 sm:w-auto">
   <button type="button"
           @click="showRatingPopup = !showRatingPopup"

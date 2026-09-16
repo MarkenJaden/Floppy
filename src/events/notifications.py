@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from datetime import UTC
 from html import escape
 
-import apprise
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db.models import Max, Q
@@ -497,6 +496,11 @@ def deliver_notifications(user_releases, users, title, formatter=None):
         formatter: Callable(releases) -> HTML body. Defaults to
             format_notification_html.
     """
+    # Imported here, not at module scope: apprise loads its whole notification
+    # plugin registry on import, and that cost lands in every long-lived
+    # process that merely imports this module.
+    import apprise
+
     if formatter is None:
         formatter = format_notification_html
 
@@ -711,7 +715,7 @@ def send_user_notification(
     urls,
     title,
     body,
-    body_format=apprise.NotifyFormat.TEXT,
+    body_format=None,
 ):
     """Send a notification to a specific user.
 
@@ -720,8 +724,16 @@ def send_user_notification(
         urls: List of notification URLs
         title: Notification title
         body: Notification body
-        body_format: Apprise body format
+        body_format: Apprise body format. Defaults to plain text.
     """
+    # Imported here, not at module scope: apprise loads its whole notification
+    # plugin registry on import, and that cost lands in every long-lived
+    # process that merely imports this module.
+    import apprise
+
+    if body_format is None:
+        body_format = apprise.NotifyFormat.TEXT
+
     apobj = apprise.Apprise()
     for url in urls:
         apobj.add(url)

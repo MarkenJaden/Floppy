@@ -818,6 +818,30 @@ def _episode_delete_filter(selected_episodes):
     return filters
 
 
+def _inherited_scores(season_trackers, item_ids):
+    """Return the latest existing rating per item id, keyed for replay inheritance.
+
+    A rating belongs to the episode, not to one viewing of it (see
+    Episode.save()), but bulk-logged plays are written with bulk_create,
+    which skips save() entirely, so this mirrors that inheritance rule here.
+    """
+    if not item_ids:
+        return {}
+    scored_plays = (
+        Episode.objects.filter(
+            related_season__in=season_trackers,
+            item_id__in=item_ids,
+        )
+        .exclude(score__isnull=True)
+        .order_by("item_id", "-end_date", "-created_at")
+        .values_list("item_id", "score")
+    )
+    scores = {}
+    for item_id, score in scored_plays:
+        scores.setdefault(item_id, score)
+    return scores
+
+
 def _get_or_create_podcast_episode_item(show, episode):
     """Return the trackable item for a podcast episode."""
     runtime_minutes = episode.duration // 60 if episode.duration else None
@@ -1101,7 +1125,7 @@ def apply_bulk_episode_plays(
                         id__in=[entry.id for entry in existing_entries],
                     ).delete()
 
-        episodes_to_create = []
+        episode_specs = []
         for episode, watched_at in zip(selected_episodes, timestamps, strict=False):
             season_tracker = touched_seasons[episode["season_number"]]
             episode_item_exists = Item.objects.filter(
@@ -1124,13 +1148,21 @@ def apply_bulk_episode_plays(
             played_day_key = history_cache.history_day_key(watched_at)
             if played_day_key:
                 affected_day_keys.add(played_day_key)
-            episodes_to_create.append(
-                Episode(
-                    related_season=season_tracker,
-                    item=episode_item,
-                    end_date=watched_at,
-                ),
+            episode_specs.append((season_tracker, episode_item, watched_at))
+
+        inherited_scores = _inherited_scores(
+            touched_seasons.values(),
+            {episode_item.id for _, episode_item, _ in episode_specs},
+        )
+        episodes_to_create = [
+            Episode(
+                related_season=season_tracker,
+                item=episode_item,
+                end_date=watched_at,
+                score=inherited_scores.get(episode_item.id),
             )
+            for season_tracker, episode_item, watched_at in episode_specs
+        ]
 
         if episodes_to_create:
             created_episodes = bulk_create_with_history(episodes_to_create, Episode)

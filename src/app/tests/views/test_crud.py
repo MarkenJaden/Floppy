@@ -1289,7 +1289,7 @@ class EditMedia(TestCase):
 
     @patch("app.models.providers.services.get_media_metadata")
     def test_edit_episode_tracking_details(self, metadata_mock):
-        """Episode edits should persist the shared tracker fields."""
+        """Episode edits and save-as-new submissions persist the right row."""
         metadata_mock.return_value = {"season/1": {"episodes": []}}
         season_item = Item.objects.create(
             media_id="episode-edit-1",
@@ -1343,6 +1343,46 @@ class EditMedia(TestCase):
         self.assertIsNone(episode.end_date)
         self.assertEqual(episode.notes, "Paused midway")
         self.assertFalse(episode.dropped)
+        metadata_mock.return_value = {
+            "max_progress": 1,
+            "season/1": {
+                "details": {"episodes": 1},
+                "episodes": [{"episode_number": 1}],
+            },
+        }
+        operation_id = uuid4()
+        with (
+            patch("app.save_views.resolve_episode_coordinate"),
+            patch(
+                "app.save_views.fork_services_episode.resolve_or_create_season",
+                return_value=season,
+            ),
+        ):
+            response = self.client.post(
+                reverse("episode_save"),
+                {
+                    "instance_id": episode.id,
+                    "save_as_new_entry": "1",
+                    "media_id": episode_item.media_id,
+                    "source": episode_item.source,
+                    "media_type": MediaTypes.EPISODE.value,
+                    "season_number": 1,
+                    "episode_number": 1,
+                    "end_date": "2025-01-03",
+                    "notes": "Second watch",
+                    "watch_operation_id": operation_id,
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        history = Episode.objects.filter(item=episode_item).order_by("id")
+        self.assertEqual(history.count(), 2)
+        episode.refresh_from_db()
+        self.assertEqual(episode.notes, "Paused midway")
+        new_entry = history.exclude(pk=episode.pk).get()
+        self.assertEqual(new_entry.notes, "Second watch")
+        self.assertEqual(new_entry.end_date.date().isoformat(), "2025-01-03")
+        self.assertEqual(new_entry.watch_operation_id, operation_id)
 
     def test_edit_movie_htmx_returns_inline_detail_update(self):
         """HTMX saves should update the detail tracker in place."""

@@ -8,7 +8,6 @@ from io import BytesIO
 from itertools import batched
 from pathlib import Path
 
-import apprise
 from allauth.account.views import SignupView
 from allauth.socialaccount.views import SignupView as SocialSignupView
 from django.apps import apps
@@ -47,7 +46,6 @@ from app.models import (
     Status,
 )
 from app.providers import credentials, tmdb
-from app.services import metadata_resolution
 from app.templatetags import app_tags
 from integrations import exports, plex, stremio_catalog, tasks
 from integrations.imports import trakt as trakt_imports
@@ -63,6 +61,7 @@ from integrations.models import (
     PlexWebhookShare,
 )
 from integrations.plex_watchlist import WATCHLIST_TASK_NAME
+from users import appearance as appearance_config
 from users import cache_management
 from users.forms import (
     AuthenticatorSetupForm,
@@ -84,7 +83,6 @@ from users.home_screen import (
 )
 from users.models import (
     ActivityHistoryViewChoices,
-    AnimeLibraryModeChoices,
     DateFormatChoices,
     DurationFormatChoices,
     GameLoggingStyleChoices,
@@ -92,7 +90,6 @@ from users.models import (
     ImportModeChoices,
     LogoStyleChoices,
     MediaCardSubtitleDisplayChoices,
-    MetadataSourceDefaultChoices,
     MobileGridLayoutChoices,
     PlannedHomeDisplayChoices,
     RatingScaleChoices,
@@ -105,12 +102,6 @@ from users.models import (
     User,
     WeekStartDayChoices,
 )
-
-try:
-    import qrcode
-except ModuleNotFoundError:  # pragma: no cover - optional dependency guard
-    qrcode = None
-
 
 logger = logging.getLogger(__name__)
 
@@ -292,7 +283,12 @@ def _build_qr_data_uri(provisioning_uri: str) -> str:
     if not provisioning_uri:
         return ""
 
-    if qrcode is None:
+    # Imported here, not at module scope: qrcode pulls in Pillow, so importing
+    # it at module scope keeps a C extension resident in every web process for
+    # the sake of one authenticator screen.
+    try:
+        import qrcode
+    except ModuleNotFoundError:  # pragma: no cover - optional dependency guard
         logger.warning(
             "qrcode package is unavailable; skipping authenticator QR rendering"
         )
@@ -613,6 +609,11 @@ def include_item(request):
 @require_GET
 def test_notification(request):
     """Send a test notification to the user."""
+    # Imported here, not at module scope: apprise loads its whole notification
+    # plugin registry on import, and that cost lands in every long-lived
+    # process that merely imports this module.
+    import apprise
+
     try:
         # Create Apprise instance
         apobj = apprise.Apprise()
@@ -900,8 +901,73 @@ def toggle_obfuscate_episodes(request):
 
 @require_GET
 def ui_preferences(request):
-    """Redirect to sidebar page (UI preferences renamed to Sidebar)."""
-    return redirect("sidebar")
+    """Redirect the legacy UI settings URL to Appearance."""
+    return redirect("appearance")
+
+
+@require_http_methods(["GET", "POST"])
+def appearance(request):
+    """Configure application colors and detail page composition."""
+    if request.method == "POST":
+        if request.user.is_demo:
+            messages.error(request, "This section is view-only for demo accounts.")
+            return redirect("appearance")
+
+        theme = request.POST.get("theme")
+        if theme not in ThemeChoices.values:
+            messages.error(request, "Unsupported theme.")
+            return redirect("appearance")
+        try:
+            custom_theme = appearance_config.parse_custom_theme(
+                request.POST.get("custom_theme")
+            )
+            detail_layouts = appearance_config.parse_detail_layouts(
+                request.POST.get("detail_layouts")
+            )
+        except ValidationError as exc:
+            messages.error(request, exc.messages[0])
+            return redirect("appearance")
+
+        request.user.theme = theme
+        request.user.custom_theme = custom_theme
+        request.user.detail_page_layouts = detail_layouts
+        request.user.save(
+            update_fields=[
+                "theme",
+                "custom_theme",
+                "detail_page_layouts",
+            ]
+        )
+        messages.success(request, "Appearance updated")
+        return redirect("appearance")
+
+    saved_palette = (
+        request.user.custom_theme
+        if isinstance(request.user.custom_theme, dict)
+        else {}
+    )
+    palette = {
+        key: saved_palette.get(key, definition["default"])
+        for key, definition in appearance_config.CUSTOM_THEME_COLORS.items()
+    }
+    palette.update(
+        {
+            key: saved_palette.get(key, definition["default"])
+            for key, definition in appearance_config.CUSTOM_THEME_EFFECTS.items()
+        }
+    )
+    context = {
+        "theme_presets": appearance_config.THEME_PRESETS,
+        "custom_theme_colors": appearance_config.CUSTOM_THEME_COLORS,
+        "custom_theme_effects": appearance_config.CUSTOM_THEME_EFFECTS,
+        "appearance_theme": request.user.theme,
+        "custom_theme_json": palette,
+        "detail_layout_families_json": appearance_config.DETAIL_LAYOUT_FAMILIES,
+        "detail_layouts_json": appearance_config.resolved_detail_layouts(
+            request.user.detail_page_layouts
+        ),
+    }
+    return render(request, "users/appearance.html", context)
 
 
 @require_http_methods(["GET", "POST"])
@@ -948,22 +1014,6 @@ def preferences(request):
         )
         for code, label in metadata_language_choices
     ]
-    tv_metadata_source_choices = [
-        (choice.value, choice.label)
-        for choice in metadata_resolution.available_metadata_sources(
-            MediaTypes.TV.value,
-        )
-    ]
-    anime_metadata_source_choices = [
-        (choice.value, choice.label)
-        for choice in metadata_resolution.available_metadata_sources(
-            MediaTypes.ANIME.value,
-        )
-    ]
-    tvdb_enabled = metadata_resolution.provider_is_enabled(
-        MetadataSourceDefaultChoices.TVDB,
-    )
-
     if request.method == "POST":
         # Prevent demo users from updating preferences
         if request.user.is_demo:
@@ -984,12 +1034,6 @@ def preferences(request):
         title_display_preference = request.POST.get("title_display_preference")
         top_talent_sort_by = request.POST.get("top_talent_sort_by")
         rating_scale = request.POST.get("rating_scale")
-        tv_metadata_source_default = request.POST.get("tv_metadata_source_default")
-        anime_metadata_source_default = request.POST.get(
-            "anime_metadata_source_default"
-        )
-        anime_library_mode = request.POST.get("anime_library_mode")
-        anime_provider_changed = False
         hide_completed_recommendations_raw = request.POST.get(
             "hide_completed_recommendations"
         )
@@ -1240,31 +1284,6 @@ def preferences(request):
             request.user.metadata_language = ""
             fields_to_update.append("metadata_language")
 
-        if (
-            tv_metadata_source_default
-            in {choice[0] for choice in tv_metadata_source_choices}
-            and request.user.tv_metadata_source_default != tv_metadata_source_default
-        ):
-            request.user.tv_metadata_source_default = tv_metadata_source_default
-            fields_to_update.append("tv_metadata_source_default")
-
-        if anime_metadata_source_default in {
-            choice[0] for choice in anime_metadata_source_choices
-        } and (
-            request.user.anime_metadata_source_default != anime_metadata_source_default
-        ):
-            request.user.anime_metadata_source_default = anime_metadata_source_default
-            fields_to_update.append("anime_metadata_source_default")
-            anime_provider_changed = True
-
-        if (
-            anime_library_mode
-            in [choice[0] for choice in AnimeLibraryModeChoices.choices]
-            and request.user.anime_library_mode != anime_library_mode
-        ):
-            request.user.anime_library_mode = anime_library_mode
-            fields_to_update.append("anime_library_mode")
-
         session_duration = request.POST.get("session_duration")
         if session_duration is not None:
             try:
@@ -1298,16 +1317,6 @@ def preferences(request):
                     request.user.id,
                     debounce_seconds=0,
                 )
-        if anime_provider_changed:
-            # Switching provider only decides the shape of newly added shows.
-            # Existing ones are left alone unless the user asks, because the
-            # MAL-to-series mapping is N:1 and cannot be re-derived in bulk.
-            from app.tasks_anime_library_repair import anime_rows_needing_conversion
-
-            convertible = anime_rows_needing_conversion(request.user)
-            if convertible:
-                request.session["anime_shape_prompt_count"] = len(convertible)
-
         success_message = (
             "Settings updated successfully."
             if "media_types_checkboxes" in request.POST
@@ -1325,16 +1334,8 @@ def preferences(request):
         "watch_provider_choices": watch_provider_regions,
         "metadata_language_choices": metadata_language_choices,
         "ui_language_choices": UiLanguageChoices.choices,
-        "tv_metadata_source_choices": tv_metadata_source_choices,
-        "anime_metadata_source_choices": anime_metadata_source_choices,
-        "anime_library_mode_choices": AnimeLibraryModeChoices.choices,
         "session_duration_choices": SessionDurationChoices.choices,
         "week_start_day_choices": WeekStartDayChoices.choices,
-        "tvdb_enabled": tvdb_enabled,
-        "anime_shape_prompt_count": request.session.pop(
-            "anime_shape_prompt_count",
-            None,
-        ),
     }
 
     return render(request, "users/preferences.html", context)
@@ -1892,10 +1893,15 @@ def export_logs(request):
     from app.log_safety import redact_secrets
 
     log_path = Path(settings.LOG_FILE)
-    raw_logs = (
-        log_path.read_text(encoding="utf-8", errors="replace")
-        if log_path.exists()
-        else ""
+    backups = sorted(
+        log_path.parent.glob(f"{log_path.name}.*"),
+        key=lambda p: int(p.suffix[1:]),
+        reverse=True,
+    )
+    raw_logs = "".join(
+        p.read_text(encoding="utf-8", errors="replace")
+        for p in [*backups, log_path]
+        if p.exists()
     )
 
     sanitized_logs = redact_secrets(raw_logs)

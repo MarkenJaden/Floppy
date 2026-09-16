@@ -124,6 +124,12 @@ class CeleryDispatchRoutingTests(SimpleTestCase):
         def task_body(*args, **kwargs):
             return None
 
+        # Finalize first. Celery replays every @shared_task onto a newly
+        # finalized app, so the real implementations of these names land here
+        # -- and dispatching then reaches the real task and fails its signature
+        # check (`import_radarr_recurring() missing 1 required positional
+        # argument`). This only bites when app and integrations tests share a
+        # process, which is why running the suite serially surfaced it.
         self.app.finalize()
         for task_name in (
             "Backfill item metadata",

@@ -395,6 +395,136 @@ class EpisodeBulkSaveViewTests(TestCase):
 
     @patch("app.views.metadata_resolution.resolve_detail_metadata")
     @patch("app.providers.services.get_media_metadata")
+    def test_bulk_rewatch_inherits_prior_rating(
+        self,
+        mock_get_metadata,
+        mock_resolve_detail_metadata,
+    ):
+        """A bulk-logged replay picks up the episode's existing rating.
+
+        Regression test for #1182: bulk episode plays are persisted with
+        bulk_create, which bypasses Episode.save() (and the rating
+        inheritance rule that lives there), so a rewatch logged through the
+        episode range selector used to come back unrated.
+        """
+        seasons = [
+            {
+                "season_number": 1,
+                "season_title": "Season 1",
+                "episodes": [
+                    _season_episode(1, air_date="2024-01-01"),
+                    _season_episode(2, air_date="2024-01-02"),
+                ],
+            },
+        ]
+        base_payload = _tv_base_payload(
+            "1396",
+            Sources.TMDB.value,
+            title="Breaking Bad",
+            seasons=seasons,
+        )
+        tv_with_seasons = _tv_with_seasons_payload(
+            "1396",
+            Sources.TMDB.value,
+            title="Breaking Bad",
+            seasons=seasons,
+        )
+        mock_get_metadata.side_effect = lambda media_type, *_args, **_kwargs: (
+            tv_with_seasons if media_type == "tv_with_seasons" else base_payload
+        )
+        mock_resolve_detail_metadata.return_value = self.default_resolution
+
+        tv_item = Item.objects.create(
+            media_id="1396",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.TV.value,
+            title="Breaking Bad",
+            image="https://example.com/show.jpg",
+        )
+        tv = TV.objects.create(
+            item=tv_item,
+            user=self.user,
+            status=Status.IN_PROGRESS.value,
+        )
+        season_item = Item.objects.create(
+            media_id="1396",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.SEASON.value,
+            season_number=1,
+            title="Breaking Bad",
+            image="https://example.com/season.jpg",
+        )
+        season = Season.objects.create(
+            item=season_item,
+            user=self.user,
+            related_tv=tv,
+            status=Status.IN_PROGRESS.value,
+        )
+        # library_media_type must match what get_episode_item resolves (the
+        # show's own bucket, "tv" here) so the bulk save's episode-item
+        # lookup finds these rows instead of creating duplicates.
+        rated_episode_item = Item.objects.create(
+            media_id="1396",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.EPISODE.value,
+            library_media_type=MediaTypes.TV.value,
+            season_number=1,
+            episode_number=1,
+            title="Episode 1",
+            image="https://example.com/ep1.jpg",
+        )
+        unrated_episode_item = Item.objects.create(
+            media_id="1396",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.EPISODE.value,
+            library_media_type=MediaTypes.TV.value,
+            season_number=1,
+            episode_number=2,
+            title="Episode 2",
+            image="https://example.com/ep2.jpg",
+        )
+        Episode.objects.create(
+            item=rated_episode_item,
+            related_season=season,
+            end_date=datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+            score=8.5,
+        )
+
+        response = self._post_bulk(
+            {
+                "media_id": "1396",
+                "source": Sources.TMDB.value,
+                "media_type": MediaTypes.TV.value,
+                "library_media_type": MediaTypes.TV.value,
+                "identity_media_type": "",
+                "instance_id": str(tv.id),
+                "return_url": self.return_url,
+                "first_season_number": 1,
+                "first_episode_number": 1,
+                "last_season_number": 1,
+                "last_episode_number": 2,
+                "write_mode": "add",
+                "distribution_mode": "even",
+                "start_date": "2024-02-01T00:00",
+                "end_date": "2024-02-02T00:00",
+            },
+        )
+
+        self.assertEqual(response.status_code, 204)
+        rewatch = Episode.objects.get(
+            related_season=season,
+            item=rated_episode_item,
+            end_date__gt=datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+        )
+        self.assertEqual(rewatch.score, 8.5)
+        new_unrated_play = Episode.objects.get(
+            related_season=season,
+            item=unrated_episode_item,
+        )
+        self.assertIsNone(new_unrated_play.score)
+
+    @patch("app.views.metadata_resolution.resolve_detail_metadata")
+    @patch("app.providers.services.get_media_metadata")
     def test_replace_mode_preserves_out_of_range_plays(
         self,
         mock_get_metadata,

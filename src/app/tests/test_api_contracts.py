@@ -419,6 +419,8 @@ class OpenAPIArtifactTests(SimpleTestCase):
                 "score",
                 "status",
                 "progress",
+                "episodes_left",
+                "total_episodes_left",
                 "progress_scope",
                 "progress_unit",
                 "progressed_at",
@@ -460,6 +462,8 @@ class OpenAPIArtifactTests(SimpleTestCase):
             "media_type",
             "title",
             "max_progress",
+            "episodes_left",
+            "total_episodes_left",
             "image",
             "backdrop",
             "synopsis",
@@ -478,6 +482,7 @@ class OpenAPIArtifactTests(SimpleTestCase):
             "consumptions_number",
             "consumptions",
             "lists",
+            "media_type_status",
         }
         self.assertEqual(
             set(schemas["CompleteMediaResponse"]["properties"]), complete_keys

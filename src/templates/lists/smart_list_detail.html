@@ -17,6 +17,9 @@
     {{ column_config|json_script:"media-column-config-data" }}
     {{ default_column_config|json_script:"media-column-default-config-data" }}
   {% endif %}
+  {% if can_edit %}
+    {{ bulk_action_data|json_script:"smart-list-bulk-action-data" }}
+  {% endif %}
 
   {% translate "All" as media_i18n_2 %}{% translate "Rated" as media_i18n_3 %}{% translate "Not Rated" as media_i18n_4 %}{% translate "Collected" as media_i18n_5 %}{% translate "Not Collected" as media_i18n_6 %}{% translate "Any" as media_i18n_7 %}{% translate "Released" as media_i18n_10 %}{% translate "Not Released" as media_i18n_11 %}{% translate "All Types" as media_i18n_16 %}{% translate "No Types" as media_i18n_80 %}{% translate "1 Type" as media_i18n_81 %}{% translate "Implied: " as media_i18n_82 %}{% translate "Unknown Year" as media_i18n_83 %}{% translate "Release" as media_i18n_84 %}{% translate "Added" as media_i18n_85 %}<div x-data="{
     showModal: false,
@@ -442,6 +445,10 @@
   "
   @list-count-updated.camel.window="itemsCount = Number($event.detail.count)">
 
+    {% if can_edit %}
+      <div x-data="bulkSelection('smart-list-bulk-action-data', 'bulk-action-refresh')">
+    {% endif %}
+
     <div class="mb-6">
       <div class="w-full min-w-0">
         <div class="mb-2 flex flex-wrap items-center gap-3">
@@ -533,6 +540,7 @@
               </a>
             </div>
           </div>
+          {% include "lists/components/bulk_select_button.html" %}
           {% include "lists/components/media_type_breakdown_button.html" %}
         </div>
       {% elif custom_list.can_recommend %}
@@ -587,6 +595,7 @@
               </a>
             </div>
           </div>
+          {% include "lists/components/bulk_select_button.html" %}
           {% include "lists/components/media_type_breakdown_button.html" %}
         </div>
       {% else %}
@@ -666,6 +675,7 @@
             </a>
           </div>
         </div>
+        {% include "lists/components/bulk_select_button.html" %}
         {% include "lists/components/media_type_breakdown_button.html" %}
       </div>
     {% elif custom_list.can_recommend %}
@@ -720,6 +730,7 @@
             </a>
           </div>
         </div>
+        {% include "lists/components/bulk_select_button.html" %}
         {% include "lists/components/media_type_breakdown_button.html" %}
       </div>
     {% else %}
@@ -752,6 +763,17 @@
       {% include "lists/components/smart_rules_builder.html" %}
     {% endif %}
 
+    {% if can_edit %}
+      <button id="bulk-action-refresh"
+              type="button"
+              class="hidden"
+              hx-get="{% url 'list_detail' custom_list.public_reference %}"
+              hx-target="#items-view"
+              hx-include="#smart-filter-form"
+              hx-indicator="#loading-indicator"></button>
+      {% include "app/components/bulk_selection_toolbar.html" %}
+    {% endif %}
+
     <div id="list-results-summary" class="mb-3">
       {% include "lists/components/list_results_summary.html" %}
     </div>
@@ -772,6 +794,9 @@
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
       </div>
     </div>
+    {% if can_edit %}
+      </div>
+    {% endif %}
   </div>
 {% endblock content %}
 {# djlint:on #}

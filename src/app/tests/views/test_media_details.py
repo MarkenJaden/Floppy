@@ -7071,7 +7071,68 @@ class MediaDetailsViewTests(TestCase):
                     "season_number": 1,
                 },
             ),
-            {"fragment": "secondary"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    @patch("app.providers.services.get_media_metadata")
+    @patch("app.providers.tmdb.process_episodes")
+    def test_season_details_renders_with_unknown_sibling_season_max_progress(
+        self,
+        mock_process_episodes,
+        mock_get_metadata,
+    ):
+        """A season picker entry with no episode count must not 500 the page.
+
+        Regression test for issue #1159: TVDB's series payload carries no
+        episode count per season, so every related-season entry has
+        max_progress=None. That None reached the season picker's
+        {% blocktranslate count %} in detail_title_block.html and raised
+        TemplateSyntaxError, 500ing every TVDB show's season page. The
+        earlier #1132 fix only covered media_card.html and the secondary
+        fragment, so the full page render stayed broken.
+        """
+        sibling_season = {
+            "media_id": "1668",
+            "media_type": MediaTypes.SEASON.value,
+            "source": Sources.TVDB.value,
+            "season_number": 2,
+            "title": "Test TV Show",
+            "season_title": "Season 2",
+            "image": "http://example.com/season2.jpg",
+            "max_progress": None,
+            "episode_count": None,
+        }
+        mock_get_metadata.side_effect = lambda *_args, **_kwargs: {
+            "title": "Test TV Show",
+            "media_id": "1668",
+            "source": Sources.TVDB.value,
+            "media_type": MediaTypes.TV.value,
+            "image": "http://example.com/image.jpg",
+            "related": {"seasons": [sibling_season]},
+            "season/1": {
+                "title": "Season 1",
+                "season_title": "Season 1",
+                "media_id": "1668",
+                "media_type": MediaTypes.SEASON.value,
+                "source": Sources.TVDB.value,
+                "image": "http://example.com/season.jpg",
+                "episodes": [],
+                "related": {"seasons": [sibling_season]},
+            },
+        }
+        mock_process_episodes.return_value = []
+
+        response = self.client.get(
+            reverse(
+                "season_details",
+                kwargs={
+                    "source": Sources.TVDB.value,
+                    "media_id": "1668",
+                    "title": "test-tv-show",
+                    "season_number": 1,
+                },
+            ),
         )
 
         self.assertEqual(response.status_code, 200)
@@ -10044,6 +10105,69 @@ class MediaDetailsViewTests(TestCase):
         self.assertContains(response, "1/2")
         self.assertContains(response, "COLLECTED EPISODES")
         self.assertContains(response, "2/3")
+
+    @patch("app.providers.services.get_media_metadata")
+    def test_anime_media_details_collection_stats_ignore_episode_list_payload(
+        self,
+        mock_get_metadata,
+    ):
+        """A missing episode count must not leak the episode list into the stats."""
+        Item.objects.create(
+            media_id="anime-episode-list-count",
+            source=Sources.MAL.value,
+            media_type=MediaTypes.ANIME.value,
+            title="Long Running Anime",
+            image="http://example.com/anime.jpg",
+        )
+
+        mock_get_metadata.return_value = {
+            "media_id": "anime-episode-list-count",
+            "title": "Long Running Anime",
+            "media_type": MediaTypes.ANIME.value,
+            "source": Sources.MAL.value,
+            "source_url": "https://myanimelist.net/anime/anime-episode-list-count",
+            "image": "http://example.com/anime.jpg",
+            "synopsis": "Test synopsis",
+            # Providers omit the episode count for some long-running shows.
+            "details": {"format": "TV", "runtime": "25m", "episodes": None},
+            # The detail page stores the episode preview under this key.
+            "episodes": [
+                {
+                    "media_id": "anime-episode-list-count",
+                    "media_type": MediaTypes.EPISODE.value,
+                    "source": Sources.TVDB.value,
+                    "season_number": 1,
+                    "episode_number": episode_number,
+                }
+                for episode_number in (1, 2, 3)
+            ],
+            "related": {},
+            "cast": [],
+            "crew": [],
+            "studios_full": [],
+            "providers": {},
+            "external_links": {},
+        }
+
+        response = self.client.get(
+            reverse(
+                "media_details",
+                kwargs={
+                    "source": Sources.MAL.value,
+                    "media_type": MediaTypes.ANIME.value,
+                    "media_id": "anime-episode-list-count",
+                    "title": "long-running-anime",
+                },
+            ),
+            # Collection stats are computed for the secondary fragment.
+            {"fragment": "secondary"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["collection_stats"]["total_episodes"], 3)
+        self.assertContains(response, "COLLECTED EPISODES")
+        self.assertContains(response, "0/3")
+        self.assertNotContains(response, "&#x27;media_id&#x27;")
 
     @patch("app.providers.services.get_media_metadata")
     def test_tv_media_details_play_stats_skip_placeholder_episode_runtimes(
