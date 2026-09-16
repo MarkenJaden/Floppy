@@ -59,6 +59,11 @@ urlpatterns = [
         views_list_actions.collection_add_to_list_submit,
         name="collection_add_to_list_submit",
     ),
+    path(
+        "list/bulk-add",
+        views_list_actions.bulk_list_add,
+        name="bulk_list_add",
+    ),
     path("list/<slug:list_reference>", views.list_detail, name="list_detail"),
     path("list/<slug:list_reference>/rss", feeds.list_rss_feed, name="list_rss"),
     path("list/<slug:list_reference>/json", feeds.list_json, name="list_json"),

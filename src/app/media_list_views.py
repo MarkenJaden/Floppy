@@ -20,6 +20,7 @@ from django.views.decorators.http import require_POST
 
 from app import cache_utils, helpers, history_cache
 from app import statistics as stats
+from app.bulk_actions import build_bulk_action_data
 from app.columns import (
     resolve_column_config,
     resolve_columns,
@@ -628,6 +629,22 @@ def build_filter_data_from_items(
     }
 
 
+def _restore_region_providers(row, region):
+    """Put a region-narrowed provider slice back under ``watch_providers``.
+
+    The query asks SQL for one region out of a blob that covers every region
+    TMDB knows, because that is all the filter menu reads. Downstream still
+    expects the field's real shape -- a mapping keyed by region -- so give it
+    that shape around the one region it will look up.
+    """
+    if "watch_providers_region" not in row:
+        return row
+    row = dict(row)
+    slice_for_region = row.pop("watch_providers_region", None)
+    row["watch_providers"] = {region: slice_for_region} if slice_for_region else {}
+    return row
+
+
 def build_filter_data_from_item_values(
     item_values,
     *,
@@ -638,7 +655,9 @@ def build_filter_data_from_item_values(
     include_providers=True,
 ):
     """Build filter data from ``Item.values()`` rows without ORM hydration."""
-    projected_items = (SimpleNamespace(**row) for row in item_values)
+    projected_items = (
+        SimpleNamespace(**_restore_region_providers(row, region)) for row in item_values
+    )
     return build_filter_data_from_items(
         projected_items,
         collection_formats_by_item_id=collection_formats_by_item_id,
@@ -951,6 +970,12 @@ def media_list(request, media_type):
         comic_subview = request.GET.get("subview", "comics")
         if comic_subview not in {"comics", "issues"}:
             comic_subview = "comics"
+
+    music_subview = None
+    if route_media_type == MediaTypes.MUSIC.value:
+        music_subview = request.GET.get("subview", "artists")
+        if music_subview not in {"artists", "albums", "tracks"}:
+            music_subview = "artists"
 
     layout, sort_filter, direction, media_type, sorted_media_sort_choices = (
         _resolve_media_list_preferences(request, route_media_type, comic_subview)
@@ -1707,6 +1732,13 @@ def media_list(request, media_type):
         _media_list_full = []
 
         if filter_data is None:
+            # Only the menu's provider list reads watch_providers, and only
+            # for this one region. Anywhere else, the column is not selected.
+            provider_region_for_values = (
+                watch_provider_region
+                if media_type in provider_media_types
+                else None
+            )
             filter_data_rows = list(
                 BasicMedia.objects.get_media_list_item_values(
                     user=request.user,
@@ -1714,6 +1746,7 @@ def media_list(request, media_type):
                     status_filter=tracked_status_filter,
                     search=search_query,
                     list_sql_filters=list_sql_filters,
+                    provider_region=provider_region_for_values,
                 ),
             )
             if media_type == MediaTypes.GAME.value and platform_values:
@@ -1729,6 +1762,7 @@ def media_list(request, media_type):
                         status_filter=tracked_status_filter,
                         search=search_query,
                         list_sql_filters=filter_data_filters,
+                        provider_region=provider_region_for_values,
                     ),
                 )
 
@@ -1821,14 +1855,28 @@ def media_list(request, media_type):
                     _media_list_filter_cache_key,
                 )
     elif _media_list_cached is None:
-        media_queryset = BasicMedia.objects.get_media_list(
-            user=request.user,
-            media_type=media_type,
-            status_filter=tracked_status_filter,
-            sort_filter=query_sort_filter,
-            search=search_query,
-            direction=direction,
-            list_sql_filters=list_sql_filters,
+        # Podcasts always render from PodcastShowTracker further below, and
+        # music's artists/albums subviews render from ArtistTracker/
+        # AlbumTracker — in both cases this generic media_list/filter_data
+        # pipeline is discarded, so skip materializing every episode/track
+        # here to avoid an O(row count) Python pass on large libraries (see
+        # issue #1198). Music's "tracks" subview is the one case that
+        # actually needs the per-track list built below.
+        _skip_generic_media_list = media_type == MediaTypes.PODCAST.value or (
+            media_type == MediaTypes.MUSIC.value and music_subview != "tracks"
+        )
+        media_queryset = (
+            BasicMedia.objects.none()
+            if _skip_generic_media_list
+            else BasicMedia.objects.get_media_list(
+                user=request.user,
+                media_type=media_type,
+                status_filter=tracked_status_filter,
+                sort_filter=query_sort_filter,
+                search=search_query,
+                direction=direction,
+                list_sql_filters=list_sql_filters,
+            )
         )
 
         # Convert to list for filtering (rating and collection filters work on lists)
@@ -2688,13 +2736,11 @@ def media_list(request, media_type):
             "is_album_list": False,
             "supports_critic_rating_sort": False,
         }
+        context["enable_bulk_select"] = False
 
     if media_type == MediaTypes.MUSIC.value:
         from app.models import AlbumTracker, Artist, ArtistTracker
 
-        music_subview = request.GET.get("subview", "artists")
-        if music_subview not in {"artists", "albums", "tracks"}:
-            music_subview = "artists"
         context["current_subview"] = music_subview
 
         if music_subview == "albums":
@@ -3063,6 +3109,18 @@ def media_list(request, media_type):
             context["media_list"] = artist_page
             context["is_artist_list"] = True
             context["filter_data"] = filter_data
+
+        context["enable_bulk_select"] = music_subview == "tracks"
+
+    if context.get("enable_bulk_select"):
+        context["bulk_action_data"] = build_bulk_action_data(
+            request.user,
+            request=request,
+            status_url=reverse("bulk_status_update"),
+            list_url=reverse("bulk_list_add"),
+            collection_url=reverse("bulk_collection_quick_add"),
+            tag_url=reverse("tag_bulk_toggle"),
+        )
 
     if context.get("is_artist_list", False):
         table_type = "artist"

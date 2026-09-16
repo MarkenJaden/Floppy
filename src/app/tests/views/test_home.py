@@ -173,6 +173,14 @@ class HomeViewTests(TestCase):
         )
         self.assertNotContains(response, "Load All")
 
+    def test_home_rest_cards_return_to_home(self):
+        """Cards in the deferred fragment must not redirect to that fragment."""
+        response = self.client.get(reverse("home_rest_fragment"))
+
+        self.assertEqual(response.context["return_url"], reverse("home"))
+        self.assertContains(response, '"return_url": "/"', html=False)
+        self.assertNotContains(response, '"return_url": "/home/rest/"', html=False)
+
     def test_home_row_direction_matches_persisted_row(self):
         """Each row dict must carry its own direction for the header arrow icon.
 

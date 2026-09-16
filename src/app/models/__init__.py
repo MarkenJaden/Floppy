@@ -6,6 +6,7 @@ from app.models.choices import MediaTypes, ProviderMetadataStatus, Sources, Stat
 from app.models.credits import (
     CREDITS_BACKFILL_VERSION,
     DISCOVER_MOVIE_METADATA_BACKFILL_VERSION,
+    PERSON_PROFILE_BACKFILL_VERSION,
     TRAKT_POPULARITY_BACKFILL_VERSION,
     BackfillReconcileState,
     CreditRoleType,
@@ -35,6 +36,7 @@ from app.models.discovery import (
     ItemTag,
     Tag,
 )
+from app.models.episode_order import EpisodeOrder, EpisodeOrderChange
 from app.models.episode_runtimes import (
     build_episode_runtime_index,
     prefill_episode_runtime_index,
@@ -101,6 +103,7 @@ from app.models.watch_state import (
 __all__ = [
     "CREDITS_BACKFILL_VERSION",
     "DISCOVER_MOVIE_METADATA_BACKFILL_VERSION",
+    "PERSON_PROFILE_BACKFILL_VERSION",
     "TRAKT_POPULARITY_BACKFILL_VERSION",
     "TV",
     "ActiveAnimeManager",
@@ -133,6 +136,8 @@ __all__ = [
     "DiscoverRowCache",
     "DiscoverTasteProfile",
     "Episode",
+    "EpisodeOrder",
+    "EpisodeOrderChange",
     "Game",
     "HardcoverEditionPreference",
     "InstanceProviderCredential",

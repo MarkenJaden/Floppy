@@ -157,6 +157,8 @@ def metadata_default_source(user, media_type: str) -> str:
             provider = getattr(user, "tv_metadata_source_default", None)
         elif media_type == MediaTypes.ANIME.value:
             provider = getattr(user, "anime_metadata_source_default", None)
+        elif media_type == MediaTypes.BOOK.value:
+            provider = getattr(user, "book_metadata_source_default", None)
 
     provider = provider or config.get_default_source_name(media_type).value
     if provider_is_enabled(provider, user):
@@ -626,6 +628,22 @@ def get_or_create_tracked_season_item(
     of) the resolved item, so corruption repairs itself the next time any
     caller touches that show/season, with no manual command required.
     """
+    from app.services.order_resolution import order_from_media_id
+
+    order = order_from_media_id(media_id, source)
+    if order is not None:
+        item, _ = Item.objects.get_or_create(
+            episode_order=order,
+            media_id=order.media_id,
+            source=order.provider,
+            media_type=MediaTypes.SEASON.value,
+            season_number=season_number,
+            episode_number=None,
+            library_media_type=library_media_type,
+            defaults=defaults or {},
+        )
+        return item
+
     link = (
         ItemProviderLink.objects.filter(
             provider=provider,

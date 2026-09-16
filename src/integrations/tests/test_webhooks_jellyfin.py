@@ -123,6 +123,188 @@ class JellyfinWebhookTests(TestCase):
         self.assertEqual(movie.status, Status.COMPLETED.value)
         self.assertEqual(movie.progress, 1)
 
+    def test_user_data_saved_rating_creates_statusless_movie(self):
+        """A Jellyfin rating creates no watch state for an untracked movie."""
+        item = Item.objects.create(
+            media_id="603",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.MOVIE.value,
+            title="The Matrix",
+        )
+
+        JellyfinWebhookProcessor().process_payload(
+            {
+                "Event": "UserDataSaved",
+                "Item": {
+                    "Type": "Movie",
+                    "Name": "The Matrix",
+                    "ProviderIds": {"Tmdb": "603"},
+                    "UserData": {"Rating": 0},
+                },
+            },
+            self.user,
+        )
+
+        movie = Movie.objects.get(item=item, user=self.user)
+        self.assertEqual(movie.score, 0)
+        self.assertIsNone(movie.status)
+        self.assertEqual(movie.progress, 0)
+        self.assertFalse(movie.plays.exists())
+        self.assertFalse(
+            PlaybackProgress.objects.filter(user=self.user, item=item).exists()
+        )
+
+    @patch("integrations.webhooks.jellyfin.services.get_media_metadata")
+    def test_user_data_saved_rating_creates_statusless_tv(self, mock_get_media_metadata):
+        """A series rating creates a statusless TV row without watch state."""
+        mock_get_media_metadata.return_value = {
+            "media_id": "1668",
+            "title": "Friends",
+            "image": "",
+            "provider_external_ids": {},
+        }
+
+        JellyfinWebhookProcessor().process_payload(
+            {
+                "Event": "UserDataSaved",
+                "Item": {
+                    "Type": "Series",
+                    "Name": "Friends",
+                    "ProviderIds": {"Tmdb": "1668"},
+                    "UserData": {"Rating": 7.5},
+                },
+            },
+            self.user,
+        )
+
+        tv = TV.objects.get(item__media_id="1668", user=self.user)
+        self.assertEqual(tv.score, 7.5)
+        self.assertIsNone(tv.status)
+        self.assertEqual(tv.progress, 0)
+        self.assertFalse(Episode.objects.exists())
+        mock_get_media_metadata.assert_called_once_with(
+            MediaTypes.TV.value,
+            "1668",
+            Sources.TMDB.value,
+        )
+
+    def test_user_data_saved_rating_updates_movie_without_changing_watch_state(self):
+        """A rating update does not alter an existing movie's watch state."""
+        item = Item.objects.create(
+            media_id="603",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.MOVIE.value,
+            title="The Matrix",
+        )
+        movie = Movie.objects.create(
+            item=item,
+            user=self.user,
+            status=Status.IN_PROGRESS.value,
+            progress=1,
+            score=4,
+        )
+
+        JellyfinWebhookProcessor().process_payload(
+            {
+                "Event": "UserDataSaved",
+                "Rating": 2.5,
+                "Item": {
+                    "Type": "Movie",
+                    "Name": "The Matrix",
+                    "ProviderIds": {"Tmdb": "603"},
+                },
+            },
+            self.user,
+        )
+
+        movie.refresh_from_db()
+        self.assertEqual(movie.score, 2.5)
+        self.assertEqual(movie.status, Status.IN_PROGRESS.value)
+        self.assertEqual(movie.progress, 1)
+
+    @patch("app.models.tv.TV._start_next_available_season")
+    def test_user_data_saved_episode_rating_updates_parent_tv(
+        self,
+        _mock_start_next_available_season,
+    ):
+        """Episode and series ratings are stored on the parent TV tracker."""
+        item = Item.objects.create(
+            media_id="1668",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.TV.value,
+            title="Friends",
+        )
+        ItemProviderLink.objects.create(
+            item=item,
+            provider=Sources.TVDB.value,
+            provider_media_id="76669",
+            provider_media_type=MediaTypes.TV.value,
+        )
+        tv = TV.objects.create(
+            item=item,
+            user=self.user,
+            status=Status.IN_PROGRESS.value,
+        )
+
+        JellyfinWebhookProcessor().process_payload(
+            {
+                "Event": "UserDataSaved",
+                "Item": {
+                    "Type": "Episode",
+                    "Name": "The One Where Monica Gets a Roommate",
+                    "SeriesName": "Friends",
+                    "ProviderIds": {"Tvdb": "76669"},
+                    "ParentIndexNumber": 1,
+                    "IndexNumber": 1,
+                    "UserData": {"Rating": 8.0},
+                },
+            },
+            self.user,
+        )
+        JellyfinWebhookProcessor().process_payload(
+            {
+                "Event": "UserDataSaved",
+                "Item": {
+                    "Type": "Series",
+                    "Name": "Friends",
+                    "ProviderIds": {"Tvdb": "76669"},
+                    "UserData": {"Rating": 9.0},
+                },
+            },
+            self.user,
+        )
+
+        tv.refresh_from_db()
+        self.assertEqual(tv.score, 9.0)
+        self.assertEqual(tv.status, Status.IN_PROGRESS.value)
+        self.assertFalse(Episode.objects.exists())
+
+    def test_user_data_saved_rating_ignores_invalid_values(self):
+        """Missing and out-of-range ratings do not create tracker rows."""
+        item = Item.objects.create(
+            media_id="603",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.MOVIE.value,
+            title="The Matrix",
+        )
+        processor = JellyfinWebhookProcessor()
+
+        for rating in (None, True, "not-a-rating", -0.1, 10.1):
+            with self.subTest(rating=rating):
+                processor.process_payload(
+                    {
+                        "Event": "UserDataSaved",
+                        "Item": {
+                            "Type": "Movie",
+                            "ProviderIds": {"Tmdb": "603"},
+                            "UserData": {"Rating": rating},
+                        },
+                    },
+                    self.user,
+                )
+
+        self.assertFalse(Movie.objects.filter(item=item, user=self.user).exists())
+
     @patch("app.providers.tmdb.movie")
     @patch("app.models.Movie.process_status")
     def test_movie_mark_played_uses_jellyfin_last_played_date(

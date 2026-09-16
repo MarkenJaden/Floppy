@@ -1,4 +1,4 @@
-"""Settings > Metadata: manage provider credentials from the UI."""
+"""Settings > Metadata: manage provider credentials and provider defaults."""
 
 import os
 
@@ -8,10 +8,77 @@ from django.http import HttpResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_GET, require_POST
 
-from app import preflight
+from app import config, preflight
+from app.models import MediaTypes, Sources
 from app.providers import credentials
+from app.services import metadata_resolution
+from users.models import AnimeLibraryModeChoices
 
 MASK_VISIBLE_CHARS = 4
+
+# Media types with a stored per-user default provider (a `<type>_metadata_source_default`
+# field on User). Other media types have no such field, so their modal is informational
+# only: it still lists every supported source and links out to configure one, but there
+# is nothing to save.
+PROVIDER_DEFAULT_MEDIA_TYPES = (
+    MediaTypes.TV.value,
+    MediaTypes.ANIME.value,
+    MediaTypes.BOOK.value,
+)
+
+
+def _provider_default_field(media_type):
+    """Return the User field name storing the default provider for a media type."""
+    return f"{media_type}_metadata_source_default"
+
+
+def _settable_media_types(slug):
+    """Return the provider-default media types a provider slug can be set for."""
+    types = []
+    for media_type in PROVIDER_DEFAULT_MEDIA_TYPES:
+        sources = {
+            source.value if isinstance(source, Sources) else str(source)
+            for source in config.get_sources(media_type) or []
+        }
+        if slug in sources:
+            types.append(media_type)
+    return types
+
+
+def _provider_summary(user):
+    """Return one entry per enabled media type, showing its resolved provider.
+
+    Every entry lists all sources the media type supports, whether or not each
+    one is currently configured, so the modal can point at what's missing
+    instead of just hiding it. A media type is only editable (has a working
+    dropdown + Save) when it has a stored per-user default field.
+    """
+    summary = []
+    for media_type in user.get_sidebar_media_types():
+        all_sources = config.get_sources(media_type) or []
+        if not all_sources:
+            continue
+        current = metadata_resolution.metadata_default_source(user, media_type)
+        summary.append(
+            {
+                "media_type": media_type,
+                "current_provider": current,
+                "current_label": metadata_resolution.metadata_provider_label(current),
+                "choices": [
+                    {
+                        "value": source.value,
+                        "label": source.label,
+                        "configured": metadata_resolution.provider_is_enabled(
+                            source.value,
+                        ),
+                    }
+                    for source in all_sources
+                ],
+                "configurable": media_type in PROVIDER_DEFAULT_MEDIA_TYPES,
+            },
+        )
+    return summary
+
 
 def _mask(value):
     """Return a preview that proves a value is stored without revealing it."""
@@ -70,6 +137,7 @@ def _provider_view(spec, user):
         "personal_fields": [field for field in fields if field["personal"]],
         "locked": all(field["locked"] for field in fields),
         "has_instance_value": any(field["has_instance_value"] for field in fields),
+        "settable_media_types": _settable_media_types(spec.slug),
     }
 
 
@@ -116,6 +184,12 @@ def metadata_settings(request):
     context = {
         "credential_groups": groups,
         "can_edit_instance": can_edit_instance,
+        "provider_summary": _provider_summary(user),
+        "anime_library_mode_choices": AnimeLibraryModeChoices.choices,
+        "anime_shape_prompt_count": request.session.pop(
+            "anime_shape_prompt_count",
+            None,
+        ),
     }
     if not can_edit_instance:
         # Floppy's setup never flags anyone, so the owner of a fresh install is
@@ -126,6 +200,52 @@ def metadata_settings(request):
         context["in_container"] = preflight.in_container()
         context["promote_command"] = _promote_command(user.username)
     return render(request, "users/metadata.html", context)
+
+
+@require_POST
+def set_media_type_provider(request, media_type):
+    """Save the current user's preferred metadata provider for one media type."""
+    if media_type not in PROVIDER_DEFAULT_MEDIA_TYPES:
+        return HttpResponse(status=404)
+    if request.user.is_demo:
+        messages.error(request, "This section is view-only for demo accounts.")
+        return redirect("metadata_settings")
+
+    source = request.POST.get("source", "")
+    valid_sources = {
+        choice.value
+        for choice in metadata_resolution.available_metadata_sources(media_type)
+    }
+    if source not in valid_sources:
+        messages.error(request, "That provider isn't available for this media type.")
+        return redirect("metadata_settings")
+
+    field = _provider_default_field(media_type)
+    if getattr(request.user, field) != source:
+        setattr(request.user, field, source)
+        request.user.save(update_fields=[field])
+
+        if media_type == MediaTypes.ANIME.value:
+            # Switching provider only decides the shape of newly added shows.
+            # Existing ones are left alone unless the user asks, because the
+            # MAL-to-series mapping is N:1 and cannot be re-derived in bulk.
+            from app.tasks_anime_library_repair import anime_rows_needing_conversion
+
+            convertible = anime_rows_needing_conversion(request.user)
+            if convertible:
+                request.session["anime_shape_prompt_count"] = len(convertible)
+
+    if media_type == MediaTypes.ANIME.value:
+        anime_library_mode = request.POST.get("anime_library_mode")
+        if (
+            anime_library_mode in AnimeLibraryModeChoices.values
+            and request.user.anime_library_mode != anime_library_mode
+        ):
+            request.user.anime_library_mode = anime_library_mode
+            request.user.save(update_fields=["anime_library_mode"])
+
+    messages.success(request, "Metadata provider updated.")
+    return redirect("metadata_settings")
 
 
 def _spec_or_none(slug):

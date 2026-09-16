@@ -1022,6 +1022,10 @@ def _get_media_entries_for_type(
         "tag_excluded_ids": tag_excluded_ids,
     }
 
+    # _matches_metadata reads item.watch_providers only to answer a provider
+    # filter; every other request can leave the table's largest column behind.
+    needs_watch_providers = bool(filters.provider)
+
     if limit is not None and can_paginate_in_sql(filters, media_type, filters.sort):
         media_list, total = BasicMedia.objects.get_media_list(
             user=user,
@@ -1033,6 +1037,7 @@ def _get_media_entries_for_type(
             list_sql_filters=list_sql_filters,
             sql_limit=limit,
             sql_offset=offset or 0,
+            needs_watch_providers=needs_watch_providers,
         )
         entries = [MediaListEntry(item=media.item, media=media) for media in media_list]
         return entries, total
@@ -1044,6 +1049,7 @@ def _get_media_entries_for_type(
         sort_filter="",
         search=filters.search,
         list_sql_filters=list_sql_filters,
+        needs_watch_providers=needs_watch_providers,
     )
     entries = [MediaListEntry(item=media.item, media=media) for media in queryset]
     if media_type == MediaTypes.TV.value:
@@ -1064,6 +1070,7 @@ def _get_media_entries_for_type(
                 sort_filter="",
                 search=filters.search,
                 list_sql_filters=list_sql_filters,
+                needs_watch_providers=needs_watch_providers,
             )
             entries.extend(
                 MediaListEntry(item=media.item, media=media)

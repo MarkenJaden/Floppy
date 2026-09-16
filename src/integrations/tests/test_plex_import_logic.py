@@ -1460,9 +1460,10 @@ class TestPlexPostImportSideEffects(TestCase):
         tasks.import_media(mock_importer, "all", self.user.id, "new")
 
         mock_reload_calendar.assert_not_called()
-        # The rest of the post-import refresh work still runs.
-        mock_invalidate_history.assert_called_once_with(self.user.id, force=True)
-        mock_schedule_stats.assert_called_once_with(self.user.id)
+        # No tracked rows changed, so the existing history/statistics payloads
+        # remain valid and recurring polling must not rebuild them.
+        mock_invalidate_history.assert_not_called()
+        mock_schedule_stats.assert_not_called()
 
 
 class TestPlexUsernameImportBehavior(TestCase):

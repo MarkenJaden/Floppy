@@ -2,7 +2,6 @@ import asyncio
 import logging
 import re
 
-import aiohttp
 import requests
 from django.conf import settings
 from django.core.cache import cache
@@ -45,8 +44,12 @@ def handle_error(error):
 
 def search(query, page):
     """Search for media on MangaUpdates."""
+    # The NSFW flag changes the result set server-side, so it belongs in the
+    # key: without it, flipping MU_NSFW keeps serving the other mode's cached
+    # page for the full cache lifetime.
     cache_key = (
-        f"search_{Sources.MANGAUPDATES.value}_{MediaTypes.MANGA.value}_{query}_{page}"
+        f"search_{Sources.MANGAUPDATES.value}_{MediaTypes.MANGA.value}_"
+        f"nsfw_{settings.MU_NSFW}_{query}_{page}"
     )
     data = cache.get(cache_key)
 
@@ -60,7 +63,7 @@ def search(query, page):
             "page": page,
         }
 
-        if not settings.MAL_NSFW:
+        if not settings.MU_NSFW:
             params["exclude_genre"] = [
                 "Adult",
                 "Hentai",
@@ -241,6 +244,11 @@ def get_score(score):
 
 async def get_related_series(related):
     """Return list of related media for the selected media asynchronously."""
+    # Imported here, not at module scope: aiohttp is the single heaviest
+    # import in the provider set, and only this async path needs it. An
+    # install that tracks no manga or books never loads it at all.
+    import aiohttp
+
     async with aiohttp.ClientSession() as session:
         tasks = [
             fetch_series_data(
@@ -257,6 +265,11 @@ async def get_related_series(related):
 
 async def get_recommendations(recommendations):
     """Return list of recommended media for the selected media asynchronously."""
+    # Imported here, not at module scope: aiohttp is the single heaviest
+    # import in the provider set, and only this async path needs it. An
+    # install that tracks no manga or books never loads it at all.
+    import aiohttp
+
     async with aiohttp.ClientSession() as session:
         tasks = [
             fetch_series_data(session, f"{base_url}/series/{item['series_id']}", item)

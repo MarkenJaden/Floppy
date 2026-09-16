@@ -1,11 +1,12 @@
 
 {% load i18n %}
+{% load l10n %}
 {% load app_tags %}
 {% load user_tags %}
 
 <div x-data="{
        showRatingPopup: false,
-       rating: {% if ep_score is not None %}{{ ep_score|score_display:user }}{% else %}null{% endif %},
+       rating: {% localize off %}{% if ep_score is not None %}{{ ep_score|score_display:user }}{% else %}null{% endif %}{% endlocalize %},
        ratingScaleMax: {{ user|rating_scale_max }},
        hoverRating: null,
        isHovering: false,

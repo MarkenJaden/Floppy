@@ -190,6 +190,92 @@ class HelpersTest(TestCase):
         )
         self.assertEqual(Episode.objects.get().related_season_id, season.id)
 
+    def test_bulk_create_media_skips_episode_with_no_matching_season(self):
+        """An unresolvable episode is dropped with a warning, not a DB crash.
+
+        Regression for issue #1151: bulk_create_with_history previously
+        received an Episode with a NULL related_season_id and raised
+        IntegrityError, aborting the whole batch.
+        """
+        episode_item = Item.objects.create(
+            media_id="orphan",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.EPISODE.value,
+            title="Orphan Show",
+            season_number=1,
+            episode_number=1,
+        )
+        episode = Episode(item=episode_item)
+
+        warnings = helpers.bulk_create_media(
+            {MediaTypes.EPISODE.value: [episode]},
+            self.user,
+        )
+
+        self.assertEqual(Episode.objects.count(), 0)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("orphan", warnings[0])
+        self.assertIn("S1", warnings[0])
+
+    def test_bulk_create_media_keeps_episode_linked_directly_to_unsaved_season(self):
+        """An episode built with a direct (unsaved) Season reference still saves.
+
+        Regression: filtering on related_season_id alone (instead of the
+        cached related_season object) incorrectly dropped an episode whose
+        FK column read empty even though it was correctly linked in memory
+        to a Season created earlier in the same batch - bulk_create() later
+        self-heals that column from the cached object's pk.
+        """
+        tv_item = Item.objects.create(
+            media_id="1",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.TV.value,
+            title="Test Show",
+            image="tv.jpg",
+        )
+        season_item = Item.objects.create(
+            media_id="1",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.SEASON.value,
+            title="Test Show",
+            image="season.jpg",
+            season_number=1,
+        )
+        tv = TV(item=tv_item, user=self.user, status=Status.IN_PROGRESS.value)
+        season = Season(
+            item=season_item,
+            user=self.user,
+            related_tv=tv,
+            status=Status.IN_PROGRESS.value,
+        )
+
+        episodes = []
+        for episode_number in (1, 2):
+            episode_item = Item.objects.create(
+                media_id="1",
+                source=Sources.TMDB.value,
+                media_type=MediaTypes.EPISODE.value,
+                title="Test Show",
+                image="episode.jpg",
+                season_number=1,
+                episode_number=episode_number,
+            )
+            episodes.append(Episode(item=episode_item, related_season=season))
+
+        bulk_media = {
+            MediaTypes.EPISODE.value: episodes,
+            MediaTypes.SEASON.value: [season],
+            MediaTypes.TV.value: [tv],
+        }
+
+        warnings = helpers.bulk_create_media(bulk_media, self.user)
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(
+            Episode.objects.filter(related_season__user=self.user).count(),
+            2,
+        )
+
     def _make_completed_season(self, media_id="42"):
         """Create a bulk-created Completed season with zero episodes."""
         tv_item = Item.objects.create(

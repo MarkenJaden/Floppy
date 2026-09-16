@@ -9,16 +9,19 @@ and matching signals; every remaining column is handed to
 it. Nothing in the export is dropped for lack of a place to put it.
 """
 
+import json
 import logging
 import re
 from collections import defaultdict
+from contextlib import contextmanager
 from csv import DictReader
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from hashlib import blake2s
-from io import StringIO
+from io import StringIO, TextIOWrapper
+from tempfile import TemporaryFile
 
-from defusedxml.ElementTree import parse as defused_parse
+from defusedxml.ElementTree import iterparse as defused_iterparse
 from django.db import transaction
 from django.utils import timezone
 
@@ -155,6 +158,19 @@ def parse_csv(text):
     return records, columns
 
 
+def _read_records(file):
+    """Read one repeatable pass over the disk-backed export."""
+    file.seek(0)
+    for line in file:
+        yield json.loads(line)
+
+
+def _column_values(file, column):
+    """Yield one column for exact streaming field inference."""
+    for record in _read_records(file):
+        yield record.get(column)
+
+
 def _flatten_element(element, prefix, into):
     """Flatten an XML element's descendants into ``label -> value`` pairs.
 
@@ -183,36 +199,43 @@ def _flatten_element(element, prefix, into):
         into.setdefault(label, value)
 
 
-def parse_xml(file):
-    """Return ``(records, columns)`` for a CLZ XML export.
-
-    Parsed through ``defusedxml``, so entity expansion and external DTD or
-    entity resolution are refused rather than fetched.
-    """
-    try:
-        tree = defused_parse(file)
-    except Exception as error:
-        msg = f"Could not parse the CLZ XML export: {error}"
-        raise MediaImportError(msg) from error
-
-    root = tree.getroot()
-    record_elements = [child for child in root if len(child)]
-    if not record_elements:
-        msg = "The CLZ XML export contains no records."
-        raise MediaImportError(msg)
-
+def parse_xml(file, sink=None):
+    """Parse safe XML, optionally writing records to disk as they complete."""
     records = []
     columns = []
     seen = set()
-    for element in record_elements:
-        record = {}
-        _flatten_element(element, "", record)
-        records.append(record)
-        for name in record:
-            if name not in seen:
-                seen.add(name)
-                columns.append(name)
-    return records, columns
+    count = 0
+    try:
+        depth = 0
+        root = None
+        for event, element in defused_iterparse(file, events=("start", "end")):
+            if event == "start":
+                depth += 1
+                if root is None:
+                    root = element
+                continue
+            if depth == 2:  # noqa: PLR2004
+                if len(element):
+                    record = {}
+                    _flatten_element(element, "", record)
+                    if sink is None:
+                        records.append(record)
+                    else:
+                        sink.write(json.dumps(record) + "\n")
+                    count += 1
+                    for name in record:
+                        if name not in seen:
+                            seen.add(name)
+                            columns.append(name)
+                root.remove(element)
+            depth -= 1
+    except Exception as error:
+        msg = f"Could not parse the CLZ XML export: {error}"
+        raise MediaImportError(msg) from error
+    if not count:
+        msg = "The CLZ XML export contains no records."
+        raise MediaImportError(msg)
+    return (records if sink is None else count), columns
 
 
 # -- value helpers ------------------------------------------------------
@@ -311,16 +334,19 @@ class CLZImporter:
 
     def import_data(self):
         """Parse the export, resolve its schema, then import every record."""
-        records, columns = self._parse()
-        if not records:
+        with self._parse_staged() as (records, columns, total):
+            return self._import_records(records, columns, total)
+
+    def _import_records(self, records, columns, total):
+        """Import validated disk-staged records without retaining the export."""
+        if not total:
             return dict(self.counts), "The CLZ export contained no records."
 
         media_type = self.requested_media_type or self._detect_media_type(columns)
         self._build_column_index(columns)
         self._prepare_fields(records, media_type)
 
-        total = len(records)
-        for index, record in enumerate(records, start=1):
+        for index, record in enumerate(_read_records(records), start=1):
             import_progress.report(index, total, "CLZ")
             try:
                 self._process_record(record, index - 1, media_type)
@@ -337,18 +363,83 @@ class CLZImporter:
         messages.extend(self.warnings)
         return dict(self.counts), "\n".join(dict.fromkeys(messages))
 
-    def _parse(self):
-        """Return ``(records, columns)`` for whichever CLZ format was uploaded."""
-        name = (getattr(self.file, "name", "") or "").lower()
-        if name.endswith(".xml"):
-            return parse_xml(self.file)
-        if name.endswith(".xml.txt"):
-            return parse_xml(self.file)
-        text = _decode(self.file)
-        if text.lstrip().startswith("<"):
-            self.file.seek(0)
-            return parse_xml(self.file)
-        return parse_csv(text)
+    @contextmanager
+    def _parse_staged(self):
+        """Validate decoding before writes and stage repeatable rows on disk."""
+        if isinstance(self.file.read(0), str):
+            original = self.file
+            with TemporaryFile() as binary:
+                for chunk in iter(lambda: original.read(65536), ""):
+                    binary.write(chunk.encode("utf-8"))
+                binary.seek(0)
+                self.file = binary
+                try:
+                    with self._parse_staged() as staged:
+                        yield staged
+                finally:
+                    self.file = original
+            return
+        with TemporaryFile(mode="w+", encoding="utf-8") as records:
+            name = (getattr(self.file, "name", "") or "").lower()
+            if name.endswith((".xml", ".xml.txt")):
+                total, columns = parse_xml(self.file, records)
+                yield records, columns, total
+                return
+            else:
+                # Validate incrementally before selecting an encoding: a late
+                # decoding failure must not leave partially imported records.
+                encoding = None
+                for candidate in ("utf-8-sig", "utf-16", "cp1252"):
+                    self.file.seek(0)
+                    wrapper = TextIOWrapper(self.file, encoding=candidate, newline="")
+                    try:
+                        while wrapper.read(65536):
+                            pass
+                        encoding = candidate
+                        break
+                    except UnicodeError:
+                        continue
+                    finally:
+                        wrapper.detach()
+                if encoding is None:
+                    msg = "Could not decode the CLZ export. Save it as UTF-8 and retry."
+                    raise MediaImportError(msg)
+                self.file.seek(0)
+                wrapper = TextIOWrapper(self.file, encoding=encoding, newline="")
+                try:
+                    sample = wrapper.read(4096)
+                    wrapper.seek(0)
+                    if sample.lstrip().startswith("<"):
+                        total, columns = parse_xml(wrapper, records)
+                        yield records, columns, total
+                        return
+                    else:
+                        delimiter = (
+                            "\t" if sample.count("\t") > sample.count(",") else ","
+                        )
+                        reader = DictReader(wrapper, delimiter=delimiter)
+                        columns = [
+                            name.strip() for name in (reader.fieldnames or []) if name
+                        ]
+                        if not columns:
+                            msg = "The CLZ CSV export has no header row."
+                            raise MediaImportError(msg)
+                        rows = (
+                            {
+                                name.strip(): value
+                                for name, value in raw.items()
+                                if name is not None
+                            }
+                            for raw in reader
+                        )
+                    total = 0
+                    for row in rows:
+                        records.write(json.dumps(row) + "\n")
+                        total += 1
+                finally:
+                    wrapper.detach()
+                yield records, columns, total
+                return
 
     # -- schema ---------------------------------------------------------
 
@@ -382,7 +473,7 @@ class CLZImporter:
             ImportColumn(
                 key=column,
                 label=column,
-                values=[record.get(column) for record in records],
+                values=_column_values(records, column),
                 media_types=[media_type],
             )
             for column in self._custom_columns
@@ -438,9 +529,7 @@ class CLZImporter:
                 item=item,
                 record_id=record_id,
                 derived=derived,
-                occurrence=position * 1000 + copy_index
-                if derived
-                else copy_index,
+                occurrence=position * 1000 + copy_index if derived else copy_index,
                 entry_fields=entry_fields,
                 custom_values=custom_values,
                 collected_at=collected_at,
@@ -651,8 +740,8 @@ class CLZImporter:
             result
             for result in results[:MAX_TITLE_MATCH_RESULTS]
             if normalize(result.get("title", "")) == normalize(title)
-            and corroboration in str(result.get("details", {}))
-            + str(result.get("release_date", ""))
+            and corroboration
+            in str(result.get("details", {})) + str(result.get("release_date", ""))
         ]
         if len(matches) != 1:
             return None

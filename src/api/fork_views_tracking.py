@@ -17,7 +17,7 @@ from app.fork_services_movie import resolve_or_create_movie
 from app.history_cache_utils import normalize_history_media_type_tokens
 from app.models import Episode, ItemTag, MediaTypes, Movie, Tag
 from app.services import metadata_resolution
-from app.tasks import bulk_episode_plays_task
+from app.tasks_bulk_plays import bulk_episode_plays_task
 from app.templatetags.app_tags import media_url
 
 from .contract_serializers import DetailErrorSerializer
@@ -635,10 +635,11 @@ class HistoryView(drf_views.APIView):
             paginated = paginate_data(request, flat_entries, limit, offset)
             return Response(paginated, status=HTTP.OK)
 
-        type_only_request = not date_filters and set(filters).issubset(
-            {"media_type"},
-        )
-        if type_only_request:
+        # A date range only ever drops whole days from the index, so it can be
+        # served from the cached day window like a bare type filter. Every
+        # other filter reaches inside a day and still needs the builder.
+        indexable_request = set(filters).issubset({"media_type"})
+        if indexable_request:
             history_days, total_days = history_cache_reader.get_cached_history_window(
                 request.user,
                 limit=limit,
@@ -646,6 +647,7 @@ class HistoryView(drf_views.APIView):
                 filters=filters or None,
                 logging_style_override=logging_style or None,
                 max_entries_per_day=max_entries_per_day,
+                date_filters=date_filters or None,
             )
         else:
             history_days = history_cache_reader.get_history_days(
@@ -656,7 +658,7 @@ class HistoryView(drf_views.APIView):
                 max_entries_per_day=max_entries_per_day,
             )
             total_days = None
-        if type_only_request:
+        if indexable_request:
             paginated = paginate_data(
                 request,
                 [],
