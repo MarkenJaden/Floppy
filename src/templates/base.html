@@ -442,8 +442,12 @@
                   </button>
                 {% endif %}
 
-                {# Define search type: defaults to 'all' for every new search, unless currently on search page with a specific category filter #}
-                {% if request.resolver_match.url_name == 'search' and request.GET.media_type and request.GET.media_type != 'all' %}
+                {# Define search type: uses page media_type if present, specific search category if on search, otherwise defaults to 'all' #}
+                {% if media_type == MediaTypes.SEASON.value %}
+                  {% firstof MediaTypes.TV.value as search_type %}
+                {% elif media_type and media_type != 'all' %}
+                  {% firstof media_type as search_type %}
+                {% elif request.resolver_match.url_name == 'search' and request.GET.media_type and request.GET.media_type != 'all' %}
                   {% firstof request.GET.media_type 'all' as search_type %}
                 {% else %}
                   {% firstof 'all' as search_type %}
@@ -834,3 +838,4 @@
     <script src="{% static 'js/horizontal-scroll.js' %}{% get_static_file_mtime 'js/horizontal-scroll.js' %}"></script>
   </body>
 </html>
+
