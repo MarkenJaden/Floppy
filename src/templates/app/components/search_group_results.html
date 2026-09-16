@@ -11,7 +11,7 @@
       </span>
     </h4>
     <a href="{% url 'search' %}?q={{ query|urlencode }}&media_type={{ group.value }}&layout={{ layout }}"
-       class="text-xs font-medium text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1">
+       class="text-xs font-medium text-[var(--color-link)] hover:text-[var(--color-link-hover)] transition-colors flex items-center gap-1">
       <span>{% blocktranslate trimmed with type=group.display %}View all {{ type }}{% endblocktranslate %}</span>
       {% include "app/icons/chevron-right.svg" with classes="w-3.5 h-3.5" %}
     </a>
