@@ -52,10 +52,13 @@ def build_bulk_action_data(
         "tagUrl": tag_url,
         "csrfToken": get_token(request),
         "statuses": [
-            {"value": value, "label": str(label)}
-            for value, label in Status.choices
+            {"value": value, "label": str(label)} for value, label in Status.choices
         ],
-        "tags": list(Tag.objects.filter(user=user).order_by("name").values_list("name", flat=True)),
+        "tags": list(
+            Tag.objects.filter(user=user)
+            .order_by("name")
+            .values_list("name", flat=True)
+        ),
         # Names and ids only. get_user_lists prefetches every Item in every
         # list so the list pages can render their contents; this dropdown
         # renders neither, and on a large library that prefetch was 4,683

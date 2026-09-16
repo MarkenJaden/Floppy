@@ -228,7 +228,9 @@ def _merge_into_existing_tvdb_show(
     place as usual.
     """
     episode_payloads = _tvdb_episode_payloads(tvdb_payload)
-    user_ids = _user_ids_for_items([item, existing_show, *local_seasons, *local_episodes])
+    user_ids = _user_ids_for_items(
+        [item, existing_show, *local_seasons, *local_episodes]
+    )
 
     with transaction.atomic():
         item_merge.merge_item(item, existing_show)

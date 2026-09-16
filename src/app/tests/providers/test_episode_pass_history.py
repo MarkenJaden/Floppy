@@ -81,8 +81,18 @@ class EpisodePassHistory(TestCase):
             "source": Sources.TMDB.value,
             "season_number": 1,
             "episodes": [
-                {"episode_number": 1, "still_path": None, "media_id": "123", "image": ""},
-                {"episode_number": 2, "still_path": None, "media_id": "123", "image": ""},
+                {
+                    "episode_number": 1,
+                    "still_path": None,
+                    "media_id": "123",
+                    "image": "",
+                },
+                {
+                    "episode_number": 2,
+                    "still_path": None,
+                    "media_id": "123",
+                    "image": "",
+                },
             ],
         }
 
@@ -152,4 +162,3 @@ class EpisodePassHistory(TestCase):
 
         self.assertEqual(episodes[0]["history"], [])
         self.assertEqual(len(episodes[0]["all_history"]), 1)
-

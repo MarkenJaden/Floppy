@@ -185,20 +185,23 @@ class JellyfinClientTests(SimpleTestCase):
 
         rows = self.client.fetch_playback_activity(2, 100)
 
-        self.assertEqual(rows, [
-            {
-                "rowid": 5,
-                "date_created": "2024-01-02 03:04:05",
-                "user_id": "jf-user",
-                "item_id": "jf-item",
-                "item_type": "Movie",
-                "item_name": "Example",
-                "playback_method": "DirectPlay",
-                "client_name": "Web",
-                "device_name": "Laptop",
-                "play_duration": 120,
-            },
-        ])
+        self.assertEqual(
+            rows,
+            [
+                {
+                    "rowid": 5,
+                    "date_created": "2024-01-02 03:04:05",
+                    "user_id": "jf-user",
+                    "item_id": "jf-item",
+                    "item_type": "Movie",
+                    "item_name": "Example",
+                    "playback_method": "DirectPlay",
+                    "client_name": "Web",
+                    "device_name": "Laptop",
+                    "play_duration": 120,
+                },
+            ],
+        )
         body = mock_request.call_args.kwargs["json"]
         self.assertIn("rowid > 2", body["CustomQueryString"])
         self.assertIn("LIMIT 100", body["CustomQueryString"])

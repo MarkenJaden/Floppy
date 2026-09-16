@@ -793,7 +793,9 @@ class TrackModalViewTests(TestCase):
         mock_get_release,
     ):
         """Revisiting an already-created album should not crash on artist_credits."""
-        artist = Artist.objects.create(name="Artist One", musicbrainz_id="artist-one-mbid")
+        artist = Artist.objects.create(
+            name="Artist One", musicbrainz_id="artist-one-mbid"
+        )
         album = Album.objects.create(
             title="Fetched Album",
             musicbrainz_release_id="release-mbid",

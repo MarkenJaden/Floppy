@@ -881,7 +881,9 @@ def _collection_only_item_ids(
     """Return collected item ids that do not already have a tracker row."""
     tracked_item_ids = tracked_item_ids or set()
     collected_item_ids, _collected_episode_pairs = _resolve_collection_context(
-        owner, None, collection_context_cache,
+        owner,
+        None,
+        collection_context_cache,
     )
     if not collected_item_ids:
         return set()
@@ -924,7 +926,9 @@ def _collection_only_item_ids(
         return set()
 
     result_ids = set()
-    for id_batch in batched(candidate_item_ids, _id_batch_size(len(candidate_item_ids))):
+    for id_batch in batched(
+        candidate_item_ids, _id_batch_size(len(candidate_item_ids))
+    ):
         candidate_queryset = Item.objects.filter(id__in=id_batch)
         if search_query:
             candidate_queryset = candidate_queryset.filter(
@@ -957,7 +961,9 @@ def _filter_item_ids_by_rating(
         else {"user": owner}
     )
     rated_item_ids = set()
-    for id_batch in batched(candidate_item_ids, _id_batch_size(len(candidate_item_ids))):
+    for id_batch in batched(
+        candidate_item_ids, _id_batch_size(len(candidate_item_ids))
+    ):
         queryset = model.objects.filter(
             **owner_lookup,
             item_id__in=id_batch,
@@ -1055,7 +1061,9 @@ def collect_matching_item_ids(
     collected_episode_pairs: set[tuple[str, str]] = set()
     if collection_filter != "all":
         collected_item_ids, collected_episode_pairs = _resolve_collection_context(
-            owner, None, collection_context_cache,
+            owner,
+            None,
+            collection_context_cache,
         )
 
     tag_match_ids, tag_excluded_ids = _resolve_tag_id_sets(
@@ -1161,7 +1169,9 @@ def collect_matching_item_ids(
                 batch_size = _id_batch_size(len(collection_only_ids))
                 for id_batch in batched(collection_only_ids, batch_size):
                     for item in Item.objects.filter(id__in=id_batch).iterator():
-                        if not _matches_item_filters(item, normalized_rules, today, region):
+                        if not _matches_item_filters(
+                            item, normalized_rules, today, region
+                        ):
                             continue
                         if _tag_filter_excludes(item.id):
                             continue
@@ -1531,7 +1541,9 @@ def build_rule_filter_data(
             for value in sorted(providers_set, key=lambda value: value.lower())
         ],
         "show_providers": bool(region and region != "UNSET")
-        and any(media_type in PROVIDER_MEDIA_TYPES for media_type in target_media_types),
+        and any(
+            media_type in PROVIDER_MEDIA_TYPES for media_type in target_media_types
+        ),
         "relative_date_units": [
             {"value": value, "label": label}
             for value, label in RELATIVE_DATE_UNIT_CHOICES

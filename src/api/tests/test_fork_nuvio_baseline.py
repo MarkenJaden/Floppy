@@ -35,7 +35,9 @@ class NuvioContractBaselineTests(FloppyApiTestCase):
             headers=self.auth_headers,
         )
         self.assertEqual(start_res.status_code, HTTP.OK)
-        self.assertFalse(Movie.objects.filter(user=self.user1, item__media_id="603").exists())
+        self.assertFalse(
+            Movie.objects.filter(user=self.user1, item__media_id="603").exists()
+        )
 
         pause_res = self.call_api(
             "post",
@@ -49,15 +51,23 @@ class NuvioContractBaselineTests(FloppyApiTestCase):
             headers=self.auth_headers,
         )
         self.assertEqual(pause_res.status_code, HTTP.OK)
-        self.assertFalse(Movie.objects.filter(user=self.user1, item__media_id="603").exists())
+        self.assertFalse(
+            Movie.objects.filter(user=self.user1, item__media_id="603").exists()
+        )
 
     def test_scrobble_stop_completed_creates_durable_history(self):
         """A completed stop event creates a completed watch history record."""
+
         def fake_process(self_proc, payload, user):
             movie_item = self.items_by_type["movie"][0]
-            Movie.objects.get_or_create(user=user, item=movie_item, defaults={"status": Status.COMPLETED.value})
+            Movie.objects.get_or_create(
+                user=user, item=movie_item, defaults={"status": Status.COMPLETED.value}
+            )
 
-        with patch("integrations.webhooks.generic_scrobble.GenericScrobbleProcessor.process_payload", new=fake_process):
+        with patch(
+            "integrations.webhooks.generic_scrobble.GenericScrobbleProcessor.process_payload",
+            new=fake_process,
+        ):
             mock_item = self.items_by_type["movie"][0]
             response = self.call_api(
                 "post",
@@ -72,7 +82,9 @@ class NuvioContractBaselineTests(FloppyApiTestCase):
             )
             self.assertEqual(response.status_code, HTTP.OK)
             self.assertTrue(
-                Movie.objects.filter(user=self.user1, item=mock_item, status=Status.COMPLETED.value).exists()
+                Movie.objects.filter(
+                    user=self.user1, item=mock_item, status=Status.COMPLETED.value
+                ).exists()
             )
 
     def test_playback_progress_per_user_isolation(self):
@@ -83,7 +95,11 @@ class NuvioContractBaselineTests(FloppyApiTestCase):
         res1 = self.call_api(
             "put",
             "api_playback_progress",
-            payload={"media_type": "movie", "ids": {"tmdb": movie_item.media_id}, "position_seconds": 500},
+            payload={
+                "media_type": "movie",
+                "ids": {"tmdb": movie_item.media_id},
+                "position_seconds": 500,
+            },
             headers=self.auth_headers,
         )
         self.assertEqual(res1.status_code, HTTP.OK)
@@ -92,7 +108,11 @@ class NuvioContractBaselineTests(FloppyApiTestCase):
         res2 = self.call_api(
             "put",
             "api_playback_progress",
-            payload={"media_type": "movie", "ids": {"tmdb": movie_item.media_id}, "position_seconds": 1500},
+            payload={
+                "media_type": "movie",
+                "ids": {"tmdb": movie_item.media_id},
+                "position_seconds": 1500,
+            },
             headers=self.auth_headers2,
         )
         self.assertEqual(res2.status_code, HTTP.OK)
@@ -109,7 +129,11 @@ class NuvioContractBaselineTests(FloppyApiTestCase):
             response = self.call_api(
                 "put",
                 "api_playback_progress",
-                payload={"media_type": "movie", "ids": {"imdb": "tt-completely-nonexistent-id"}, "position_seconds": 100},
+                payload={
+                    "media_type": "movie",
+                    "ids": {"imdb": "tt-completely-nonexistent-id"},
+                    "position_seconds": 100,
+                },
                 headers=self.auth_headers,
             )
             self.assertEqual(response.status_code, HTTP.NOT_FOUND)

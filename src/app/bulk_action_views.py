@@ -101,7 +101,11 @@ def bulk_collection_quick_add(request):
     result["success"] = True
     result["message"] = (
         f"Added {result['created']} item(s) to collection."
-        + (f" {result['already_present']} already present." if result["already_present"] else "")
+        + (
+            f" {result['already_present']} already present."
+            if result["already_present"]
+            else ""
+        )
         + (f" {result['skipped']} skipped." if result["skipped"] else "")
     )
     return JsonResponse(result)

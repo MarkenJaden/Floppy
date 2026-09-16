@@ -718,7 +718,9 @@ class MediaListViewTests(TestCase):
         )
 
         with mock.patch("app.tasks.prefetch_album_covers_batch.delay") as mock_delay:
-            response = self.client.get(reverse("medialist", args=[MediaTypes.MUSIC.value]))
+            response = self.client.get(
+                reverse("medialist", args=[MediaTypes.MUSIC.value])
+            )
 
         self.assertEqual(response.status_code, 200)
         mock_delay.assert_called_once_with([artist.id], limit_per_artist=5)
@@ -792,7 +794,9 @@ class MediaListViewTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "if (selectMode) { $event.preventDefault(); toggleItemSelected(")
+        self.assertContains(
+            response, "if (selectMode) { $event.preventDefault(); toggleItemSelected("
+        )
 
     def test_table_layout_shows_notes_on_main_media_list(self):
         """Notes must render in Table View on the main media list (issue #1010)."""
@@ -1911,7 +1915,8 @@ class MediaListViewTests(TestCase):
         all_response = self.client.get(url)
         self.assertEqual(all_response.context["media_list"].paginator.count, 5)
         media_statuses = [
-            option["value"] for option in all_response.context["filter_data"]["media_statuses"]
+            option["value"]
+            for option in all_response.context["filter_data"]["media_statuses"]
         ]
         self.assertEqual(media_statuses, ["Ended"])
 
@@ -3042,7 +3047,9 @@ class MediaListViewTests(TestCase):
             "layoutHref(nextLayout) { return buildMediaListHref(this.mediaListUrl, document.getElementById('filter-form'), { layout: nextLayout }); }",
         )
         self.assertContains(response, '@click="open = false"')
-        self.assertNotContains(response, "layout = layout === 'grid' ? 'table' : 'grid'")
+        self.assertNotContains(
+            response, "layout = layout === 'grid' ? 'table' : 'grid'"
+        )
 
     def test_comic_media_list_can_switch_to_issue_subview(self):
         """Comic media list should reuse the music-style subview switch for issues."""
@@ -3162,8 +3169,7 @@ class MediaListViewTests(TestCase):
 
         headers = {"HTTP_HX_REQUEST": "true"}
         grid_page = self.client.get(
-            reverse("medialist", args=[MediaTypes.MOVIE.value])
-            + "?layout=grid&page=1",
+            reverse("medialist", args=[MediaTypes.MOVIE.value]) + "?layout=grid&page=1",
             **headers,
         )
         self.assertContains(
@@ -3670,7 +3676,7 @@ class MediaListViewTests(TestCase):
 
 
 class MediaListRelativeCompletedDateTests(TestCase):
-    """"Completed in the last N units" on the library filter toolbar."""
+    """ "Completed in the last N units" on the library filter toolbar."""
 
     def setUp(self):
         """Log in with two movies completed at known distances from today."""
@@ -3713,9 +3719,7 @@ class MediaListRelativeCompletedDateTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         content = response.content.decode()
-        return [
-            title for title in ("Recent Movie", "Old Movie") if title in content
-        ]
+        return [title for title in ("Recent Movie", "Old Movie") if title in content]
 
     def test_window_narrows_the_list(self):
         """A 7-day window keeps only the recently completed movie."""

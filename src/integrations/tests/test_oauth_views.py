@@ -93,7 +93,10 @@ class OAuthStateViewTests(TestCase):
         with (
             patch(
                 "integrations.views.trakt.handle_oauth_callback",
-                return_value={"refresh_token": "trakt-refresh", "username": "trakt-user"},
+                return_value={
+                    "refresh_token": "trakt-refresh",
+                    "username": "trakt-user",
+                },
             ) as handle_callback,
             patch("integrations.views.helpers.encrypt", return_value="encrypted-token"),
             patch("integrations.views.tasks.import_trakt.delay") as import_task,
@@ -119,7 +122,10 @@ class OAuthStateViewTests(TestCase):
         with (
             patch(
                 "integrations.views.anilist.get_token",
-                return_value={"access_token": "anilist-access", "username": "anilist-user"},
+                return_value={
+                    "access_token": "anilist-access",
+                    "username": "anilist-user",
+                },
             ) as get_token,
             patch("integrations.views.helpers.encrypt", return_value="encrypted-token"),
             patch("integrations.views.tasks.import_anilist.delay") as import_task,

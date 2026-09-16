@@ -52,9 +52,7 @@ class WorkerMemoryCeilingTests(SimpleTestCase):
 
     def setUp(self):
         """Remember the real modules so they can be put back exactly."""
-        self.saved_modules = {
-            name: sys.modules.get(name) for name in RELOADED_MODULES
-        }
+        self.saved_modules = {name: sys.modules.get(name) for name in RELOADED_MODULES}
 
     def tearDown(self):
         """Restore the real modules, not merely drop the patched ones.

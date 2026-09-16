@@ -96,8 +96,12 @@ class EpisodeWatchIdentityTests(TestCase):
     def test_same_token_retry_returns_winner_without_second_side_effect(self):
         token = uuid4()
         with (
-            patch("app.models.tv.cache_utils.clear_time_left_cache_for_user") as clear_time,
-            patch("app.models.tv.cache_utils.clear_media_list_cache_for_user") as clear_list,
+            patch(
+                "app.models.tv.cache_utils.clear_time_left_cache_for_user"
+            ) as clear_time,
+            patch(
+                "app.models.tv.cache_utils.clear_media_list_cache_for_user"
+            ) as clear_list,
         ):
             first = self.season.watch(
                 1,
@@ -261,5 +265,7 @@ class EpisodeWatchIdentityConcurrencyTests(TransactionTestCase):
             results = list(executor.map(lambda _index: watch(), range(2)))
 
         self.assertEqual(Episode.objects.filter(watch_operation_id=token).count(), 1)
-        self.assertEqual({result.episode.pk for result in results}, {results[0].episode.pk})
+        self.assertEqual(
+            {result.episode.pk for result in results}, {results[0].episode.pk}
+        )
         self.assertEqual(sum(result.created for result in results), 1)

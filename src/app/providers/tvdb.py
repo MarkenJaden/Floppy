@@ -44,12 +44,34 @@ _EPISODE_TRANSLATIONS_UNAVAILABLE = "__tvdb_episode_translations_unavailable__"
 # Covers the languages TMDB_LANG is realistically set to; unmapped codes fall
 # back to English.
 ISO_639_1_TO_TVDB = {
-    "en": "eng", "ja": "jpn", "fr": "fra", "de": "deu", "es": "spa",
-    "it": "ita", "pt": "por", "ru": "rus", "ko": "kor", "zh": "zho",
-    "nl": "nld", "sv": "swe", "no": "nor", "da": "dan", "fi": "fin",
-    "pl": "pol", "tr": "tur", "ar": "ara", "he": "heb", "hi": "hin",
-    "th": "tha", "vi": "vie", "id": "ind", "cs": "ces", "el": "ell",
-    "hu": "hun", "ro": "ron", "uk": "ukr",
+    "en": "eng",
+    "ja": "jpn",
+    "fr": "fra",
+    "de": "deu",
+    "es": "spa",
+    "it": "ita",
+    "pt": "por",
+    "ru": "rus",
+    "ko": "kor",
+    "zh": "zho",
+    "nl": "nld",
+    "sv": "swe",
+    "no": "nor",
+    "da": "dan",
+    "fi": "fin",
+    "pl": "pol",
+    "tr": "tur",
+    "ar": "ara",
+    "he": "heb",
+    "hi": "hin",
+    "th": "tha",
+    "vi": "vie",
+    "id": "ind",
+    "cs": "ces",
+    "el": "ell",
+    "hu": "hun",
+    "ro": "ron",
+    "uk": "ukr",
 }
 
 
@@ -616,7 +638,9 @@ def _with_preferred_translation(
 def _get_title_fields(row: dict | None, language: str | None = None):
     """Return normalized title fields for TVDB entities."""
     row = row or {}
-    localized_title = _find_translation(row, "name", language=language) or _get_name(row)
+    localized_title = _find_translation(row, "name", language=language) or _get_name(
+        row
+    )
     original_title = (
         _normalize_text_value(row.get("originalName"))
         or _normalize_text_value(row.get("original_name"))
@@ -632,7 +656,9 @@ def _get_title_fields(row: dict | None, language: str | None = None):
 
 def _search_title_key(value) -> str:
     """Normalize a title for provider-search relevance comparisons."""
-    return re.sub(r"\s+", " ", re.sub(r"[^\w]+", " ", str(value or "").casefold())).strip()
+    return re.sub(
+        r"\s+", " ", re.sub(r"[^\w]+", " ", str(value or "").casefold())
+    ).strip()
 
 
 def _search_result_rank(result: dict, query: str) -> tuple[int, int]:
@@ -926,7 +952,11 @@ def _pick_series_seasons(series_data: dict | None):
 
 
 def _season_related_entry(
-    series_data: dict, season_data: dict, *, media_type: str, language: str | None = None
+    series_data: dict,
+    season_data: dict,
+    *,
+    media_type: str,
+    language: str | None = None,
 ):
     """Return a related-season card entry."""
     season_no = _season_number(season_data)
@@ -1005,7 +1035,9 @@ def _normalize_characters(series_data: dict | None):
     return cast_rows, crew_rows
 
 
-def _build_series_metadata(series_data: dict, *, media_type: str, language: str | None = None):
+def _build_series_metadata(
+    series_data: dict, *, media_type: str, language: str | None = None
+):
     """Return normalized series metadata."""
     seasons = _pick_series_seasons(series_data)
     cast_rows, crew_rows = _normalize_characters(series_data)
@@ -1105,7 +1137,9 @@ def _person_filmography_entries(characters, language: str | None = None):
                 "year": year,
                 "credit_type": "cast" if is_cast else "crew",
                 "role": character.get("name") or character.get("character") or "",
-                "department": "Acting" if is_cast else (character.get("type") or "Crew"),
+                "department": "Acting"
+                if is_cast
+                else (character.get("type") or "Crew"),
             },
         )
 
@@ -1126,7 +1160,9 @@ def _person_biography(response: dict | None, language: str | None = None) -> str
     """
     response = response or {}
     biographies = [
-        row for row in _coerce_list(response.get("biographies")) if isinstance(row, dict)
+        row
+        for row in _coerce_list(response.get("biographies"))
+        if isinstance(row, dict)
     ]
 
     def _text(row: dict) -> str | None:
@@ -1178,7 +1214,8 @@ def person(person_id, language=None):
         "death_date": _normalize_text_value(response.get("death")),
         "place_of_birth": _normalize_text_value(response.get("birthPlace")) or "",
         "filmography": _person_filmography_entries(
-            response.get("characters"), language,
+            response.get("characters"),
+            language,
         ),
     }
 
@@ -1218,7 +1255,10 @@ def _normalize_episode_rows(
             else _NO_PRELOADED_TRANSLATION
         )
         episode = _with_preferred_translation(  # noqa: PLW2901  # deliberate in-loop normalisation
-            episode, "episodes", language, preloaded_translation=preloaded,
+            episode,
+            "episodes",
+            language,
+            preloaded_translation=preloaded,
         )
         air_date = (
             _parse_date(episode.get("aired"))
@@ -1253,7 +1293,11 @@ def _normalize_episode_rows(
 
 
 def _normalize_season_metadata(
-    series_data: dict, season_data: dict, *, media_type: str, language: str | None = None
+    series_data: dict,
+    season_data: dict,
+    *,
+    media_type: str,
+    language: str | None = None,
 ):
     """Return normalized season metadata."""
     episodes = _normalize_episode_rows(
@@ -1401,7 +1445,9 @@ def tv_with_seasons(
         except (TypeError, ValueError):
             continue
 
-    series_metadata = tv(media_id, routed_media_type=routed_media_type, language=language)
+    series_metadata = tv(
+        media_id, routed_media_type=routed_media_type, language=language
+    )
     if not normalized_numbers:
         return series_metadata
 
@@ -1506,7 +1552,9 @@ def episode(
         routed_media_type=routed_media_type,
         language=language,
     ).get(f"season/{season_number}", {})
-    series_payload = tv(media_id, routed_media_type=routed_media_type, language=language)
+    series_payload = tv(
+        media_id, routed_media_type=routed_media_type, language=language
+    )
     matched_episode = None
     for episode_row in season_payload.get("episodes", []):
         if str(episode_row.get("episode_number")) == str(episode_number):

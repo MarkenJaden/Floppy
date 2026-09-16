@@ -111,7 +111,9 @@ class KoitoScrobbleProcessor:
         )
 
         try:
-            music_entry = retry_on_lock(lambda: music_scrobble.record_music_playback(event))
+            music_entry = retry_on_lock(
+                lambda: music_scrobble.record_music_playback(event)
+            )
         except Exception:
             logger.exception(
                 "Error processing Koito listen for %s: %s - %s",

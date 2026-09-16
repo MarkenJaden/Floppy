@@ -207,7 +207,9 @@ class PlexWebhookShareTests(TestCase):
         self.assertFalse(share.recipient_enabled)
 
     def test_owner_cannot_duplicate_recipient_username_case_insensitively(self):
-        first_recipient = get_user_model().objects.create_user(username="other-recipient")
+        first_recipient = get_user_model().objects.create_user(
+            username="other-recipient"
+        )
         PlexWebhookShare.objects.create(
             owner=self.user,
             recipient=first_recipient,

@@ -101,7 +101,9 @@ def resolve_sqlite_journal_mode(
 ) -> tuple[str, bool]:
     """Return the effective journal mode and whether a safety fallback applied."""
     requested = normalize_sqlite_journal_mode(requested_mode)
-    runtime_version = sqlite3.sqlite_version_info if version_info is None else version_info
+    runtime_version = (
+        sqlite3.sqlite_version_info if version_info is None else version_info
+    )
 
     if requested == "WAL" and not sqlite_wal_reset_fix_present(runtime_version):
         return "DELETE", True

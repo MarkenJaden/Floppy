@@ -592,8 +592,9 @@ class ImportStremioTests(TestCase):
         self.assertEqual(warnings, "")
         self.assertEqual(imported_counts[MediaTypes.TV.value], 1)
         self.assertEqual(
-            Item.objects.get(media_id="1396", media_type=MediaTypes.TV.value)
-            .library_media_type,
+            Item.objects.get(
+                media_id="1396", media_type=MediaTypes.TV.value
+            ).library_media_type,
             MediaTypes.ANIME.value,
         )
         self.assertEqual(
@@ -691,12 +692,15 @@ class ImportStremioTests(TestCase):
             },
         ]
 
-        with patch(
-            "integrations.anime_mapping.load_mapping_snapshot",
-            side_effect=OSError("mapping unavailable"),
-        ), patch(
-            "app.services.grouped_anime.classify_tv_metadata",
-        ) as mock_classify:
+        with (
+            patch(
+                "integrations.anime_mapping.load_mapping_snapshot",
+                side_effect=OSError("mapping unavailable"),
+            ),
+            patch(
+                "app.services.grouped_anime.classify_tv_metadata",
+            ) as mock_classify,
+        ):
             self._run_import(
                 library_items,
                 cinemeta_videos={"tt0903747": video_ids},
@@ -748,13 +752,16 @@ class ImportStremioTests(TestCase):
             mal_ids=("12345",),
         )
 
-        with patch(
-            "app.services.grouped_anime.classify_tv_metadata",
-            return_value=match,
-        ), patch.object(
-            stremio.StremioImporter,
-            "_resolve_mal_id",
-            return_value=12345,
+        with (
+            patch(
+                "app.services.grouped_anime.classify_tv_metadata",
+                return_value=match,
+            ),
+            patch.object(
+                stremio.StremioImporter,
+                "_resolve_mal_id",
+                return_value=12345,
+            ),
         ):
             _, warnings = self._run_import(
                 library_items,
@@ -1015,7 +1022,9 @@ class ImportStremioTests(TestCase):
 
         # No duplicate rows forked in a different bucket.
         self.assertEqual(
-            Item.objects.filter(media_id="1396", media_type=MediaTypes.TV.value).count(),
+            Item.objects.filter(
+                media_id="1396", media_type=MediaTypes.TV.value
+            ).count(),
             1,
         )
         self.assertEqual(

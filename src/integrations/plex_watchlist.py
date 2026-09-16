@@ -81,11 +81,14 @@ class PlexWatchlistSyncService:
 
         username = username or (account_data.get("username") or "").strip()
         account_id = account_id or str(account_data.get("id") or "").strip()
-        server_id = server_id or str(
-            account_data.get("machineIdentifier")
-            or account_data.get("machine_identifier")
-            or "",
-        ).strip()
+        server_id = (
+            server_id
+            or str(
+                account_data.get("machineIdentifier")
+                or account_data.get("machine_identifier")
+                or "",
+            ).strip()
+        )
 
         updated_fields = []
         if username and username != self.account.plex_username:

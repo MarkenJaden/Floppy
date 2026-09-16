@@ -65,10 +65,7 @@ def destination_media_type(item: Item) -> str:
 def _source_shape(item: Item) -> str:
     if item.media_type == MediaTypes.TV.value:
         return "grouped"
-    if (
-        item.media_type == MediaTypes.ANIME.value
-        and item.source == Sources.MAL.value
-    ):
+    if item.media_type == MediaTypes.ANIME.value and item.source == Sources.MAL.value:
         return "flat"
     _migration_error("This tracking entry is not a movable show.")
 
@@ -210,12 +207,15 @@ def _load_target_seasons(
         return {}
 
     try:
-        payload = services.get_media_metadata(
-            "tv_with_seasons",
-            target_media_id,
-            target_source,
-            sorted(set(season_numbers)),
-        ) or {}
+        payload = (
+            services.get_media_metadata(
+                "tv_with_seasons",
+                target_media_id,
+                target_source,
+                sorted(set(season_numbers)),
+            )
+            or {}
+        )
     except services.ProviderAPIError:
         _migration_error(
             "The destination seasons could not be loaded; nothing was changed."
@@ -244,9 +244,7 @@ def preflight_library_move(
         "anime_enabled",
         False,
     ):
-        _migration_error(
-            "Enable both TV Shows and Anime before moving a title."
-        )
+        _migration_error("Enable both TV Shows and Anime before moving a title.")
 
     target_media_type = (target_media_type or "").strip()
     target_source = (target_source or "").strip()
@@ -382,7 +380,9 @@ def _target_item(
     ).item
 
 
-def _season_item(plan: LibraryMigrationPlan, season_number: int, metadata: dict) -> Item:
+def _season_item(
+    plan: LibraryMigrationPlan, season_number: int, metadata: dict
+) -> Item:
     defaults = Item.title_fields_from_metadata(metadata, fallback_title="")
     item, _created = Item.objects.get_or_create(
         media_id=plan.target_media_id,
@@ -479,7 +479,9 @@ def _move_grouped(user, source_item: Item, plan: LibraryMigrationPlan) -> Item:
         library_media_type=plan.target_bucket,
     )
     target_item = Item.objects.select_for_update().get(pk=target_item.pk)
-    target_tv = TV.objects.select_for_update().filter(user=user, item=target_item).first()
+    target_tv = (
+        TV.objects.select_for_update().filter(user=user, item=target_item).first()
+    )
     destination_fields = None
     if target_tv is not None:
         destination_fields = {
@@ -562,11 +564,15 @@ def _move_grouped_to_flat(user, source_item: Item, plan: LibraryMigrationPlan) -
         library_media_type=MediaTypes.ANIME.value,
     )
     target_item = Item.objects.select_for_update().get(pk=target_item.pk)
-    target_anime = Anime.all_objects.select_for_update().filter(
-        user=user,
-        item=target_item,
-        migrated_to_item__isnull=True,
-    ).first()
+    target_anime = (
+        Anime.all_objects.select_for_update()
+        .filter(
+            user=user,
+            item=target_item,
+            migrated_to_item__isnull=True,
+        )
+        .first()
+    )
     if target_anime is None:
         target_anime = Anime(
             user=user,
@@ -619,9 +625,7 @@ def migrate_library_item(
             except anime_migration.AnimeMigrationError as error:
                 _migration_error(str(error))
             if preflight.provider_series_id != plan.target_media_id:
-                _migration_error(
-                    "The verified Anime mapping changed; retry the move."
-                )
+                _migration_error("The verified Anime mapping changed; retry the move.")
             try:
                 result = anime_migration.persist_flat_anime_migration(preflight)
             except anime_migration.AnimeMigrationError as error:

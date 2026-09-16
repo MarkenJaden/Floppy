@@ -107,7 +107,9 @@ class LogSafetyTests(SimpleTestCase):
         )
 
     def test_redact_secrets_strips_cookie_header(self):
-        result = redact_secrets("Cookie: sessionid=session-secret; csrftoken=csrf-secret")
+        result = redact_secrets(
+            "Cookie: sessionid=session-secret; csrftoken=csrf-secret"
+        )
 
         self.assertEqual(result, "Cookie: [REDACTED]")
 

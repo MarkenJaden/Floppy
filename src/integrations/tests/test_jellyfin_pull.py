@@ -206,7 +206,9 @@ class PullJellyfinHistoryTaskTests(TestCase):
         return_value="api-key",
     )
     @patch("integrations.jellyfin_client.JellyfinClient.iter_library_items")
-    @patch("integrations.jellyfin_client.JellyfinClient.fetch_max_playback_activity_rowid")
+    @patch(
+        "integrations.jellyfin_client.JellyfinClient.fetch_max_playback_activity_rowid"
+    )
     @patch("integrations.jellyfin_client.JellyfinClient.fetch_playback_activity")
     @patch("integrations.jellyfin_client.JellyfinClient.probe_playback_reporting")
     def test_skips_full_backfill_after_prior_manual_import(

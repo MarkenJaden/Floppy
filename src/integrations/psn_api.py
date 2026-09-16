@@ -89,9 +89,7 @@ def _translated(operation):
         raise MediaImportError(msg) from e
     except psnawp_exceptions.PSNAWPException as e:
         logger.warning("PSN %s failed: %s", operation, exception_summary(e))
-        msg = (
-            f"PSN request failed ({type(e).__name__}). Check the logs for details."
-        )
+        msg = f"PSN request failed ({type(e).__name__}). Check the logs for details."
         raise MediaImportError(msg) from e
     except requests.RequestException as e:
         logger.warning(
@@ -144,9 +142,7 @@ def get_played_games(npsso):
                     "name": stats.name,
                     "image_url": stats.image_url,
                     "minutes": (
-                        int(play_duration.total_seconds() // 60)
-                        if play_duration
-                        else 0
+                        int(play_duration.total_seconds() // 60) if play_duration else 0
                     ),
                     "last_played": stats.last_played_date_time,
                     "play_count": stats.play_count,

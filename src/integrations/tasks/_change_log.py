@@ -73,8 +73,7 @@ def _compact_for_user(user, watermark, cutoff, batch_size):
                 user=user,
                 sequence__lte=watermark,
                 created_at__lt=cutoff,
-            )
-            .values_list("pk", flat=True)[:batch_size],
+            ).values_list("pk", flat=True)[:batch_size],
         )
         if not ids:
             break

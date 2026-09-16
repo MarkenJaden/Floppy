@@ -550,9 +550,7 @@ class CreditsBackfillTaskTests(TestCase):
             title="TVDB Episode",
         )
 
-        missing_ids = tasks._missing_credits_item_ids(
-            [tvdb_season.id, tvdb_episode.id]
-        )
+        missing_ids = tasks._missing_credits_item_ids([tvdb_season.id, tvdb_episode.id])
 
         self.assertEqual(missing_ids, [])
 

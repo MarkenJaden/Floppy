@@ -229,7 +229,9 @@ class EventManager(models.Manager):
                 tmdb_id and (Sources.TMDB.value, tmdb_id) in active_tv_shows
             ) or (tvdb_id and (Sources.TVDB.value, tvdb_id) in active_tv_shows)
             title_slug = _normalize_anime_title(anime_item.title)
-            has_title_fallback_match = title_slug and title_slug in active_tv_title_slugs
+            has_title_fallback_match = (
+                title_slug and title_slug in active_tv_title_slugs
+            )
             if has_verified_match or has_title_fallback_match:
                 hidden_ids.add(anime_item.id)
 
@@ -262,13 +264,10 @@ class EventManager(models.Manager):
             ),
         )
 
-        return (
-            Q(
-                item__media_type=MediaTypes.SEASON.value,
-                item__media_id__in=active_tv_shows,
-            )
-            & ~Q(dropped_season_exists)
-        )
+        return Q(
+            item__media_type=MediaTypes.SEASON.value,
+            item__media_id__in=active_tv_shows,
+        ) & ~Q(dropped_season_exists)
 
     def sort_with_sentinel_last(self, queryset):
         """Sort events with sentinel time last."""

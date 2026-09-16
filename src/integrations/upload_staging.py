@@ -23,7 +23,9 @@ MAX_UPLOAD_SUFFIX_LENGTH = 32
 SAFE_SUFFIX_CHARACTERS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-",
 )
-OUTSIDE_STAGING_DIRECTORY_MESSAGE = "Uploaded file path is outside the staging directory"
+OUTSIDE_STAGING_DIRECTORY_MESSAGE = (
+    "Uploaded file path is outside the staging directory"
+)
 
 
 def staging_directory() -> Path:

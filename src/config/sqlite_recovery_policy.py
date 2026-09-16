@@ -106,7 +106,11 @@ def _run_with_progress(
     last_progress_at = None
 
     def progress() -> int:
-        nonlocal last_progress_at, last_progress_monotonic, last_report, progress_callbacks
+        nonlocal \
+            last_progress_at, \
+            last_progress_monotonic, \
+            last_report, \
+            progress_callbacks
         progress_callbacks += 1
         now = time.monotonic()
         last_progress_monotonic = now
@@ -177,7 +181,9 @@ def _publish_policy_report(
     payload.update(
         {
             "actions": actions,
-            "backup_path": str(backup_path) if backup_path else payload.get("backup_path"),
+            "backup_path": str(backup_path)
+            if backup_path
+            else payload.get("backup_path"),
             "can_quarantine": bool(plan.get("can_repair")),
             "incident_token": token if status == "blocked" else None,
             "repair_plan": plan,
@@ -351,9 +357,7 @@ def _read_policy_decision(db_path: str, report: dict) -> str | None:
     try:
         descriptor = os.open(
             decision_path,
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_NONBLOCK", 0),
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
         )
     except OSError:
         return None

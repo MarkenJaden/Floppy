@@ -52,7 +52,9 @@ class HistoryItemProjectionTests(TestCase):
             synopsis="x" * 2000,
         )
         tv = TV.objects.create(
-            item=tv_item, user=cls.user, status=Status.IN_PROGRESS.value,
+            item=tv_item,
+            user=cls.user,
+            status=Status.IN_PROGRESS.value,
         )
         season_item = Item.objects.create(
             media_id="projection-show",
@@ -162,7 +164,8 @@ class HistoryItemProjectionTests(TestCase):
         days = history_cache.build_history_days(self.user)
         entries = [entry for day in days for entry in day["entries"]]
         episodes = [
-            entry for entry in entries
+            entry
+            for entry in entries
             if entry["media_type"] == MediaTypes.EPISODE.value
         ]
 

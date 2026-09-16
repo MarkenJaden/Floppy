@@ -107,4 +107,3 @@ class ContainerEntrypointPathTests(SimpleTestCase):
 
             self.assertEqual(path, str(virtual_env_bin))
             self.assertEqual(Path(resolved_python), virtual_env_bin / "python")
-

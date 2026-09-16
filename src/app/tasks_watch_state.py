@@ -53,10 +53,9 @@ def backfill_user_watch_state(user, *, after_item_id=0, limit=BACKFILL_BATCH_SIZ
     for media_type in PROJECTED_MEDIA_TYPES:
         item_ids.update(_tracked_item_ids(user, media_type))
 
-    items = (
-        Item.objects.filter(id__in=item_ids, id__gt=after_item_id)
-        .order_by("id")[:limit]
-    )
+    items = Item.objects.filter(id__in=item_ids, id__gt=after_item_id).order_by("id")[
+        :limit
+    ]
     items = list(items)
     if not items:
         return None

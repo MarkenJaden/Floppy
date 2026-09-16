@@ -27,7 +27,9 @@ class TVMazeProviderTests(TestCase):
 
         self.assertEqual(result, {"tvdb_id": "352408", "imdb_id": "tt9054364"})
         mock_api_request.assert_called_once_with(
-            "tvmaze", "GET", f"{tvmaze.base_url}/shows/38390",
+            "tvmaze",
+            "GET",
+            f"{tvmaze.base_url}/shows/38390",
         )
 
     @patch("app.providers.tvmaze.services.api_request")
@@ -52,7 +54,8 @@ class TVMazeProviderTests(TestCase):
     @patch("app.providers.tvmaze.services.api_request")
     def test_external_ids_returns_none_on_provider_error(self, mock_api_request):
         mock_api_request.side_effect = services.ProviderAPIError(
-            "tvmaze", RuntimeError("not found"),
+            "tvmaze",
+            RuntimeError("not found"),
         )
 
         self.assertIsNone(tvmaze.external_ids("does-not-exist"))

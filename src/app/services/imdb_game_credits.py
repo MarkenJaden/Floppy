@@ -105,7 +105,9 @@ def resolve_game_imdb_ids() -> int:
     # hundreds of thousands of video games and a library has at most a few
     # thousand, so indexing everything kept a second whole-dataset object graph
     # alive in this worker for no benefit.
-    wanted_keys = {key for key in (_title_key(item.title) for item in candidates) if key}
+    wanted_keys = {
+        key for key in (_title_key(item.title) for item in candidates) if key
+    }
     by_title_key: dict[str, list[tuple[str, int | None]]] = {}
     for tconst, (title, year) in title_index.items():
         key = _title_key(title)
@@ -280,7 +282,9 @@ def _record_profile_backfill_complete(person: Person) -> None:
 
 def _record_profile_backfill_transient_failure(person: Person) -> None:
     """Keep a provider-side failure retryable on an exponential schedule."""
-    person.profile_backfill_fail_count = min(person.profile_backfill_fail_count + 1, 9999)
+    person.profile_backfill_fail_count = min(
+        person.profile_backfill_fail_count + 1, 9999
+    )
     person.profile_backfill_next_retry_at = timezone.now() + timedelta(
         seconds=_backfill_delay_seconds(person.profile_backfill_fail_count),
     )
@@ -429,7 +433,9 @@ def backfill_missing_game_studios() -> int:
                 item.media_id,
                 exc,
             )
-            _record_backfill_failure(item, MetadataBackfillField.STUDIOS.value, str(exc))
+            _record_backfill_failure(
+                item, MetadataBackfillField.STUDIOS.value, str(exc)
+            )
             continue
 
         studios_full = []

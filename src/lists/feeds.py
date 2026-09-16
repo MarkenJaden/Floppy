@@ -113,8 +113,7 @@ class PublicListFeed(Feed):
         library_media_type = media_item.library_media_type or media_item.media_type
         parent_library_media_type = (
             MediaTypes.TV.value
-            if library_media_type
-            in {MediaTypes.SEASON.value, MediaTypes.EPISODE.value}
+            if library_media_type in {MediaTypes.SEASON.value, MediaTypes.EPISODE.value}
             else library_media_type
         )
         show = min(
@@ -335,20 +334,28 @@ def list_json(request, list_reference):
 
     if arr_type == "radarr":
         # Filter for TMDB movies
-        items = CustomListItem.objects.filter(
-            custom_list=custom_list,
-            item__source=Sources.TMDB.value,
-            item__media_type=MediaTypes.MOVIE.value,
-        ).select_related("item").order_by("date_added", "pk")
+        items = (
+            CustomListItem.objects.filter(
+                custom_list=custom_list,
+                item__source=Sources.TMDB.value,
+                item__media_type=MediaTypes.MOVIE.value,
+            )
+            .select_related("item")
+            .order_by("date_added", "pk")
+        )
 
         json_data = [{"id": int(item.item.media_id)} for item in items]
     else:  # sonarr
         # Filter for TMDB TV shows
-        items = CustomListItem.objects.filter(
-            custom_list=custom_list,
-            item__source=Sources.TMDB.value,
-            item__media_type=MediaTypes.TV.value,
-        ).select_related("item").order_by("date_added", "pk")
+        items = (
+            CustomListItem.objects.filter(
+                custom_list=custom_list,
+                item__source=Sources.TMDB.value,
+                item__media_type=MediaTypes.TV.value,
+            )
+            .select_related("item")
+            .order_by("date_added", "pk")
+        )
 
         json_data = []
         for list_item in items:

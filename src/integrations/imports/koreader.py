@@ -219,7 +219,9 @@ class KoreaderImporter:
         self._library_items = self._build_library_index()
         links_by_hash = {
             link.document_hash: link
-            for link in KoreaderDocumentLink.objects.filter(user=self.user).select_related(
+            for link in KoreaderDocumentLink.objects.filter(
+                user=self.user
+            ).select_related(
                 "item",
             )
         }
@@ -273,7 +275,9 @@ class KoreaderImporter:
             if percentage is None or percentage <= 0:
                 continue
 
-            if document_hash not in links_by_hash and not self._has_match_metadata(entry):
+            if document_hash not in links_by_hash and not self._has_match_metadata(
+                entry
+            ):
                 self.warnings.append(
                     f"Skipped unlinked document {document_hash[:8]}… "
                     "(link it on the book track modal)",
@@ -300,7 +304,9 @@ class KoreaderImporter:
             imported_counts["failed"] > 0
             and imported_counts["created"] + imported_counts["updated"] == 0
         ):
-            message = "\n".join(dict.fromkeys(self.warnings)) or "KOReader import failed"
+            message = (
+                "\n".join(dict.fromkeys(self.warnings)) or "KOReader import failed"
+            )
             raise MediaImportError(message)
 
         self.account.last_sync_at = timezone.now()
@@ -366,9 +372,13 @@ class KoreaderImporter:
         authors_raw = entry.get("authors")
         authors: list[str] = []
         if isinstance(authors_raw, str) and authors_raw.strip():
-            authors = [part.strip() for part in re.split(r"[,;&]", authors_raw) if part.strip()]
+            authors = [
+                part.strip() for part in re.split(r"[,;&]", authors_raw) if part.strip()
+            ]
         elif isinstance(authors_raw, list):
-            authors = [str(value).strip() for value in authors_raw if str(value).strip()]
+            authors = [
+                str(value).strip() for value in authors_raw if str(value).strip()
+            ]
 
         if not title:
             filename = str(entry.get("filename") or "").strip()
@@ -385,11 +395,17 @@ class KoreaderImporter:
             return right.strip() or base, [left.strip()] if left.strip() else []
         return base, []
 
-    def _upsert_book(self, entry: dict[str, Any], document_hash: str, percentage: float):
-        link = KoreaderDocumentLink.objects.filter(
-            user=self.user,
-            document_hash=document_hash,
-        ).select_related("item").first()
+    def _upsert_book(
+        self, entry: dict[str, Any], document_hash: str, percentage: float
+    ):
+        link = (
+            KoreaderDocumentLink.objects.filter(
+                user=self.user,
+                document_hash=document_hash,
+            )
+            .select_related("item")
+            .first()
+        )
 
         if link:
             item = link.item
@@ -795,12 +811,18 @@ class KoreaderImporter:
         return re.sub(r"\s+", " ", normalized).strip()
 
     def _extract_provider_authors(self, provider_metadata):
-        details = provider_metadata.get("details", {}) if isinstance(provider_metadata, dict) else {}
+        details = (
+            provider_metadata.get("details", {})
+            if isinstance(provider_metadata, dict)
+            else {}
+        )
         if not isinstance(details, dict):
             details = {}
         raw_authors = details.get("authors") or details.get("author") or []
         if isinstance(raw_authors, str):
-            raw_authors = [part.strip() for part in raw_authors.split(",") if part.strip()]
+            raw_authors = [
+                part.strip() for part in raw_authors.split(",") if part.strip()
+            ]
         elif not isinstance(raw_authors, list):
             raw_authors = [raw_authors] if raw_authors else []
 

@@ -4,9 +4,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 
-@extend_schema_field(
-    {"oneOf": [{"type": "string"}, {"type": "integer"}]}
-)
+@extend_schema_field({"oneOf": [{"type": "string"}, {"type": "integer"}]})
 class MediaIdField(serializers.Field):
     """Provider media identifiers are strings or integers on the wire."""
 

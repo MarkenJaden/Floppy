@@ -266,8 +266,7 @@ class EpisodeScoreTests(FloppyApiTestCase):
             "api.views.services.get_media_metadata",
             return_value={
                 "episodes": [
-                    {"episode_number": episode_number}
-                    for episode_number in (1, 2, 3)
+                    {"episode_number": episode_number} for episode_number in (1, 2, 3)
                 ],
             },
         )

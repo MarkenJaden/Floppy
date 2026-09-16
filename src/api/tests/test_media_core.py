@@ -1185,7 +1185,11 @@ class MediaCoreTests(FloppyApiTestCase):
         untracked_response = self.call_api(
             "get",
             "api_media_detail",
-            args=(MediaTypes.PODCAST.value, Sources.POCKETCASTS.value, episode.episode_uuid),
+            args=(
+                MediaTypes.PODCAST.value,
+                Sources.POCKETCASTS.value,
+                episode.episode_uuid,
+            ),
             headers=self.auth_headers,
         )
 
@@ -1216,7 +1220,11 @@ class MediaCoreTests(FloppyApiTestCase):
         tracked_response = self.call_api(
             "get",
             "api_media_detail",
-            args=(MediaTypes.PODCAST.value, Sources.POCKETCASTS.value, episode.episode_uuid),
+            args=(
+                MediaTypes.PODCAST.value,
+                Sources.POCKETCASTS.value,
+                episode.episode_uuid,
+            ),
             headers=self.auth_headers,
         )
 
@@ -1227,14 +1235,20 @@ class MediaCoreTests(FloppyApiTestCase):
         self.assertTrue(tracked_payload["tracked"])
 
     @patch("api.views.services.get_media_metadata")
-    def test_media_detail_get_unresolvable_podcast_returns_not_found(self, mock_metadata):
+    def test_media_detail_get_unresolvable_podcast_returns_not_found(
+        self, mock_metadata
+    ):
         """An unknown podcast episode should return 404 instead of an empty 200."""
         mock_metadata.side_effect = resolve_media_metadata
 
         response = self.call_api(
             "get",
             "api_media_detail",
-            args=(MediaTypes.PODCAST.value, Sources.POCKETCASTS.value, "missing-episode"),
+            args=(
+                MediaTypes.PODCAST.value,
+                Sources.POCKETCASTS.value,
+                "missing-episode",
+            ),
             headers=self.auth_headers,
         )
 
@@ -1299,7 +1313,11 @@ class MediaCoreTests(FloppyApiTestCase):
         response = self.call_api(
             "get",
             "api_media_detail",
-            args=(MediaTypes.MUSIC.value, Sources.MUSICBRAINZ.value, "valid-looking-id"),
+            args=(
+                MediaTypes.MUSIC.value,
+                Sources.MUSICBRAINZ.value,
+                "valid-looking-id",
+            ),
             headers=self.auth_headers,
         )
 
@@ -1352,7 +1370,9 @@ class MediaCoreTests(FloppyApiTestCase):
             ).exists(),
         )
         payload = response.json()
-        self.assertEqual(payload["details"]["provider_game_lengths"]["state"], "pending")
+        self.assertEqual(
+            payload["details"]["provider_game_lengths"]["state"], "pending"
+        )
 
     @patch("api.views.services.get_media_metadata")
     def test_media_detail_get_game_ready_state_strips_raw_provider_payload(

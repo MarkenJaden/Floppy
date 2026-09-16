@@ -176,8 +176,7 @@ def get_catalog_spec(stremio_type, catalog_id):
         (
             spec
             for spec in CATALOG_SPECS
-            if (spec.stremio_type, spec.catalog_id)
-            == (stremio_type, catalog_id)
+            if (spec.stremio_type, spec.catalog_id) == (stremio_type, catalog_id)
         ),
         None,
     )
@@ -224,9 +223,7 @@ def select_source_list(user, spec):
     """
     owned_lists = CustomList.objects.filter(owner=user)
     source_list = (
-        owned_lists.filter(name__iexact=spec.preferred_list_name)
-        .order_by("id")
-        .first()
+        owned_lists.filter(name__iexact=spec.preferred_list_name).order_by("id").first()
     )
     if source_list is not None and _list_feeds_catalog(source_list, spec):
         return source_list
@@ -528,4 +525,3 @@ def project_meta(user, stremio_type, imdb_id):
         return meta
 
     return None
-

@@ -36,9 +36,7 @@ class AudiobookshelfScheduleTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(
-            AudiobookshelfAccount.objects.filter(user=self.user).exists()
-        )
+        self.assertTrue(AudiobookshelfAccount.objects.filter(user=self.user).exists())
         mock_import.assert_called_once()
 
         task = PeriodicTask.objects.get(
@@ -120,9 +118,7 @@ class AudiobookshelfScheduleTests(TestCase):
         response = self.client.post(reverse("audiobookshelf_disconnect"))
 
         self.assertEqual(response.status_code, 302)
-        self.assertFalse(
-            AudiobookshelfAccount.objects.filter(user=self.user).exists()
-        )
+        self.assertFalse(AudiobookshelfAccount.objects.filter(user=self.user).exists())
         self.assertFalse(
             PeriodicTask.objects.filter(
                 task="Import from Audiobookshelf (Recurring)",
@@ -151,6 +147,7 @@ class AudiobookshelfCoverProxyTests(TestCase):
 
     def _mock_upstream(self, *, status_code=200, content=b"", headers=None):
         """Build a requests.Response-shaped mock for the streaming proxy path."""
+
         def iter_content(chunk_size):
             return iter(
                 content[i : i + chunk_size] for i in range(0, len(content), chunk_size)
@@ -390,4 +387,6 @@ class AudiobookshelfCoverProxyUrlCeleryTests(TestCase):
     @override_settings(ROOT_URLCONF="config.celery_urls", FORCE_SCRIPT_NAME="/floppy")
     def test_applies_base_url_subpath_when_no_request_set_it(self):
         url = audiobookshelf_cover.build_cover_proxy_url(1, "item-1")
-        self.assertTrue(url.startswith("/floppy" + audiobookshelf_cover.PROXY_PATH_PREFIX))
+        self.assertTrue(
+            url.startswith("/floppy" + audiobookshelf_cover.PROXY_PATH_PREFIX)
+        )

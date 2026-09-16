@@ -95,9 +95,7 @@ class OnboardingWizardTests(TestCase):
         second_response = self.client.post(
             reverse("onboarding_services", args=[1]), {"sources": ["plex"]}
         )
-        self.assertRedirects(
-            second_response, reverse("onboarding_services_summary")
-        )
+        self.assertRedirects(second_response, reverse("onboarding_services_summary"))
         self.user.refresh_from_db()
         self.assertEqual(self.user.onboarding_selected_sources, ["plex"])
         self.assertIsNotNone(first_response)  # keeps the first response referenced
@@ -106,9 +104,7 @@ class OnboardingWizardTests(TestCase):
         """Bailing out from the summary step still marks onboarding complete."""
         self.user.onboarding_selected_sources = ["plex"]
         self.user.onboarding_step = "services_summary"
-        self.user.save(
-            update_fields=["onboarding_selected_sources", "onboarding_step"]
-        )
+        self.user.save(update_fields=["onboarding_selected_sources", "onboarding_step"])
 
         response = self.client.post(
             reverse("onboarding_services_summary"), {"action": "later"}
@@ -205,9 +201,7 @@ class OnboardingWizardTests(TestCase):
 
     def test_integrations_open_query_param_deep_links_a_section(self):
         """The wizard's integration step opens the right section on Settings > Integrations."""
-        response = self.client.get(
-            reverse("integrations") + "?open=plex&onboarding=1"
-        )
+        response = self.client.get(reverse("integrations") + "?open=plex&onboarding=1")
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "activeIntegration = deepLinkTag")
@@ -266,9 +260,7 @@ class OnboardingWizardTests(TestCase):
 
     def test_import_data_open_query_param_deep_links_a_modal(self):
         """The wizard's connect step opens the right modal on the existing import page."""
-        response = self.client.get(
-            reverse("import_data") + "?open=plex&onboarding=1"
-        )
+        response = self.client.get(reverse("import_data") + "?open=plex&onboarding=1")
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "openModal(deepLinkSlug)")

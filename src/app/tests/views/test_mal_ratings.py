@@ -14,7 +14,9 @@ class MalRatingDetailViewTests(TestCase):
         self.client.login(**credentials)
 
     @patch("app.providers.services.get_media_metadata")
-    def test_grouped_anime_renders_rating_and_link_with_tvdb_metadata(self, mock_metadata):
+    def test_grouped_anime_renders_rating_and_link_with_tvdb_metadata(
+        self, mock_metadata
+    ):
         Item.objects.create(
             media_id="tv-1",
             source=Sources.TVDB.value,

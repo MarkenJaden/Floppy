@@ -242,16 +242,20 @@ def _get_stored_plex_account(user):
 
 def _get_import_data_user(user):
     """Load the Import Data page's account relations in a single query."""
-    return user._meta.model.objects.select_related(
-        "plex_account",
-        "audiobookshelf_account",
-        "pocketcasts_account",
-        "lastfm_account",
-        "koito_account",
-    ).prefetch_related(
-        "radarr_instances",
-        "sonarr_instances",
-    ).get(pk=user.pk)
+    return (
+        user._meta.model.objects.select_related(
+            "plex_account",
+            "audiobookshelf_account",
+            "pocketcasts_account",
+            "lastfm_account",
+            "koito_account",
+        )
+        .prefetch_related(
+            "radarr_instances",
+            "sonarr_instances",
+        )
+        .get(pk=user.pk)
+    )
 
 
 def _refresh_cached_plex_sections(
@@ -942,9 +946,7 @@ def appearance(request):
         return redirect("appearance")
 
     saved_palette = (
-        request.user.custom_theme
-        if isinstance(request.user.custom_theme, dict)
-        else {}
+        request.user.custom_theme if isinstance(request.user.custom_theme, dict) else {}
     )
     palette = {
         key: saved_palette.get(key, definition["default"])
@@ -1084,11 +1086,7 @@ def preferences(request):
             request.user.date_format = date_format
             fields_to_update.append("date_format")
 
-        if (
-            theme
-            and theme in ThemeChoices.values
-            and request.user.theme != theme
-        ):
+        if theme and theme in ThemeChoices.values and request.user.theme != theme:
             request.user.theme = theme
             fields_to_update.append("theme")
 
@@ -1274,9 +1272,7 @@ def preferences(request):
             fields_to_update.append("watch_provider_region")
 
         metadata_language = request.POST.get("metadata_language", "")
-        if metadata_language in {
-            choice[0] for choice in metadata_language_choices
-        }:
+        if metadata_language in {choice[0] for choice in metadata_language_choices}:
             if request.user.metadata_language != metadata_language:
                 request.user.metadata_language = metadata_language
                 fields_to_update.append("metadata_language")
@@ -1572,9 +1568,7 @@ def import_data(request):
             enabled=True,
         ).first()
         if audiobookshelf_periodic_task and audiobookshelf_periodic_task.interval:
-            audiobookshelf_poll_interval = (
-                audiobookshelf_periodic_task.interval.every
-            )
+            audiobookshelf_poll_interval = audiobookshelf_periodic_task.interval.every
 
     # Get Last.fm periodic task status
     lastfm_periodic_task = None
@@ -2557,8 +2551,9 @@ def integration_token_context(user):
     """Return the named-token context for the integrations page."""
     return {
         "integration_tokens": list(
-            IntegrationToken.objects.filter(user=user, revoked_at__isnull=True)
-            .order_by("-created_at"),
+            IntegrationToken.objects.filter(
+                user=user, revoked_at__isnull=True
+            ).order_by("-created_at"),
         ),
         "integration_scope_choices": [
             {
@@ -2786,9 +2781,7 @@ def update_plex_webhook_share(request):
         messages.error(request, "Enter one or more Plex usernames for this share.")
         return redirect("integrations")
 
-    duplicate_usernames = {
-        username.casefold() for username in plex_usernames
-    }
+    duplicate_usernames = {username.casefold() for username in plex_usernames}
     existing_shares = (
         PlexWebhookShare.objects.filter(owner=user)
         .exclude(pk=share.pk or None)

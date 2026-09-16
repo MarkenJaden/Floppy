@@ -127,6 +127,7 @@ def post_request(worker, req, environ, resp):  # gunicorn's hook signature
     if resident is not None and resident > max_worker_memory_bytes:
         worker.alive = False
 
+
 print(  # noqa: T201  # gunicorn has no logger configured this early
     f"[gunicorn] {PROFILE.describe()} -> workers={workers} threads={threads} "
     f"max_requests={max_requests} timeout={timeout} "

@@ -670,9 +670,7 @@ class EventManagerCrossBucketAnimeDedupTests(TestCase):
 
         with mock.patch(
             "events.models.resolve_provider_series_id",
-            side_effect=lambda mal_id, provider: (
-                "1396" if provider == "tmdb" else None
-            ),
+            side_effect=lambda mal_id, provider: "1396" if provider == "tmdb" else None,
         ):
             events = Event.objects.get_user_events(self.user, when.date(), when.date())
 

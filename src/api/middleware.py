@@ -67,10 +67,11 @@ def _is_media_collection_post(request, path):
     if getattr(request, "method", "").upper() != "POST":
         return False
     parts = path.strip("/").split("/")
-    return (
-        len(parts) == _MEDIA_COLLECTION_PATH_PART_COUNT
-        and parts[:3] == ["api", "v1", "media"]
-    )
+    return len(parts) == _MEDIA_COLLECTION_PATH_PART_COUNT and parts[:3] == [
+        "api",
+        "v1",
+        "media",
+    ]
 
 
 class ApiJsonErrorMiddleware:

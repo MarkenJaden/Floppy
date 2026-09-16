@@ -68,7 +68,9 @@ class ManifestValidationTests(TestCase):
 
     def test_an_addon_with_no_usable_resource_is_refused(self):
         """Registering something Floppy can never call helps nobody."""
-        self.assert_refused({**VALID, "resources": ["nonsense"]}, "manifest_no_usable_resource")
+        self.assert_refused(
+            {**VALID, "resources": ["nonsense"]}, "manifest_no_usable_resource"
+        )
 
     def test_unsupported_resources_are_dropped_not_fatal(self):
         """An add-on that also offers streams is still usable for catalogs."""
@@ -94,7 +96,9 @@ class ManifestValidationTests(TestCase):
     def test_one_malformed_catalog_does_not_condemn_the_addon(self):
         """A partly broken catalog list still yields the usable entries."""
         parsed = parse_manifest(
-            json.dumps({**VALID, "catalogs": [{"type": "movie"}, VALID["catalogs"][0]]}),
+            json.dumps(
+                {**VALID, "catalogs": [{"type": "movie"}, VALID["catalogs"][0]]}
+            ),
         )
 
         self.assertEqual(len(parsed["catalogs"]), 1)
@@ -125,26 +129,34 @@ class RegistrationTests(TestCase):
     def test_registering_stores_the_validated_manifest(self):
         """The stored manifest is the projection, not the raw document."""
         with self.fetch_returning({**VALID, "script": "evil()"}):
-            addon = addons.register_addon(self.user, "https://example.com/manifest.json")
+            addon = addons.register_addon(
+                self.user, "https://example.com/manifest.json"
+            )
 
         self.assertEqual(addon.addon_id, "org.example.addon")
         self.assertNotIn("script", addon.manifest)
 
     def test_an_unsafe_url_is_not_stored(self):
         """A registry full of unreachable entries helps nobody."""
-        with patch.object(
-            addons,
-            "safe_fetch",
-            side_effect=UnsafeUrlError("forbidden_address", "no"),
-        ), self.assertRaises(UnsafeUrlError):
+        with (
+            patch.object(
+                addons,
+                "safe_fetch",
+                side_effect=UnsafeUrlError("forbidden_address", "no"),
+            ),
+            self.assertRaises(UnsafeUrlError),
+        ):
             addons.register_addon(self.user, "https://evil.example/manifest.json")
 
         self.assertFalse(RemoteAddon.objects.exists())
 
     def test_an_invalid_manifest_is_not_stored(self):
         """Validation happens before anything is written."""
-        with self.fetch_returning({"nope": True}), self.assertRaises(
-            InvalidManifestError,
+        with (
+            self.fetch_returning({"nope": True}),
+            self.assertRaises(
+                InvalidManifestError,
+            ),
         ):
             addons.register_addon(self.user, "https://example.com/manifest.json")
 

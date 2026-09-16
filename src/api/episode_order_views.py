@@ -18,7 +18,9 @@ class EpisodeOrderView(APIView):
         """Return currently available provider orders for one tracked show."""
         tv = owned_tv(request.user, tv_id)
         orders, errors = available_orders(tv, request.user)
-        return Response({"active": tv.active_episode_order_id, "orders": orders, "errors": errors})
+        return Response(
+            {"active": tv.active_episode_order_id, "orders": orders, "errors": errors}
+        )
 
     @extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
     def post(self, request, tv_id):
@@ -28,11 +30,16 @@ class EpisodeOrderView(APIView):
         try:
             if action == "preview":
                 order = selected_order(
-                    tv, request.user, request.data.get("provider"), request.data.get("key"),
+                    tv,
+                    request.user,
+                    request.data.get("provider"),
+                    request.data.get("key"),
                 )
                 preview = episode_ordering.preview_change(tv, order)
                 return Response({"order_id": order.pk, **preview})
-            order = EpisodeOrder.objects.get(pk=request.data.get("order_id"), show=tv.item)
+            order = EpisodeOrder.objects.get(
+                pk=request.data.get("order_id"), show=tv.item
+            )
             journal = episode_ordering.apply_change(
                 tv,
                 order,
@@ -41,6 +48,8 @@ class EpisodeOrderView(APIView):
             )
             return Response({"change_id": journal.pk, "active_order": order.pk})
         except EpisodeOrder.DoesNotExist:
-            return Response({"detail": "Episode order not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"detail": "Episode order not found."}, status=status.HTTP_404_NOT_FOUND
+            )
         except (ValueError, TypeError, KeyError) as error:
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)

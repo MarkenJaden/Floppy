@@ -283,7 +283,9 @@ class SessionHistoryModalTests(TestCase):
 
         artist = Artist.objects.create(name="Session Artist")
         album = Album.objects.create(title="Session Album", artist=artist)
-        track = Track.objects.create(album=album, title="Session Track", duration_ms=180000)
+        track = Track.objects.create(
+            album=album, title="Session Track", duration_ms=180000
+        )
         music_item = self._create_item(MediaTypes.MUSIC.value, "music-track", "Track")
         Music.objects.create(
             item=music_item,
@@ -423,7 +425,12 @@ class SessionHistoryModalTests(TestCase):
         )
         local_today = timezone.localtime(self.base_time).date()
         monday = local_today - timedelta(days=local_today.weekday() + 14)
-        active_dates = (monday, monday + timedelta(days=1), monday + timedelta(days=3), monday + timedelta(days=7))
+        active_dates = (
+            monday,
+            monday + timedelta(days=1),
+            monday + timedelta(days=3),
+            monday + timedelta(days=7),
+        )
         for active_date in active_dates:
             days_ago = (local_today - active_date).days
             Movie.objects.create(
@@ -447,7 +454,10 @@ class SessionHistoryModalTests(TestCase):
             ),
         )
 
-        stats = {stat["label"]: stat["value"] for stat in response.context["session_history_stats"]}
+        stats = {
+            stat["label"]: stat["value"]
+            for stat in response.context["session_history_stats"]
+        }
         self.assertEqual(stats["Active days"], "4")
         self.assertEqual(stats["Activity entries"], "4")
         self.assertEqual(stats["Tracked time"], "2h 48min")
@@ -484,7 +494,10 @@ class SessionHistoryModalTests(TestCase):
             ),
         )
 
-        stats = {stat["label"]: stat["value"] for stat in response.context["session_history_stats"]}
+        stats = {
+            stat["label"]: stat["value"]
+            for stat in response.context["session_history_stats"]
+        }
         self.assertEqual(stats["Active days"], "1")
         self.assertEqual(stats["Activity entries"], "2")
         self.assertEqual(stats["Tracked time"], "0min")
@@ -511,7 +524,9 @@ class SessionHistoryModalTests(TestCase):
         self.assertContains(response, "Unknown date", html=False)
         self.assertIsNone(response.context["history_days"][-1]["date"])
 
-        other_item = self._create_item(MediaTypes.BOOK.value, "other-book", "Other Book")
+        other_item = self._create_item(
+            MediaTypes.BOOK.value, "other-book", "Other Book"
+        )
         other_user = get_user_model().objects.create_user(
             username="session-history-other",
             password="12345",
@@ -954,9 +969,7 @@ class HistoryMonthViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         day = next(
-            day
-            for day in response.context["history_days"]
-            if day["day_key"] == day_key
+            day for day in response.context["history_days"] if day["day_key"] == day_key
         )
         self.assertEqual(
             day["entry_count"],
@@ -1017,9 +1030,7 @@ class HistoryMonthViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         day = next(
-            day
-            for day in response.context["history_days"]
-            if day["day_key"] == day_key
+            day for day in response.context["history_days"] if day["day_key"] == day_key
         )
         self.assertEqual(day["entry_count"], 5)
         self.assertEqual(len(day["entries"]), 5)
@@ -1477,6 +1488,7 @@ class HistoryViewPersonFilterTests(TestCase):
             related_season=other_season,
             end_date=timezone.now(),
         )
+
     @staticmethod
     def _credit(person, role="Lead", sort_order=0):
         return {
@@ -2265,6 +2277,7 @@ class HistoryViewAuthorFilterTests(TestCase):
             start_date=now,
             end_date=now,
         )
+
     def test_history_person_filter_includes_credited_reading_entries(self):
         response = self.client.get(
             reverse("history") + "?person_source=openlibrary&person_id=OL1A",

@@ -67,7 +67,6 @@ REASON_INVALID_REDIRECT = "invalid_redirect"
 REASON_TOO_MANY_REDIRECTS = "too_many_redirects"
 
 
-
 class UnsafeUrlError(Exception):
     """Raised when a URL may not be fetched, with a stable reason code."""
 

@@ -57,7 +57,10 @@ class Item(CalendarTriggerMixin, models.Model):
     season_number = models.PositiveIntegerField(null=True, blank=True)
     episode_number = models.PositiveIntegerField(null=True, blank=True)
     episode_order = models.ForeignKey(
-        "app.EpisodeOrder", null=True, blank=True, on_delete=models.PROTECT,
+        "app.EpisodeOrder",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
         related_name="items",
     )
     provider_episode_id = models.CharField(max_length=255, blank=True, default="")

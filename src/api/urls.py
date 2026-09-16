@@ -4,7 +4,11 @@ from . import views
 from .episode_order_views import EpisodeOrderView
 
 urlpatterns = [
-    re_path(r"^tv/(?P<tv_id>\d+)/episode-ordering/?$", EpisodeOrderView.as_view(), name="api_episode_ordering"),
+    re_path(
+        r"^tv/(?P<tv_id>\d+)/episode-ordering/?$",
+        EpisodeOrderView.as_view(),
+        name="api_episode_ordering",
+    ),
     re_path(r"^calendar/?$", views.CalendarView.as_view(), name="api_calendar"),
     re_path(
         r"^calendar/update/?$",

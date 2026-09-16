@@ -911,7 +911,9 @@ def get_tvdb_episode_image_map(tvdb_id, season_number, *, tmdb_media_id=None):
         # and already handled below, not worth a warning. Other failures
         # (auth, 5xx, network) still warrant one.
         log_method = (
-            logger.info if error.status_code == requests.codes.not_found else logger.warning
+            logger.info
+            if error.status_code == requests.codes.not_found
+            else logger.warning
         )
         log_method(
             "Skipping TMDB episode art fallback due to TVDB API error: %s",
@@ -2113,8 +2115,7 @@ def search_person_profile(name, language=None):
         return None
 
     cache_key = (
-        f"{Sources.TMDB.value}_person_search_profile_{name}"
-        f"{_language_suffix(language)}"
+        f"{Sources.TMDB.value}_person_search_profile_{name}{_language_suffix(language)}"
     )
     cached = cache.get(cache_key)
     if cached is not None:

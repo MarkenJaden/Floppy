@@ -154,17 +154,14 @@ class CustomListModelTest(TestCase):
         """
         first_item, _second_item = self._add_two_items()
 
-        prefetched_list = (
-            CustomList.objects.prefetch_related(
-                Prefetch(
-                    "customlistitem_set",
-                    queryset=CustomListItem.objects.select_related(
-                        "item",
-                    ).order_by("date_added"),
-                ),
-            )
-            .get(id=self.custom_list.id)
-        )
+        prefetched_list = CustomList.objects.prefetch_related(
+            Prefetch(
+                "customlistitem_set",
+                queryset=CustomListItem.objects.select_related(
+                    "item",
+                ).order_by("date_added"),
+            ),
+        ).get(id=self.custom_list.id)
 
         self.assertEqual(prefetched_list.image, first_item.image)
 
@@ -1556,7 +1553,7 @@ class SmartRuleGranularMediaTypesTest(TestCase):
 
 
 class SmartRuleRelativeDateWindowTest(TestCase):
-    """"In the last N units" stays relative and resolves at evaluation time."""
+    """ "In the last N units" stays relative and resolves at evaluation time."""
 
     def setUp(self):
         """Create a user with movies completed at known dates."""

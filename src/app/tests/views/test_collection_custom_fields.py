@@ -445,9 +445,7 @@ class CollectionModalCustomFieldsTest(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, f'name="custom_field_{self.field.id}"')
-        self.assertNotContains(
-            response, f'name="custom_field_{self.hidden_field.id}"'
-        )
+        self.assertNotContains(response, f'name="custom_field_{self.hidden_field.id}"')
 
     def test_modal_bootstraps_schema_json(self):
         """The modal response bootstraps the save url and current schema."""
@@ -568,9 +566,7 @@ class CollectionEntrySeasonCustomFieldsTest(TestCase):
         )
         self.assertEqual(entries.count(), 2)
         for entry in entries:
-            self.assertEqual(
-                entry.custom_field_values.get(str(self.field.id)), "Mint"
-            )
+            self.assertEqual(entry.custom_field_values.get(str(self.field.id)), "Mint")
 
     def test_collection_add_season_still_reports_created_counts(self):
         """The season/show add response still reports how many entries were made."""

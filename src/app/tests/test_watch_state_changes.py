@@ -134,7 +134,9 @@ class ChangeLogTests(TestCase):
 
         changes = changes_since(self.user, 0)
         self.assertEqual([change.sequence for change in changes], [1, 2, 3])
-        self.assertEqual([change.sequence for change in changes_since(self.user, 2)], [3])
+        self.assertEqual(
+            [change.sequence for change in changes_since(self.user, 2)], [3]
+        )
 
 
 class LocalMovementTests(TestCase):

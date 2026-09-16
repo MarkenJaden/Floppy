@@ -72,9 +72,7 @@ def plex_identity(metadata, *, show=False):
     guids = metadata.get("Guid") or metadata.get("guid") or []
     if isinstance(guids, (str, dict)):
         guids = [guids]
-    guid_values = [
-        guid.get("id") if isinstance(guid, dict) else guid for guid in guids
-    ]
+    guid_values = [guid.get("id") if isinstance(guid, dict) else guid for guid in guids]
     guid_values = [value for value in guid_values if isinstance(value, str)]
 
     for value in guid_values:
@@ -139,26 +137,34 @@ def lookup_reference(
     """Return the saved decision for an exact source identity."""
     if not external_identity:
         return None
-    reference = _reference_queryset(
-        user,
-        integration,
-        source_account,
-        external_namespace,
-        external_identity,
-        media_type,
-    ).select_related("matched_item", "corrected_item").first()
-    if reference:
-        return reference
-
-    if include_show_for_episode and media_type == MediaTypes.EPISODE.value:
-        return _reference_queryset(
+    reference = (
+        _reference_queryset(
             user,
             integration,
             source_account,
             external_namespace,
             external_identity,
-            MediaTypes.TV.value,
-        ).select_related("matched_item", "corrected_item").first()
+            media_type,
+        )
+        .select_related("matched_item", "corrected_item")
+        .first()
+    )
+    if reference:
+        return reference
+
+    if include_show_for_episode and media_type == MediaTypes.EPISODE.value:
+        return (
+            _reference_queryset(
+                user,
+                integration,
+                source_account,
+                external_namespace,
+                external_identity,
+                MediaTypes.TV.value,
+            )
+            .select_related("matched_item", "corrected_item")
+            .first()
+        )
     return None
 
 
@@ -192,7 +198,10 @@ def lookup_plex_reference(user, account, metadata, media_type, *, payload=None):
 
 def reference_target(reference):
     """Return a valid corrected/current target, if the decision has one."""
-    if not reference or reference.review_status == ExternalReferenceReviewStatus.IGNORED:
+    if (
+        not reference
+        or reference.review_status == ExternalReferenceReviewStatus.IGNORED
+    ):
         return None
     target = reference.corrected_item or reference.matched_item
     if not target or target.source != Sources.TMDB.value:
@@ -224,9 +233,7 @@ def map_episode_coordinates(reference, season_number, episode_number):
     if not reference:
         return season_number, episode_number
     mapping = (
-        reference
-        if isinstance(reference, dict)
-        else reference.episode_mapping or {}
+        reference if isinstance(reference, dict) else reference.episode_mapping or {}
     )
     value = mapping.get(f"{season_number}:{episode_number}")
     if value is None:
@@ -266,14 +273,16 @@ def save_observation(
         ),
     }
     with transaction.atomic():
-        reference, created = ExternalReference.objects.select_for_update().get_or_create(
-            user=user,
-            integration=integration,
-            source_account=source_account or "",
-            external_namespace=external_namespace,
-            external_identity=str(external_identity),
-            media_type=media_type,
-            defaults=defaults,
+        reference, created = (
+            ExternalReference.objects.select_for_update().get_or_create(
+                user=user,
+                integration=integration,
+                source_account=source_account or "",
+                external_namespace=external_namespace,
+                external_identity=str(external_identity),
+                media_type=media_type,
+                defaults=defaults,
+            )
         )
         if created:
             return reference
@@ -383,11 +392,21 @@ def preview_digest(source_item, destination_item, *, episode_mapping=None):
     # Counts and latest creation timestamps catch concurrent changes without
     # serializing the whole history into the browser.
     for label, item in (("source", source_item), ("destination", destination_item)):
-        payload[f"{label}_tv"] = list(
-            item.tv_set.values_list("pk", "status", "score", "progress", "end_date")
-        ) if hasattr(item, "tv_set") else []
-        payload[f"{label}_movie"] = list(
-            item.movie_set.values_list("pk", "status", "score", "progress", "end_date")
-        ) if hasattr(item, "movie_set") else []
+        payload[f"{label}_tv"] = (
+            list(
+                item.tv_set.values_list("pk", "status", "score", "progress", "end_date")
+            )
+            if hasattr(item, "tv_set")
+            else []
+        )
+        payload[f"{label}_movie"] = (
+            list(
+                item.movie_set.values_list(
+                    "pk", "status", "score", "progress", "end_date"
+                )
+            )
+            if hasattr(item, "movie_set")
+            else []
+        )
     encoded = json.dumps(payload, default=str, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()

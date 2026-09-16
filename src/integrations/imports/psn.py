@@ -61,8 +61,20 @@ STORE_SUFFIX_RE = re.compile(
 # ("FINAL FANTASY Ⅻ") and trademark symbols glued between words
 # ("Gran Turismo™SPORT", which must become "Gran Turismo SPORT", not
 # "Gran TurismoSPORT").
-ROMAN_NUMERALS = ("I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
-                  "XI", "XII")
+ROMAN_NUMERALS = (
+    "I",
+    "II",
+    "III",
+    "IV",
+    "V",
+    "VI",
+    "VII",
+    "VIII",
+    "IX",
+    "X",
+    "XI",
+    "XII",
+)
 ROMAN_NUMERAL_NORMALIZATIONS = str.maketrans(
     {chr(0x2160 + index): numeral for index, numeral in enumerate(ROMAN_NUMERALS)},
 )
@@ -347,8 +359,7 @@ class PSNImporter:
         aggregate["minutes"] += title["minutes"]
         last_played = title["last_played"]
         if last_played and (
-            aggregate["last_played"] is None
-            or last_played > aggregate["last_played"]
+            aggregate["last_played"] is None or last_played > aggregate["last_played"]
         ):
             aggregate["last_played"] = last_played
 

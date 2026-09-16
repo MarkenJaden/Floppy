@@ -157,8 +157,7 @@ def _sync_emit_changes_flag(user):
     goes means an abandoned connection stops costing a write per save.
     """
     should_emit = any(
-        binding.is_operational()
-        for binding in SyncBinding.objects.filter(user=user)
+        binding.is_operational() for binding in SyncBinding.objects.filter(user=user)
     )
     sequence, _created = WatchStateSequence.objects.get_or_create(user=user)
     if sequence.emit_changes != should_emit:
@@ -175,8 +174,4 @@ def operational_bindings(user, *, direction=None, capability=None):
     ]
     if direction is None and capability is None:
         return bindings
-    return [
-        binding
-        for binding in bindings
-        if binding.allows(direction, capability)
-    ]
+    return [binding for binding in bindings if binding.allows(direction, capability)]

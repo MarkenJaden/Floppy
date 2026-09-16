@@ -60,10 +60,7 @@ class PodcastShowAdapter:
             },
         )
         show_image = tracker.show.image or settings.IMG_NONE
-        if (
-            self.item.title != tracker.show.title
-            or self.item.image != show_image
-        ):
+        if self.item.title != tracker.show.title or self.item.image != show_image:
             self.item.title = tracker.show.title
             self.item.image = show_image
             self.item.save(update_fields=["title", "image"])
@@ -96,10 +93,7 @@ class MusicAlbumAdapter:
             },
         )
         album_image = tracker.album.image or settings.IMG_NONE
-        if (
-            self.item.title != tracker.album.title
-            or self.item.image != album_image
-        ):
+        if self.item.title != tracker.album.title or self.item.image != album_image:
             self.item.title = tracker.album.title
             self.item.image = album_image
             self.item.save(update_fields=["title", "image"])
@@ -223,11 +217,15 @@ def _media_search_all(request, query, page, layout):
                     )
                     for tracker in show_trackers:
                         adapter = PodcastShowAdapter(tracker)
-                        local_results.append({
-                            "item": adapter.item,
-                            "media": adapter,
-                            "matched_title": _matched_title(adapter.item, query, request.user),
-                        })
+                        local_results.append(
+                            {
+                                "item": adapter.item,
+                                "media": adapter,
+                                "matched_title": _matched_title(
+                                    adapter.item, query, request.user
+                                ),
+                            }
+                        )
                 elif mt == MediaTypes.MUSIC.value:
                     album_trackers = (
                         AlbumTracker.objects.filter(user=request.user)
@@ -241,11 +239,15 @@ def _media_search_all(request, query, page, layout):
                     )
                     for tracker in album_trackers:
                         adapter = MusicAlbumAdapter(tracker)
-                        local_results.append({
-                            "item": adapter.item,
-                            "media": adapter,
-                            "matched_title": _matched_title(adapter.item, query, request.user),
-                        })
+                        local_results.append(
+                            {
+                                "item": adapter.item,
+                                "media": adapter,
+                                "matched_title": _matched_title(
+                                    adapter.item, query, request.user
+                                ),
+                            }
+                        )
                 else:
                     local_queryset = BasicMedia.objects.get_media_list(
                         request.user,
@@ -263,7 +265,9 @@ def _media_search_all(request, query, page, layout):
                         local_media = [
                             media
                             for media in local_media
-                            if getattr(getattr(media, "item", None), "library_media_type", None)
+                            if getattr(
+                                getattr(media, "item", None), "library_media_type", None
+                            )
                             != MediaTypes.ANIME.value
                         ]
                     elif mt == MediaTypes.ANIME.value and include_anime_in_anime:
@@ -277,7 +281,9 @@ def _media_search_all(request, query, page, layout):
                                 search=query,
                                 direction="asc",
                             )
-                            if getattr(getattr(media, "item", None), "library_media_type", None)
+                            if getattr(
+                                getattr(media, "item", None), "library_media_type", None
+                            )
                             == MediaTypes.ANIME.value
                         ]
                         _mark_grouped_anime_route(grouped)
@@ -287,11 +293,15 @@ def _media_search_all(request, query, page, layout):
                     for media in local_media:
                         item = getattr(media, "item", None)
                         if item:
-                            local_results.append({
-                                "item": item,
-                                "media": media,
-                                "matched_title": _matched_title(item, query, request.user),
-                            })
+                            local_results.append(
+                                {
+                                    "item": item,
+                                    "media": media,
+                                    "matched_title": _matched_title(
+                                        item, query, request.user
+                                    ),
+                                }
+                            )
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("Local all-search failed: %s", exception_summary(exc))
 
@@ -403,19 +413,21 @@ def media_search_group(request):
             }
             for rel in data.get("releases", [])[:6]
         ]
-        res.extend([
-            {
-                "media_id": art.get("artist_id"),
-                "title": art.get("name"),
-                "media_type": MediaTypes.MUSIC.value,
-                "source": Sources.MUSICBRAINZ.value,
-                "image": art.get("image") or settings.IMG_NONE,
-                "artist_name": art.get("name"),
-                "disambiguation": art.get("disambiguation"),
-                "is_music_artist": True,
-            }
-            for art in data.get("artists", [])[:4]
-        ])
+        res.extend(
+            [
+                {
+                    "media_id": art.get("artist_id"),
+                    "title": art.get("name"),
+                    "media_type": MediaTypes.MUSIC.value,
+                    "source": Sources.MUSICBRAINZ.value,
+                    "image": art.get("image") or settings.IMG_NONE,
+                    "artist_name": art.get("name"),
+                    "disambiguation": art.get("disambiguation"),
+                    "is_music_artist": True,
+                }
+                for art in data.get("artists", [])[:4]
+            ]
+        )
         results = res
     else:
         raw_results = data.get("results", [])[:8]
@@ -426,9 +438,7 @@ def media_search_group(request):
                 section_name="search",
             )
             for r in results:
-                r["matched_title"] = _matched_title(
-                    r.get("item"), query, request.user
-                )
+                r["matched_title"] = _matched_title(r.get("item"), query, request.user)
         else:
             results = []
 
@@ -893,7 +903,10 @@ def search_suggestions(request):
     if (
         not request.user.is_authenticated
         or len(query) < MIN_SUGGESTION_QUERY_LENGTH
-        or (media_type != "all" and media_type not in {choice.value for choice in MediaTypes})
+        or (
+            media_type != "all"
+            and media_type not in {choice.value for choice in MediaTypes}
+        )
     ):
         return render(request, "app/components/search_suggestions.html")
 

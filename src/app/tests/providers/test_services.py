@@ -1055,7 +1055,9 @@ class ServicesTests(TestCase):
         )
 
         self.assertEqual(result, [{"title": "Google result"}])
-        mock_google_search.assert_called_once_with("9780123456789", 1, language=None, user=None)
+        mock_google_search.assert_called_once_with(
+            "9780123456789", 1, language=None, user=None
+        )
         mock_hardcover_search.assert_not_called()
         mock_isbn_search.assert_not_called()
 

@@ -186,9 +186,7 @@ DETAIL_LAYOUT_FAMILIES = {
                 ("details", "Details"),
                 ("collection", "Collection"),
             ),
-            "content": _zone(
-                "Main content", ("notes", "Notes"), ("tracks", "Tracks")
-            ),
+            "content": _zone("Main content", ("notes", "Notes"), ("tracks", "Tracks")),
         },
     },
     "music_artist": {

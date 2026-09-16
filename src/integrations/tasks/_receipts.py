@@ -40,8 +40,9 @@ def compact_integration_event_receipts(retention_days=None, batch_size=None):
 
     for _ in range(MAX_BATCHES_PER_RUN):
         expired_ids = list(
-            IntegrationEventReceipt.objects.filter(created_at__lt=cutoff)
-            .values_list("pk", flat=True)[:batch_size],
+            IntegrationEventReceipt.objects.filter(created_at__lt=cutoff).values_list(
+                "pk", flat=True
+            )[:batch_size],
         )
         if not expired_ids:
             break
