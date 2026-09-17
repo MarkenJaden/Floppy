@@ -5,6 +5,7 @@ import time
 from config.runtime_profile import (
     PROFILE,
     by_tier,
+    gunicorn_max_worker_memory_bytes,
     gunicorn_threads,
     web_concurrency,
     web_concurrency_warning,
@@ -43,12 +44,7 @@ timeout = by_tier(120, 200, 200)
 # at 109-136 MiB RSS, because RSS counts the shared application image it was
 # forked from. A ceiling near that retires workers as fast as they start -- a
 # 120 MiB ceiling produced 30 workers in six minutes, none older than 16s.
-max_worker_memory_bytes = int(
-    os.environ.get(
-        "FLOPPY_GUNICORN_MAX_WORKER_MEMORY_BYTES",
-        by_tier(250, 320, 400) * 1024 * 1024,
-    ),
-)
+max_worker_memory_bytes = gunicorn_max_worker_memory_bytes()
 # However the ceiling is set, a worker must earn its keep before it can be
 # retired for size. Without this a misconfigured ceiling below the starting
 # size is a restart loop -- every worker crosses it on its first request -- and

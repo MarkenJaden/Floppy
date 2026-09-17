@@ -782,3 +782,142 @@ class StatisticsRefreshChunkPrefetchTests(StatisticsRunTestCase):
         self.assertGreater(prefetch.call_count, 1)
         for call_args in prefetch.call_args_list:
             self.assertLessEqual(len(call_args.args[1]), 2)
+
+
+@override_settings(STATISTICS_HISTORY_DEBOUNCE_SECONDS=20)
+class StatisticsRefreshHistoryDebounceTests(StatisticsRunTestCase):
+    """A run aborted by a moving History must settle before restarting.
+
+    Production: a credits backfill bumped the history version roughly every
+    ten seconds while it drained. An All Time refresh did about nine seconds
+    of work, noticed the version had changed, aborted, restarted immediately,
+    and repeated seven times in a minute -- each run rebuilding results that
+    were stale before they were finished, on the interactive worker that also
+    serves webhooks.
+
+    Time is controlled by the settling window's own key rather than a clock:
+    deleting it is exactly what its expiry does, so a test can step the window
+    forward without patching now().
+    """
+
+    def _aborted_run(self):
+        """Start a run, advance it once, then move History under it."""
+        statistics_refresh_run.begin_run(self.user.id, "All Time", chunk_size=2)
+        run = statistics_refresh_run.load_run(self.user.id, "All Time")
+        with patch("app.tasks_interactive.continue_statistics_refresh_task.apply_async"):
+            statistics_refresh_run.advance_chunked_run(
+                self.user.id,
+                "All Time",
+                run["run_id"],
+            )
+        _set_history_version(self.user.id)
+        return run["run_id"]
+
+    def _abort_and_capture(self, run_id):
+        """Advance the run once more and capture any restart it schedules."""
+        with patch(
+            "app.tasks_interactive.refresh_statistics_cache_task.apply_async",
+        ) as restart:
+            statistics_refresh_run.advance_chunked_run(
+                self.user.id,
+                "All Time",
+                run_id,
+            )
+        return restart
+
+    def _gate_key(self):
+        return statistics_refresh_run._followup_gate_key(self.user.id, "All Time")
+
+    def test_the_restart_waits_for_the_settling_window(self):
+        """It is still scheduled -- just not in the same breath as the abort."""
+        restart = self._abort_and_capture(self._aborted_run())
+
+        restart.assert_called_once()
+        self.assertEqual(restart.call_args.kwargs["countdown"], 20)
+
+    def test_a_second_abort_inside_the_window_is_coalesced(self):
+        """The seven-runs-in-a-minute case: one follow-up, not seven."""
+        self._abort_and_capture(self._aborted_run())
+
+        second = self._abort_and_capture(self._aborted_run())
+
+        second.assert_not_called()
+
+    def test_a_later_abort_schedules_again_once_the_window_has_passed(self):
+        """A settling window must not become a permanent delay."""
+        self._abort_and_capture(self._aborted_run())
+        # Exactly what the key's TTL does, without waiting twenty seconds.
+        cache.delete(self._gate_key())
+
+        later = self._abort_and_capture(self._aborted_run())
+
+        later.assert_called_once()
+
+    def test_the_run_still_aborts_without_publishing_or_clearing(self):
+        """Settling changes when the next run starts, nothing about this one."""
+        statistics_cache.invalidate_statistics_days(
+            self.user.id,
+            [self.days[0]],
+            reason="test-setup",
+        )
+        dirty_before = statistics_cache._load_dirty_days(self.user.id)
+        self.assertTrue(dirty_before)
+
+        self._abort_and_capture(self._aborted_run())
+
+        self.assertIsNone(
+            cache.get(statistics_cache._cache_key(self.user.id, "All Time")),
+        )
+        self.assertEqual(statistics_cache._load_dirty_days(self.user.id), dirty_before)
+        self.assertIsNone(statistics_refresh_run.load_run(self.user.id, "All Time"))
+
+    def test_a_forced_follow_up_is_never_delayed_or_coalesced(self):
+        """A user pressing Refresh is not something to wait out."""
+        # Occupy the window, so a coalescing bug would be visible.
+        cache.set(self._gate_key(), True, 20)
+
+        with patch(
+            "app.tasks_interactive.refresh_statistics_cache_task.apply_async",
+        ) as restart:
+            statistics_refresh_run._schedule_followup(
+                self.user.id,
+                "All Time",
+                {"reason": "forced"},
+            )
+
+        restart.assert_called_once()
+        self.assertEqual(restart.call_args.kwargs["countdown"], 0)
+
+    def test_a_forced_request_during_an_active_run_is_never_coalesced(self):
+        """The other forced reason schedule_statistics_refresh records."""
+        cache.set(self._gate_key(), True, 20)
+
+        with patch(
+            "app.tasks_interactive.refresh_statistics_cache_task.apply_async",
+        ) as restart:
+            statistics_refresh_run._schedule_followup(
+                self.user.id,
+                "All Time",
+                {"reason": "forced_during_active_run"},
+            )
+
+        restart.assert_called_once()
+
+    def test_a_coalesced_follow_up_leaves_no_gate_for_another_range(self):
+        """Settling is per range: All Time must not mute This Year."""
+        self._abort_and_capture(self._aborted_run())
+
+        self.assertIsNone(
+            cache.get(
+                statistics_refresh_run._followup_gate_key(self.user.id, "This Year"),
+            ),
+        )
+
+    @override_settings(STATISTICS_HISTORY_DEBOUNCE_SECONDS=0)
+    def test_zero_restores_the_immediate_restart(self):
+        """The setting is an escape hatch, and 0 means the old behaviour."""
+        restart = self._abort_and_capture(self._aborted_run())
+
+        restart.assert_called_once()
+        self.assertEqual(restart.call_args.kwargs["countdown"], 0)
+        self.assertIsNone(cache.get(self._gate_key()))

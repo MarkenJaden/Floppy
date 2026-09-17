@@ -1909,3 +1909,169 @@ class SqliteIntegrityTests(SimpleTestCase):
             self.assertEqual(list(dest_dir.glob("*.sqlite3")), [])
             self.assertEqual(list(dest_dir.glob(".*")), [])
             self.assertEqual(self.read_incident_report(db_path)["status"], "corrupt")
+
+
+def _small_database(tmp_dir, rows=3):
+    """Create a tiny real database for the snapshot to copy."""
+    db_path = str(Path(tmp_dir) / "db.sqlite3")
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        "CREATE TABLE child (id INTEGER PRIMARY KEY, name TEXT);",
+    )
+    conn.executemany(
+        "INSERT INTO child VALUES (?, ?)",
+        ((row_id, f"row-{row_id}") for row_id in range(1, rows + 1)),
+    )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+@requires_proc_fd_backup
+class SnapshotPageCacheReleaseTests(SimpleTestCase):
+    """A published snapshot should not keep its own size in the page cache.
+
+    The copy is written and then read back in full by ``PRAGMA quick_check``,
+    so a multi-GiB database charges the container's cgroup roughly twice its
+    own size in ``file`` accounting -- for a file Floppy will not read again
+    until the live database is unreadable. The hint that releases it is
+    advisory in both directions and must never be able to spoil a backup.
+    """
+
+    def test_hint_is_issued_for_the_finished_snapshot(self):
+        """The happy path reports the advice it gave, and gives it once."""
+        calls = []
+
+        def record(descriptor, offset, length, advice):
+            calls.append((offset, length, advice))
+
+        with (
+            tempfile.TemporaryDirectory() as tmp_dir,
+            mock.patch.object(sqlite_integrity.os, "posix_fadvise", record),
+        ):
+            db_path = _small_database(tmp_dir)
+            snapshot_path = sqlite_integrity.create_live_database_snapshot(
+                db_path,
+                Path(tmp_dir) / "database",
+                max_keep=7,
+                timeout_seconds=5,
+            )
+
+        self.assertIsNotNone(snapshot_path)
+        # offset 0 / length 0 is "the whole file", and DONTNEED is the only
+        # advice that releases cache; anything else here would be a bug.
+        self.assertEqual(
+            calls,
+            [(0, 0, sqlite_integrity.os.POSIX_FADV_DONTNEED)],
+        )
+
+    def test_a_platform_without_posix_fadvise_still_publishes(self):
+        """Not every platform has posix_fadvise; the backup is the point."""
+        with (
+            tempfile.TemporaryDirectory() as tmp_dir,
+            mock.patch.object(
+                sqlite_integrity.os, "posix_fadvise", None, create=True,
+            ),
+        ):
+            db_path = _small_database(tmp_dir)
+            snapshot_path = sqlite_integrity.create_live_database_snapshot(
+                db_path,
+                Path(tmp_dir) / "database",
+                max_keep=7,
+                timeout_seconds=5,
+            )
+
+            self.assertIsNotNone(snapshot_path)
+            self.assertTrue(snapshot_path.is_file())
+
+    def test_a_failing_hint_never_fails_the_snapshot(self):
+        """An advisory call that errors must leave a good backup published."""
+
+        def explode(*_args):
+            raise OSError(5, "I/O error")
+
+        with (
+            tempfile.TemporaryDirectory() as tmp_dir,
+            mock.patch.object(sqlite_integrity.os, "posix_fadvise", explode),
+        ):
+            db_path = _small_database(tmp_dir)
+            snapshot_path = sqlite_integrity.create_live_database_snapshot(
+                db_path,
+                Path(tmp_dir) / "database",
+                max_keep=7,
+                timeout_seconds=5,
+            )
+
+            self.assertIsNotNone(snapshot_path)
+            snapshot = sqlite3.connect(f"file:{snapshot_path}?mode=ro", uri=True)
+            self.assertEqual(
+                snapshot.execute("PRAGMA quick_check").fetchone(),
+                ("ok",),
+            )
+            self.assertEqual(
+                snapshot.execute("SELECT COUNT(*) FROM child").fetchone()[0],
+                3,
+            )
+            snapshot.close()
+
+    def test_the_hint_comes_after_the_fsync(self):
+        """The hint must come after fsync.
+
+        DONTNEED drops only clean pages, so the ordering is what makes the
+        release both safe and effective: hinted before fsync, a still-dirty
+        page would simply be skipped and nothing would be released.
+        """
+        order = []
+
+        real_fsync = sqlite_integrity.os.fsync
+
+        def record_fsync(descriptor):
+            order.append("fsync")
+            return real_fsync(descriptor)
+
+        def record_advise(*_args):
+            order.append("fadvise")
+
+        with (
+            tempfile.TemporaryDirectory() as tmp_dir,
+            mock.patch.object(sqlite_integrity.os, "fsync", record_fsync),
+            mock.patch.object(sqlite_integrity.os, "posix_fadvise", record_advise),
+        ):
+            db_path = _small_database(tmp_dir)
+            sqlite_integrity.create_live_database_snapshot(
+                db_path,
+                Path(tmp_dir) / "database",
+                max_keep=7,
+                timeout_seconds=5,
+            )
+
+        self.assertIn("fadvise", order)
+        self.assertLess(order.index("fsync"), order.index("fadvise"))
+
+    def test_the_live_database_is_never_hinted(self):
+        """Evicting the live database's cache would be a performance bug.
+
+        Only the descriptor for the finished snapshot may be advised, so the
+        set of advised inodes must be exactly one, and not the source's.
+        """
+        advised = []
+
+        def record(descriptor, *_args):
+            advised.append(os.fstat(descriptor).st_ino)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp_dir,
+            mock.patch.object(sqlite_integrity.os, "posix_fadvise", record),
+        ):
+            db_path = _small_database(tmp_dir)
+            source_inode = Path(db_path).stat().st_ino
+            snapshot_path = sqlite_integrity.create_live_database_snapshot(
+                db_path,
+                Path(tmp_dir) / "database",
+                max_keep=7,
+                timeout_seconds=5,
+            )
+            snapshot_inode = snapshot_path.stat().st_ino
+
+        self.assertEqual(advised, [snapshot_inode])
+        self.assertNotIn(source_inode, advised)

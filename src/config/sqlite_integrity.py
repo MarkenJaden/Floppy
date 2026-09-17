@@ -907,6 +907,41 @@ def create_live_database_snapshot(
         return None
 
 
+def _release_page_cache(descriptor: int, name: str) -> str:
+    """Ask the kernel to drop a written-and-durable file's page cache.
+
+    A snapshot of a multi-GiB database is charged to the container twice
+    over: once as it is written, and again as ``PRAGMA quick_check`` reads
+    every page back. Both land in the cgroup's *file* accounting, and nothing
+    in Floppy reads a snapshot again -- it exists for the day the live
+    database is unreadable. Until then those pages are cache the container is
+    paying for and nobody is using.
+
+    This is advisory in both directions. ``POSIX_FADV_DONTNEED`` drops only
+    *clean* pages, so it is issued strictly after ``fsync``: dirty pages are
+    left alone by the kernel, which means the hint can never cost durability
+    however it is timed. It is also never applied to the live database -- that
+    file's cache is doing useful work. And the file itself is untouched: no
+    truncate, no unlink, only a hint about the cache in front of it.
+
+    Returns "issued", "unsupported" (no ``posix_fadvise`` on this platform) or
+    "failed". Never raises: a hint that did not take must not turn a good
+    backup into a failed one.
+    """
+    advise = getattr(os, "posix_fadvise", None)
+    dontneed = getattr(os, "POSIX_FADV_DONTNEED", None)
+    if advise is None or dontneed is None:
+        return "unsupported"
+    try:
+        # offset 0, length 0 means "the whole file", including anything
+        # appended after this descriptor was opened.
+        advise(descriptor, 0, 0, dontneed)
+    except OSError as error:
+        _log(f"[db-snapshot] Could not release page cache for {name}: {error}")
+        return "failed"
+    return "issued"
+
+
 def _write_live_snapshot(
     database_path: Path,
     dest_dir: Path,
@@ -970,11 +1005,17 @@ def _write_live_snapshot(
                 os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
                 dir_fd=dest_descriptor,
             )
+            advice = "skipped"
             try:
                 if not stat.S_ISREG(os.fstat(staging_check).st_mode):
                     message = "snapshot staging path is not a regular file"
                     raise OSError(message)
+                snapshot_bytes = os.fstat(staging_check).st_size
                 os.fsync(staging_check)
+                # Strictly after fsync, and before the descriptor closes:
+                # the pages are clean now, so the kernel can actually drop
+                # them, and the hint needs a descriptor to name the file.
+                advice = _release_page_cache(staging_check, final_name)
             finally:
                 os.close(staging_check)
 
@@ -999,6 +1040,10 @@ def _write_live_snapshot(
             # Prune after the new copy is in place, never before -- see the
             # matching comment on the _create_verified_backup call site.
             _prune_recovery_backups(dest_dir, max_keep=max_keep)
+            _log(
+                f"[db-snapshot] page_cache_release path={final_name} "
+                f"bytes={snapshot_bytes} advice={advice}",
+            )
             return dest_dir / final_name
         finally:
             if destination is not None:

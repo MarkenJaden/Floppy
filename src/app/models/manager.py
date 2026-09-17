@@ -109,6 +109,36 @@ def _media_list_deferred_item_fields(*, needs_watch_providers):
     return (*_MEDIA_LIST_DEFERRED_ITEM_FIELDS, "item__watch_providers")
 
 
+# Exactly what _aggregate_item_data reads off a duplicate entry. "item" is the
+# foreign key column, not the related row: the aggregation never touches
+# entry.item, and selecting the id alone is what keeps a whole-library
+# aggregation from hydrating a whole library of Items.
+_AGGREGATION_FIELDS = (
+    "item",
+    "progress",
+    "status",
+    "score",
+    "start_date",
+    "end_date",
+    "progressed_at",
+    "created_at",
+)
+
+
+def _aggregation_projection(model):
+    """Return the aggregation fields this model actually stores as columns.
+
+    Not every tracking model spells all of them as concrete fields -- TV
+    derives ``progress`` from its episodes rather than storing it -- and
+    ``only()`` rejects a name that is not a field. Intersecting keeps the
+    projection narrow without needing a per-model list to be maintained
+    alongside the aggregation that reads it. A derived attribute is still
+    readable afterwards; it is simply not something to select.
+    """
+    concrete = {field.name for field in model._meta.concrete_fields}
+    return tuple(name for name in _AGGREGATION_FIELDS if name in concrete)
+
+
 def _normalize_media_list_filter_value(value):
     return str(value or "").strip().lower()
 
@@ -797,16 +827,39 @@ class MediaManager(models.Manager):
             # Using all statuses is intentional: an item filtered as IN_PROGRESS may have
             # a more-recent COMPLETED entry that should determine its aggregated_status.
             #
-            # _aggregate_item_data only reads scalar fields (progress, status, dates,
-            # score) and item.media_type off these entries, so this intentionally
-            # skips _apply_prefetch_related: the events/tags/seasons/episodes
-            # prefetch bundle it would pull in is for the *displayed* media_list,
-            # not this internal aggregation pass, and re-fetching it here was
-            # doubling those queries for every list page.
-            all_media = model.objects.filter(
-                user=user.id,
-                item_id__in=queried_item_ids,
-            ).select_related("item")
+            # _aggregate_item_data reads scalar fields off these entries and
+            # nothing else: item.media_type is read from the *displayed* row,
+            # which the caller's own queryset already select_related. So this
+            # skips _apply_prefetch_related (that events/tags/seasons/episodes
+            # bundle belongs to the displayed list, and re-fetching it here was
+            # doubling those queries for every page), and it projects only the
+            # columns the aggregation reads.
+            #
+            # The projection is the memory fix. This filter is by item id, not
+            # by page, so on a list that is not paginated in SQL it returns a
+            # row for every tracked title -- and with select_related("item") it
+            # hydrated a full Item for each one, including synopsis and the
+            # ~146 KiB watch_providers blob the surrounding querysets are
+            # careful to defer. One SQL query, hundreds of MiB of JSON
+            # decoding: exactly the shape production showed on
+            # /medialist/movie, two minutes of wall time across eleven queries.
+            all_media = (
+                model.objects.filter(
+                    user=user.id,
+                    item_id__in=queried_item_ids,
+                )
+                .only(*_aggregation_projection(model))
+                # Media's default ordering is ["user", "item", "-created_at"],
+                # which makes the database join users_user and app_item purely
+                # to sort a result set that is about to be grouped into a dict
+                # by item id. Only the order *within* a group is observable
+                # here -- _aggregate_item_data breaks an activity tie by
+                # keeping the entry it saw first -- and within a group both
+                # leading keys are constant: the filter pins one user, and the
+                # group key is the item. So "-created_at" alone produces the
+                # identical grouping, without the joins or the sort.
+                .order_by("-created_at")
+            )
 
             # Group media by item_id
             media_by_item = {}

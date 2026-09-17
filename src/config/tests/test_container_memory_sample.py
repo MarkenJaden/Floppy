@@ -438,6 +438,21 @@ class ReconciliationTests(SimpleTestCase):
         sampled = sampler.sample()
         reconciliation = sampled["reconciliation"]
 
+        # In a Floppy container every process in the cgroup is one Floppy
+        # started, so every smaps_rollup is readable and the precondition
+        # below always holds. A development sandbox can put a foreign
+        # supervisor in the same cgroup whose rollup the sampler is not
+        # allowed to read -- a fact about that host, not a defect here. Skip
+        # on that, but only for a process the sampler could not classify:
+        # an unreadable gunicorn or celery process is still a real failure,
+        # which is the regression this test exists to catch.
+        unmeasured = [
+            item for item in sampled["processes"] if item["pss_kib"] is None
+        ]
+        if unmeasured and all(item["role"] == "other" for item in unmeasured):
+            names = ", ".join(sorted({item["name"] for item in unmeasured}))
+            self.skipTest(f"host has unreadable foreign processes: {names}")
+
         self.assertEqual(sampled["rss_only_processes"], 0)
         self.assertTrue(reconciliation["process_pss_complete"])
         self.assertEqual(sampled["smaps_detail"], "full")

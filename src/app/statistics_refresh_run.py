@@ -131,6 +131,24 @@ def _rerun_key(user_id: int, range_name: str) -> str:
     return f"stats:refresh:rerun:{user_id}:{_normalize_range_name(range_name)}"
 
 
+def _followup_gate_key(user_id: int, range_name: str) -> str:
+    """Key whose presence means "a settling follow-up is already pending"."""
+    from app.statistics_cache import _normalize_range_name
+
+    return f"stats:refresh:followup:{user_id}:{_normalize_range_name(range_name)}"
+
+
+def _history_debounce_seconds() -> int:
+    """Seconds to let History settle before restarting an aborted run.
+
+    Deliberately version-independent, unlike the schedule dedupe key: that key
+    embeds the history version, so a burst that changes the version on every
+    bump defeats it by construction. This has to hold across exactly those
+    bumps.
+    """
+    return max(0, getattr(settings, "STATISTICS_HISTORY_DEBOUNCE_SECONDS", 0))
+
+
 def _encode_days(days) -> list[str]:
     """Store the work list as compact day tokens, not payloads.
 
@@ -689,19 +707,58 @@ def _schedule_continuation(user_id: int, range_name: str, run: dict) -> bool:
 
 
 def _schedule_followup(user_id: int, range_name: str, rerun: dict) -> None:
+    """Queue the pass this run still owes, settling first if History is moving.
+
+    A run that aborted because the history version changed is owed a fresh
+    run, but starting it in the same breath is what turned one credits
+    backfill into seven aborted All Time refreshes in a minute: each restart
+    rebuilt work that was already known to be unstable, and the next version
+    bump killed it again about nine seconds later.
+
+    So an abort of that kind waits a short settling window, and the window
+    coalesces: further aborts inside it ride on the follow-up already pending
+    rather than queueing another full replan. The window still ends in exactly
+    one run, planned against whatever the history version is by then, so a
+    History that keeps changing costs one window per attempt and never a
+    permanent delay.
+
+    Every other reason -- a user pressing Refresh, a forced rebuild recorded
+    during an active run -- is scheduled immediately and never coalesced. A
+    settling window is for a run nobody asked for yet; it is not somewhere a
+    user's click may be dropped.
+    """
     from app.statistics_refresh import schedule_statistics_refresh
 
+    reason = rerun.get("reason")
+    settle_seconds = (
+        _history_debounce_seconds() if reason == "history_version_changed" else 0
+    )
+    if settle_seconds and not cache.add(
+        _followup_gate_key(user_id, range_name),
+        True,
+        settle_seconds,
+    ):
+        logger.info(
+            "statistics_refresh_followup_coalesced user_id=%s range=%s reason=%s",
+            user_id,
+            range_name,
+            reason,
+        )
+        return
+
     logger.info(
-        "statistics_refresh_followup_scheduled user_id=%s range=%s reason=%s",
+        "statistics_refresh_followup_scheduled user_id=%s range=%s reason=%s "
+        "settle_seconds=%s",
         user_id,
         range_name,
-        rerun.get("reason"),
+        reason,
+        settle_seconds,
     )
     schedule_statistics_refresh(
         user_id,
         range_name,
         debounce_seconds=0,
-        countdown=0,
+        countdown=settle_seconds,
         allow_inline=False,
         force=True,
     )

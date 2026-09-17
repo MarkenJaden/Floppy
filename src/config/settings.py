@@ -31,6 +31,7 @@ from config.runtime_profile import (
 )
 from config.runtime_profile import (
     by_tier,
+    gunicorn_max_worker_memory_bytes,
     gunicorn_threads,
     web_concurrency,
 )
@@ -340,7 +341,63 @@ PERF_LOG_QUERY_COUNT_THRESHOLD = config(
     cast=int,
 )
 
+# High-water memory attribution (app/memory_envelope.py). Separate from the
+# slow-request log above: that one answers "what was slow", this one answers
+# "what grew, and was it Python or page cache". Cheap enough -- two short
+# /proc reads and three cgroup reads per boundary -- to leave on in
+# production, which is the only place the excursions happen.
+MEMORY_HIGH_WATER_ENABLED = config(
+    "MEMORY_HIGH_WATER_ENABLED",
+    default=True,
+    cast=bool,
+)
+# Thresholds are deliberately generous. The events are for excursions, not
+# for a picture of normal traffic; a log full of ordinary requests is a log
+# nobody reads. These are starting points chosen to catch the known
+# production high-water events (a two-minute media list, a snapshot's page
+# cache) and are expected to be tuned once real events accumulate. None of
+# them is a memory guarantee.
+MEMORY_HIGH_WATER_DURATION_MS = config(
+    "MEMORY_HIGH_WATER_DURATION_MS",
+    default=10_000,
+    cast=int,
+)
+MEMORY_HIGH_WATER_RSS_DELTA_BYTES = config(
+    "MEMORY_HIGH_WATER_RSS_DELTA_BYTES",
+    default=32 * 1024 * 1024,
+    cast=int,
+)
+MEMORY_HIGH_WATER_HWM_DELTA_BYTES = config(
+    "MEMORY_HIGH_WATER_HWM_DELTA_BYTES",
+    default=32 * 1024 * 1024,
+    cast=int,
+)
+MEMORY_HIGH_WATER_CGROUP_DELTA_BYTES = config(
+    "MEMORY_HIGH_WATER_CGROUP_DELTA_BYTES",
+    default=128 * 1024 * 1024,
+    cast=int,
+)
+MEMORY_HIGH_WATER_CGROUP_FILE_DELTA_BYTES = config(
+    "MEMORY_HIGH_WATER_CGROUP_FILE_DELTA_BYTES",
+    default=128 * 1024 * 1024,
+    cast=int,
+)
+# A process this close to its recycle ceiling is about to be retired, and the
+# boundary that took it there is the one worth naming.
+MEMORY_HIGH_WATER_CEILING_RATIO = config(
+    "MEMORY_HIGH_WATER_CEILING_RATIO",
+    default=0.85,
+    cast=float,
+)
+# The same number config/gunicorn.py enforces, read from one definition so
+# the instrumentation cannot report against a ceiling that is not the one in
+# force. Zero means retirement is disabled.
+GUNICORN_MAX_WORKER_MEMORY_BYTES = gunicorn_max_worker_memory_bytes()
+
 MIDDLEWARE = [
+    # Outermost by intent: the samples must bracket every other middleware's
+    # allocations, not just the view's.
+    "app.memory_envelope.MemoryHighWaterMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # Keep rendered HTML out of the browser's heuristic cache so template fixes
     # actually reach iOS Safari and the installed PWA (#442)
@@ -1057,7 +1114,13 @@ DB_SNAPSHOT_RETENTION_COUNT = config(
     cast=int,
 )
 DB_SNAPSHOT_HOUR = config("DB_SNAPSHOT_HOUR", default=2, cast=int)
-DB_SNAPSHOT_MINUTE = config("DB_SNAPSHOT_MINUTE", default=30, cast=int)
+# Deliberately not a quarter hour. The incremental metadata backfill runs on
+# crontab(minute="*/15") or "*/30" depending on tier, so the old :30 default
+# started a whole-database copy in the same minute as a bulk sweep -- one
+# filling the page cache while the other allocated. Production showed exactly
+# that pairing at 02:30. :37 collides with nothing else in the schedule below,
+# and an operator who has set DB_SNAPSHOT_MINUTE keeps their own value.
+DB_SNAPSHOT_MINUTE = config("DB_SNAPSHOT_MINUTE", default=37, cast=int)
 
 # Runtime population settings
 RUNTIME_POPULATION_DISABLED = config(
@@ -1530,6 +1593,27 @@ STATISTICS_REFRESH_CHUNK_COUNTDOWN = config(
 STATISTICS_REFRESH_RUN_LEASE = config(
     "STATISTICS_REFRESH_RUN_LEASE",
     default=300,
+    cast=int,
+)
+# How long to let History settle before restarting a run that aborted because
+# History moved under it.
+#
+# A run that notices the version changed must abort: publishing would
+# overwrite a newer result with numbers built against the old version. It then
+# owes a fresh run. Restarting that run immediately is what produced the
+# observed failure: a credits backfill bumps the history version roughly every
+# ten seconds while it drains, so an All Time refresh did about nine seconds
+# of work, aborted, restarted, and repeated seven times in a minute, burning
+# the interactive worker on results that were known to be stale before they
+# were built.
+#
+# Short on purpose. This is a settling window, not a backoff: each window
+# still ends in exactly one run, planned against the latest version, so a
+# History that never stops changing delays each attempt by this much and no
+# more. Set it to 0 to restore the immediate restart.
+STATISTICS_HISTORY_DEBOUNCE_SECONDS = config(
+    "STATISTICS_HISTORY_DEBOUNCE_SECONDS",
+    default=20,
     cast=int,
 )
 

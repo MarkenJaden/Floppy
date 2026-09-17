@@ -484,6 +484,27 @@ def sizing_report(profile: ResourceProfile | None = None) -> dict:
     }
 
 
+def gunicorn_max_worker_memory_bytes(profile: ResourceProfile | None = None) -> int:
+    """Return the RSS at which a gunicorn worker is retired after a response.
+
+    Lives here, not in ``config/gunicorn.py``, because two callers need the
+    same number: the gunicorn hook that enforces it, and Django, whose
+    high-water instrumentation reports how close a request ended to it. A
+    ceiling the instrumentation disagreed with would misreport exactly the
+    events it exists to explain.
+
+    Zero disables retirement, and is passed through rather than replaced by a
+    default -- an operator who set it to zero meant it.
+    """
+    override = os.environ.get("FLOPPY_GUNICORN_MAX_WORKER_MEMORY_BYTES")
+    if override is not None and override.strip():
+        try:
+            return int(override)
+        except ValueError:
+            pass
+    return by_tier(250, 320, 400, profile) * 1024 * 1024
+
+
 def web_concurrency_warning(profile: ResourceProfile | None = None) -> str:
     """Return a one-line warning when an override costs resident memory.
 
