@@ -3110,10 +3110,14 @@ components:
         notes:
           type: string
           nullable: true
+        external_id:
+          type: string
+          nullable: true
       required:
       - consumption_id
       - created
       - end_date
+      - external_id
       - notes
       - progress
       - progressed_at

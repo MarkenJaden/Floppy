@@ -211,7 +211,7 @@
                 <span class="text-[12px] font-semibold text-[var(--color-text-muted)] sm:text-sm">-</span>
               {% endif %}
               <span class="text-[12px] text-[var(--color-text-muted)] sm:text-sm">|</span>
-              <span class="text-[12px] text-[var(--color-text-secondary)] sm:text-sm">{% blocktranslate trimmed with value_1=episode_metadata.score_count|intcomma count count=episode_metadata.score_count %}{{ value_1 }} vote{% plural %}{{ value_1 }} votes{% endblocktranslate %}</span>
+              <span class="text-[12px] text-[var(--color-text-secondary)] sm:text-sm">{% blocktranslate trimmed with value_1=episode_metadata.score_count|intcomma count count=episode_metadata.score_count|safe_count %}{{ value_1 }} vote{% plural %}{{ value_1 }} votes{% endblocktranslate %}</span>
             </div>
           {% endif %}
           {# IMDb rating chip #}

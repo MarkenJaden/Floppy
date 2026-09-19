@@ -566,7 +566,7 @@
                           <span class="ml-1 text-[var(--color-text-muted)]">• {{ media.formatted_progress }}/{{ media.formatted_max_progress }}{% if media.item.format != 'audiobook' %} {% translate "pages" %}{% endif %}</span>
                         {% endif %}
                       {% else %}
-                        <span class="ml-1 text-[var(--color-text-muted)]">• {{ media.formatted_max_progress }}{% if media.item.format != 'audiobook' %} {% blocktranslate trimmed count count=media.max_progress %}page{% plural %}pages{% endblocktranslate %}{% endif %}</span>
+                        <span class="ml-1 text-[var(--color-text-muted)]">• {{ media.formatted_max_progress }}{% if media.item.format != 'audiobook' %} {% blocktranslate trimmed count count=media.max_progress|safe_count %}page{% plural %}pages{% endblocktranslate %}{% endif %}</span>
                       {% endif %}
                     {% elif media.max_progress and resolved_media_type != MediaTypes.MOVIE.value %}
                       {% with progress_value=aggregated_progress|default_if_none:media.progress %}
@@ -574,7 +574,7 @@
                           <span class="ml-1 text-[var(--color-text-muted)]">
                             {% if resolved_media_type == MediaTypes.SEASON.value %}
                               {% with season_progress=media.completed_episode_count|default_if_none:0 %}
-                                {% blocktranslate trimmed with value_1=season_progress value_2=media.max_progress count count=media.max_progress %}• {{ value_1 }} / {{ value_2 }} episode{% plural %}• {{ value_1 }} / {{ value_2 }} episodes{% endblocktranslate %}
+                                {% blocktranslate trimmed with value_1=season_progress value_2=media.max_progress count count=media.max_progress|safe_count %}• {{ value_1 }} / {{ value_2 }} episode{% plural %}• {{ value_1 }} / {{ value_2 }} episodes{% endblocktranslate %}
                               {% endwith %}
                             {% elif user.book_comic_manga_progress_percentage and resolved_media_type == MediaTypes.COMIC.value %}
                               {% widthratio progress_value|default_if_none:0 media.max_progress 100 as percentage %}
@@ -585,7 +585,7 @@
                             {% else %}
                               • {{ progress_value|default_if_none:0 }} / {{ media.max_progress }}
                               {% if resolved_media_type == MediaTypes.TV.value or resolved_media_type == MediaTypes.SEASON.value %}
-                                {% blocktranslate trimmed count count=media.max_progress %}episode{% plural %}episodes{% endblocktranslate %}
+                                {% blocktranslate trimmed count count=media.max_progress|safe_count %}episode{% plural %}episodes{% endblocktranslate %}
                               {% elif media.item.media_type|long_unit %}
                                 {% with progress_unit=media.item.media_type|long_unit|lower %}{% if media.max_progress == 1 %}{% translate progress_unit context "progress unit" %}{% else %}{% with progress_unit_plural=progress_unit|add:"s" %}{% translate progress_unit_plural context "progress unit" %}{% endwith %}{% endif %}{% endwith %}
                               {% endif %}
@@ -595,11 +595,11 @@
                       {% endwith %}
                     {% elif resolved_media_type == MediaTypes.MOVIE.value %}
                       {% if aggregated_progress %}
-                        <span class="ml-1 text-[var(--color-text-muted)]">{% blocktranslate trimmed with value_1=aggregated_progress count count=aggregated_progress %}• {{ value_1 }} play{% plural %}• {{ value_1 }} plays{% endblocktranslate %}</span>
+                        <span class="ml-1 text-[var(--color-text-muted)]">{% blocktranslate trimmed with value_1=aggregated_progress count count=aggregated_progress|safe_count %}• {{ value_1 }} play{% plural %}• {{ value_1 }} plays{% endblocktranslate %}</span>
                       {% elif media.progress %}
-                        <span class="ml-1 text-[var(--color-text-muted)]">{% blocktranslate trimmed with value_1=media.progress count count=media.progress %}• {{ value_1 }} play{% plural %}• {{ value_1 }} plays{% endblocktranslate %}</span>
+                        <span class="ml-1 text-[var(--color-text-muted)]">{% blocktranslate trimmed with value_1=media.progress count count=media.progress|safe_count %}• {{ value_1 }} play{% plural %}• {{ value_1 }} plays{% endblocktranslate %}</span>
                       {% elif media|safe_attr:"repeats" and media.status != Status.PLANNING.value %}
-                        <span class="ml-1 text-[var(--color-text-muted)]">{% blocktranslate trimmed with value_1=media.repeats count count=media.repeats %}• {{ value_1 }} play{% plural %}• {{ value_1 }} plays{% endblocktranslate %}</span>
+                        <span class="ml-1 text-[var(--color-text-muted)]">{% blocktranslate trimmed with value_1=media.repeats count count=media.repeats|safe_count %}• {{ value_1 }} play{% plural %}• {{ value_1 }} plays{% endblocktranslate %}</span>
                       {% endif %}
                     {% else %}
                       {% if aggregated_progress %}

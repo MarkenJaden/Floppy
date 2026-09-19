@@ -1,4 +1,5 @@
 # FORK: tests for the receive-only Koito listening-history integration.
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -6,6 +7,7 @@ from django.core.cache import cache
 from django.db.utils import OperationalError
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 from django_celery_beat.models import CrontabSchedule, PeriodicTask
 
 from app.models import Music
@@ -626,6 +628,54 @@ class KoitoExportTests(KoitoTestCase):
         run = ImportRun.objects.get(user=self.user, source="koito")
         self.assertEqual(run.status, ImportRun.Status.FAILED)
         self.assertIsNotNone(run.finished_at)
+
+    @patch("integrations.koito_api.get_album")
+    @patch("integrations.koito_api.get_track")
+    @patch("integrations.koito_api.get_listens")
+    @patch("integrations.koito_api.get_export")
+    def test_stale_history_import_lock_is_reclaimed_and_import_retries(
+        self,
+        mock_export,
+        mock_listens,
+        mock_track,
+        mock_album,
+    ):
+        """A lock left by a worker that died mid-import is reclaimed and retried."""
+        mock_export.return_value = self.EXPORT
+        mock_listens.return_value = _page(
+            [_listen(time="2026-06-01T08:00:00Z", track_id=1)],
+        )
+        mock_track.return_value = {
+            "musicbrainz_id": "rec-1",
+            "duration": 195,
+            "album_id": 5,
+        }
+        mock_album.return_value = {
+            "title": "Music Has the Right to Children",
+            "musicbrainz_id": "rel-1",
+        }
+
+        self.account.history_import_status = LastFMHistoryImportStatus.RUNNING
+        self.account.history_import_started_at = timezone.now() - timedelta(
+            minutes=30
+        )
+        self.account.history_import_last_error_message = ""
+        self.account.save()
+
+        cache.set(
+            koito_sync.get_koito_history_import_lock_key(self.user.id),
+            {"started_at": (timezone.now() - timedelta(minutes=30)).isoformat()},
+        )
+
+        tasks.import_koito_history(user_id=self.user.id)
+
+        self.account.refresh_from_db()
+        self.assertEqual(
+            self.account.history_import_status,
+            LastFMHistoryImportStatus.COMPLETED,
+        )
+        self.assertTrue(self.account.history_import_completed_at)
+        self.assertIsNone(cache.get(koito_sync.get_koito_history_import_lock_key(self.user.id)))
 
     @patch("integrations.koito_api.get_album")
     @patch("integrations.koito_api.get_track")

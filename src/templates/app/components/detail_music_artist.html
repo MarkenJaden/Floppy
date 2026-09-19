@@ -59,7 +59,7 @@
             </span>
             <span class="text-sm font-semibold text-[var(--color-text)]">{{ music_artist_rating.rating|floatformat:1 }}</span>
             <span class="text-sm text-[var(--color-text-muted)]">|</span>
-            <span class="text-sm text-[var(--color-text-secondary)]">{% blocktranslate trimmed with value_1=music_artist_rating.rating_count|intcomma count count=music_artist_rating.rating_count %}{{ value_1 }} vote{% plural %}{{ value_1 }} votes{% endblocktranslate %}</span>
+            <span class="text-sm text-[var(--color-text-secondary)]">{% blocktranslate trimmed with value_1=music_artist_rating.rating_count|intcomma count count=music_artist_rating.rating_count|safe_count %}{{ value_1 }} vote{% plural %}{{ value_1 }} votes{% endblocktranslate %}</span>
           </div>
         {% endif %}
 

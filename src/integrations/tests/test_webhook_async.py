@@ -177,6 +177,26 @@ class ProcessWebhookTaskTests(TestCase):
         self.assertIsNotNone(self.user.plex_webhook_last_received_at)
 
     @patch("integrations.webhooks.plex.PlexWebhookProcessor.process_payload")
+    def test_plex_payload_log_redacts_identity_fields(self, _mock_process):
+        """The logged payload censors the user, server and device, not the media."""
+        payload = {
+            "event": "media.play",
+            "Account": {"id": 1234, "thumb": "https://plex.tv/a", "title": "alice"},
+            "Server": {"title": "Home", "uuid": "server-abc"},
+            "Player": {"local": False, "publicAddress": "203.0.113.9"},
+            "Metadata": {"title": "Jumanji", "librarySectionTitle": "Movies"},
+        }
+
+        with self.assertLogs("integrations.tasks", level="INFO") as logs:
+            tasks.process_webhook("plex", payload, self.user.id)
+
+        output = "\n".join(logs.output)
+        for value in ("alice", "203.0.113.9", "server-abc", "Movies"):
+            with self.subTest(value=value):
+                self.assertNotIn(value, output)
+        self.assertIn("Jumanji", output)
+
+    @patch("integrations.webhooks.plex.PlexWebhookProcessor.process_payload")
     def test_shared_plex_task_uses_owner_account_and_recipient(self, mock_process):
         """Shared processing attributes data to the recipient without sharing tokens."""
         recipient = get_user_model().objects.create_user(username="recipient")

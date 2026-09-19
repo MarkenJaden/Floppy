@@ -709,6 +709,11 @@ def _render_standard_track_modal(
         or library_move_context
         or manual_metadata_form
         or can_manage_hardcover_edition
+        or (
+            metadata_item is not None
+            and media_type in (MediaTypes.MOVIE.value, MediaTypes.TV.value)
+        )
+        or (media_type == MediaTypes.TV.value and media is not None)
     )
 
     episode_plays_domain = bulk_episode_tracking.build_episode_play_domain(
@@ -811,6 +816,8 @@ def _render_standard_track_modal(
         "library_move_context": library_move_context,
         "metadata_tab_available": metadata_tab_available,
         "metadata_item": metadata_item,
+        "match_item": metadata_item,
+        "current_instance": media,
         "general_hidden_fields": hidden_fields,
         "general_fields": general_fields,
         "general_submit_formaction": (

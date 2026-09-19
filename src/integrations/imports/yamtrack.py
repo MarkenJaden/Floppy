@@ -136,6 +136,38 @@ def _is_ragged_row(row):
     return bool(row.get(None))
 
 
+# Providers whose catalog ids are always numeric. A non-numeric id for one of
+# these can never resolve: the provider lookup 404s on every metadata, genre
+# and runtime backfill, leaving the item permanently without genres/runtime.
+# Treating such an id as missing lets the row be resolved by title instead.
+_NUMERIC_MEDIA_ID_SOURCES = {
+    Sources.TMDB.value,
+    Sources.TVDB.value,
+    Sources.MAL.value,
+    Sources.MANGAUPDATES.value,
+    Sources.IGDB.value,
+    Sources.COMICVINE.value,
+    Sources.BGG.value,
+    Sources.HARDCOVER.value,
+}
+
+
+def _is_resolvable_media_id(row, media_type):
+    """Return whether a row's provider media_id matches its provider's format."""
+    media_id = (row.get("media_id") or "").strip()
+    if not media_id:
+        return True
+    source = (row.get("source") or "").strip()
+    if not source:
+        media_config = config.get_config(media_type)
+        if not media_config:
+            return True
+        source = media_config["default_source"].value
+    if source in _NUMERIC_MEDIA_ID_SOURCES:
+        return media_id.isdigit()
+    return True
+
+
 def _find_item_after_integrity_error(lookup, original_exc):
     """Return the Item that caused a UniqueViolation during update_or_create.
 
@@ -593,13 +625,18 @@ class YamtrackImporter:
         if not should_process:
             return
 
-        if row["title"] == "" or row["image"] == "":
-            self._handle_missing_metadata(
-                row,
-                media_type,
-                season_number,
-                episode_number,
-            )
+        needs_metadata = (
+            self._discard_unresolvable_media_id(row, media_type)
+            or row["title"] == ""
+            or row["image"] == ""
+        )
+        if needs_metadata and not self._handle_missing_metadata(
+            row,
+            media_type,
+            season_number,
+            episode_number,
+        ):
+            return
 
         item = self._resolve_item(
             row,
@@ -785,17 +822,19 @@ class YamtrackImporter:
             int(row["episode_number"]) if row.get("episode_number") else None
         )
 
-        if (
-            row.get("media_id") == ""
+        needs_metadata = (
+            self._discard_unresolvable_media_id(row, media_type)
+            or row.get("media_id") == ""
             or row.get("title") == ""
             or row.get("image") == ""
+        )
+        if needs_metadata and not self._handle_missing_metadata(
+            row,
+            media_type,
+            season_number,
+            episode_number,
         ):
-            self._handle_missing_metadata(
-                row,
-                media_type,
-                season_number,
-                episode_number,
-            )
+            return
 
         item = self._resolve_item(
             row,
@@ -1018,13 +1057,18 @@ class YamtrackImporter:
             int(row["episode_number"]) if row.get("episode_number") else None
         )
 
-        if row.get("title", "") == "" or row.get("image", "") == "":
-            self._handle_missing_metadata(
-                row,
-                media_type,
-                season_number,
-                episode_number,
-            )
+        needs_metadata = (
+            self._discard_unresolvable_media_id(row, media_type)
+            or row.get("title", "") == ""
+            or row.get("image", "") == ""
+        )
+        if needs_metadata and not self._handle_missing_metadata(
+            row,
+            media_type,
+            season_number,
+            episode_number,
+        ):
+            return
 
         item = self._resolve_item(
             row,
@@ -1100,11 +1144,31 @@ class YamtrackImporter:
 
         self.collection_count += 1
 
+    def _discard_unresolvable_media_id(self, row, media_type):
+        """Clear a provider media_id that cannot match its provider's format.
+
+        Returns True when an id was discarded, so the caller resolves the row
+        by title instead of persisting an item that can never fetch metadata.
+        """
+        if _is_resolvable_media_id(row, media_type):
+            return False
+        logger.warning(
+            "Yamtrack import discarding unresolvable media_id=%s for %r; "
+            "resolving by title",
+            row.get("media_id"),
+            row.get("title"),
+        )
+        row["media_id"] = ""
+        return True
+
     def _handle_missing_metadata(self, row, media_type, season_number, episode_number):
-        """Handle missing metadata by fetching from provider."""
+        """Handle missing metadata by fetching from provider.
+
+        Returns False when the row cannot be resolved and should be skipped.
+        """
         if row["source"] == Sources.MANUAL.value and row["image"] == "":
             row["image"] = settings.IMG_NONE
-            return
+            return True
 
         if row.get("media_id", "") != "":
             metadata = services.get_media_metadata(
@@ -1116,7 +1180,7 @@ class YamtrackImporter:
             )
             row["title"] = metadata["title"]
             row["image"] = metadata["image"]
-            return
+            return True
 
         if row.get("title", "") != "":
             source = row.get("source", "")
@@ -1130,7 +1194,15 @@ class YamtrackImporter:
                 source,
             )
 
-            first_result = metadata["results"][0]
+            results = metadata.get("results") or []
+            if not results:
+                self.warnings.append(
+                    f"Could not resolve {row['title']} ({media_type}) by title; "
+                    "skipping.",
+                )
+                return False
+
+            first_result = results[0]
             row["title"] = first_result["title"]
             row["source"] = first_result["source"]
             row["media_id"] = first_result["media_id"]
@@ -1141,7 +1213,7 @@ class YamtrackImporter:
                 "Resolved missing metadata for Yamtrack import row from %s",
                 source,
             )
-            return
+            return True
 
         msg = f"Missing metadata for: {row}"
         raise MediaImportError(msg)

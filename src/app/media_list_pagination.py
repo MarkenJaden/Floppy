@@ -55,9 +55,15 @@ def can_paginate_in_sql(
         status_values = filters.get("status") or filters.get("statuses") or ()
         if isinstance(status_values, str):
             status_values = (status_values,)
+        status_values = tuple(
+            value
+            for value in status_values
+            if value and str(value).lower() not in {"all", "no_status"}
+        )
         filters = _NormalizedFilterView(
             include_no_status=filters.get("include_no_status")
             or any(str(value).lower() == "no_status" for value in status_values),
+            statuses=status_values,
             rating=filters.get("rating", "all"),
             rating_min=filters.get("rating_min", ""),
             rating_max=filters.get("rating_max", ""),
@@ -115,6 +121,12 @@ def can_paginate_in_sql(
         "progress",
         "plays",
     }:
+        return False
+    # The SQL fast path's latest-status subquery reads the tracker row's
+    # concrete end_date/progressed_at. Season derives both from its episodes
+    # (tv.Season properties), so that subquery raises FieldError; fall back to
+    # the Python aggregation that reads those properties. See #1222.
+    if media_type == MediaTypes.SEASON.value and getattr(filters, "statuses", ()):
         return False
     return sort_key in SQL_SORTABLE_KEYS
 

@@ -62,7 +62,9 @@ class MediaEpisodeWatchView(drf_views.APIView):
 
     POST mirrors the web UI's episode_save: the season is auto-created when
     missing and a new Episode play row is added. DELETE mirrors unwatching:
-    the most recent play of the episode is removed.
+    the most recent play of the episode is removed. An optional
+    `external_id` makes both calls idempotent/targetable for callers that
+    replay the same event, matching the movie watch route.
     """
 
     @extend_schema(
@@ -105,6 +107,8 @@ class MediaEpisodeWatchView(drf_views.APIView):
                     status=HTTP.BAD_REQUEST,
                 )
 
+        external_id = (request.data.get("external_id") or "").strip() or None
+
         library_media_type = (request.data.get("library_media_type") or "").strip()
         try:
             _, coordinate_error = resolve_episode_coordinate_for_request(
@@ -138,19 +142,18 @@ class MediaEpisodeWatchView(drf_views.APIView):
                 status=HTTP.NOT_FOUND,
             )
 
-        related_season.watch(int(episode_number), end_date)
+        result = related_season.watch(
+            int(episode_number),
+            end_date,
+            external_id=external_id,
+        )
         if score_provided:
             apply_episode_score(related_season, episode_number, score)
-        episode = (
-            Episode.objects.filter(
-                related_season=related_season,
-                item__episode_number=int(episode_number),
-            )
-            .select_related("item")
-            .order_by("-id")
-            .first()
-        )
-        return Response(serialize_data(episode), status=HTTP.CREATED)
+        episode = result.episode
+        if score_provided:
+            episode.refresh_from_db()
+        status_code = HTTP.CREATED if result.created else HTTP.OK
+        return Response(serialize_data(episode), status=status_code)
 
     @extend_schema(
         parameters=[MEDIA_TYPE_TV_ONLY_PARAM],
@@ -211,13 +214,20 @@ class MediaEpisodeWatchView(drf_views.APIView):
             related_season=related_season,
             item__episode_number=int(episode_number),
         )
-        if not plays.exists():
+        external_id = (request.GET.get("external_id") or "").strip() or None
+        if external_id:
+            if not plays.filter(external_id=external_id).exists():
+                return Response(
+                    {"detail": "Episode has no watch with that external_id."},
+                    status=HTTP.NOT_FOUND,
+                )
+        elif not plays.exists():
             return Response(
                 {"detail": "Episode has no watches."},
                 status=HTTP.NOT_FOUND,
             )
 
-        related_season.unwatch(int(episode_number))
+        related_season.unwatch(int(episode_number), external_id=external_id)
         return Response(status=HTTP.NO_CONTENT)
 
 

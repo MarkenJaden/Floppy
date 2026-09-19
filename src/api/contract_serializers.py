@@ -211,6 +211,7 @@ class ConsumptionResponseSerializer(serializers.Serializer):
     start_date = serializers.DateTimeField(allow_null=True)
     end_date = serializers.DateTimeField(allow_null=True)
     notes = serializers.CharField(allow_blank=True, allow_null=True)
+    external_id = serializers.CharField(allow_blank=True, allow_null=True)
 
 
 class MediaTypeStatusSerializer(serializers.Serializer):

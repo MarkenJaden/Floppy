@@ -65,7 +65,13 @@
             hx-swap="innerHTML"
             @click="$dispatch('open-session-history')">
       {% if activity_subtitle.primary_text %}
-        <span>{{ activity_subtitle.primary_text }}</span>
+        <span>
+          {% if "Progress: " in activity_subtitle.primary_text %}
+            {% blocktranslate trimmed with value_1=activity_subtitle.primary_text|cut:"Progress: " %}Progress: {{ value_1 }}{% endblocktranslate %}
+          {% else %}
+            {% translate activity_subtitle.primary_text %}
+          {% endif %}
+        </span>
       {% endif %}
       {% if activity_subtitle.date_start or activity_subtitle.date_end %}
         <span class="mx-2 text-gray-600">•</span>
@@ -85,7 +91,19 @@
       {% endif %}
       {% if activity_subtitle.duration_text %}
         <span class="mx-2 text-gray-600">•</span>
-        <span>{{ activity_subtitle.duration_text }}</span>
+        <span>
+          {% if " watched" in activity_subtitle.duration_text %}
+            {{ activity_subtitle.duration_text|cut:" watched" }} {% translate "watched" %}
+          {% elif " played" in activity_subtitle.duration_text %}
+            {{ activity_subtitle.duration_text|cut:" played" }} {% translate "played" %}
+          {% elif " listened" in activity_subtitle.duration_text %}
+            {{ activity_subtitle.duration_text|cut:" listened" }} {% translate "listened" %}
+          {% elif " read" in activity_subtitle.duration_text %}
+            {{ activity_subtitle.duration_text|cut:" read" }} {% translate "read" %}
+          {% else %}
+            {% translate activity_subtitle.duration_text %}
+          {% endif %}
+        </span>
       {% endif %}
     </button>
   </div>

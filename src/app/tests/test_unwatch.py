@@ -201,6 +201,27 @@ class EpisodeRetractionTests(TestCase):
             [_dt(1), _dt(9)],
         )
 
+    def test_an_external_id_play_is_removed_precisely(self):
+        self._watch(1)
+        target = self._watch(5)
+        target.external_id = "evt-5"
+        target.save(update_fields=["external_id"])
+        self._watch(9)
+
+        result = retract_watch(
+            self.user,
+            self.episode_item,
+            external_id="evt-5",
+        )
+
+        self.assertTrue(result.attributable)
+        remaining = Episode.objects.filter(item=self.episode_item)
+        self.assertEqual(remaining.count(), 2)
+        self.assertEqual(
+            sorted(row.end_date for row in remaining),
+            [_dt(1), _dt(9)],
+        )
+
     def test_retracting_an_unwatched_episode_is_a_no_op(self):
         result = retract_watch(self.user, self.episode_item)
 

@@ -102,14 +102,20 @@ def movie_plays_for_history(user_medias, media_type):
     return plays or None
 
 
-def resolve_movie_play_consumption(user_medias, media_type, consumption_id):
-    """Return the MoviePlay matching consumption_id for a movie, if any."""
-    if media_type != MediaTypes.MOVIE.value:
-        return None
-    movie = user_medias.first()
-    if movie is None:
-        return None
-    return MoviePlay.objects.filter(movie=movie, id=consumption_id).first()
+def resolve_consumption_entry(user_medias, media_type, consumption_id):
+    """Resolve an entry id the same way `.../history/` lists it.
+
+    Once a movie has MoviePlay rows its history is served only from those
+    rows, so only a MoviePlay id is valid then. Movie and MoviePlay use
+    independent id sequences and can collide, so checking the Movie row first
+    let an entry id resolve to the movie and delete it. Untouched movies keep
+    the single tracker row.
+    """
+    if media_type == MediaTypes.MOVIE.value:
+        movie = user_medias.first()
+        if movie is not None and MoviePlay.objects.filter(movie=movie).exists():
+            return MoviePlay.objects.filter(movie=movie, id=consumption_id).first()
+    return user_medias.filter(id=consumption_id).first()
 
 
 def install_fork_media_types():

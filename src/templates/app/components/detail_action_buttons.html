@@ -5,12 +5,6 @@
 {% load humanize %}
 {% load static %}
 {% if not public_view|default:False %}
-  {% if match_item and media_type == MediaTypes.MOVIE.value or match_item and media_type == MediaTypes.TV.value %}
-    <a href="{% url 'match_fix' match_item.id %}"
-       class="mb-2 inline-flex items-center rounded-xl border border-[var(--color-surface-border)] bg-[var(--color-surface)] px-4 py-2 text-sm text-[var(--color-text)] shadow-sm transition-colors hover:bg-[var(--color-surface-muted)]">
-      {% translate "Fix match" %}
-    </a>
-  {% endif %}
   {% if not activity_subtitle and media.score_count is None and not trakt_score and not imdb_score and not mal_score and not user_medias %}
     <div class="order-1 mt-5 mb-6 flex flex-col gap-3 sm:order-2 sm:flex-row sm:flex-wrap sm:items-center">
     {% elif not activity_subtitle and media.score_count is None and not trakt_score and not imdb_score and not mal_score and user_medias and not current_instance %}
@@ -146,7 +140,7 @@
                   {% for detail_link_section in detail_link_sections %}
                     <div class="{% if not forloop.first %}mt-3 border-t border-[var(--color-surface-border)] pt-3{% endif %}">
                       <div class="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-text-muted)]">
-                        {{ detail_link_section.title }}
+                        {% translate detail_link_section.title %}
                       </div>
                       <div class="flex flex-wrap gap-2">
                         {% for detail_link in detail_link_section.entries %}

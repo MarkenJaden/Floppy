@@ -770,6 +770,9 @@ class HistorySerializer(serializers.Serializer):
                 "start_date": getattr(instance, "start_date", None),
                 "end_date": instance.end_date,
                 "notes": getattr(instance, "notes", ""),
+                # FORK: client-supplied play id, so a syncing client can match
+                # its own event to the stored play after a restart.
+                "external_id": getattr(instance, "external_id", None),
             }
         status = StatusField().to_representation(instance)
 

@@ -33,6 +33,26 @@ def _movie_row(media_id, progressed_at):
     )
 
 
+def _title_search_result(media_type, query, page, source=None, *args, **kwargs):
+    """Echo a batch-test row's title back as an offline provider search hit.
+
+    These tests use non-numeric media_ids, so the importer's ID-healing path
+    discards them and resolves by title. Return a result carrying the row's
+    original id so the tests stay hermetic and still assert on it.
+    """
+    media_id = query.removeprefix("Movie ").strip()
+    return {
+        "results": [
+            {
+                "title": query,
+                "source": source,
+                "media_id": media_id,
+                "image": f"https://image/{media_id}.jpg",
+            },
+        ],
+    }
+
+
 class YamtrackBatchImportTests(TestCase):
     """Yamtrack imports stream rows while retaining import semantics."""
 
@@ -48,6 +68,12 @@ class YamtrackBatchImportTests(TestCase):
         )
         self.batch_size.start()
         self.addCleanup(self.batch_size.stop)
+        self.search = patch(
+            "app.providers.services.search",
+            side_effect=_title_search_result,
+        )
+        self.search.start()
+        self.addCleanup(self.search.stop)
 
     def test_dependency_ordering_survives_multiple_batches(self):
         fixture = MOCK_DATA / "import_yamtrack.csv"

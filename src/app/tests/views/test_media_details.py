@@ -2882,6 +2882,171 @@ class MediaDetailsViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.context["watch_providers"])
 
+    @patch("app.providers.services.get_media_metadata")
+    def test_media_details_renders_tvdb_series_with_null_country(
+        self,
+        mock_get_metadata,
+    ):
+        """TVDB omits country/languages; the detail page must not 500."""
+        Item.objects.create(
+            media_id="467209",
+            source=Sources.TVDB.value,
+            media_type=MediaTypes.TV.value,
+            title="Liar Game",
+            image="https://example.com/cover.jpg",
+        )
+        mock_get_metadata.return_value = {
+            "media_id": "467209",
+            "title": "Liar Game",
+            "media_type": MediaTypes.TV.value,
+            "source": Sources.TVDB.value,
+            "image": "https://example.com/cover.jpg",
+            "synopsis": "Synopsis",
+            "details": {
+                "format": "TV",
+                "status": "Ended",
+                "episodes": 12,
+                "country": None,
+                "languages": None,
+            },
+            "related": {},
+            "cast": [],
+            "crew": [],
+            "studios_full": [],
+        }
+
+        response = self.client.get(
+            reverse(
+                "media_details",
+                kwargs={
+                    "source": Sources.TVDB.value,
+                    "media_type": MediaTypes.TV.value,
+                    "media_id": "467209",
+                    "title": "liar-game",
+                },
+            ),
+            {"fragment": "secondary"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Unknown")
+
+    @patch("app.providers.services.get_media_metadata")
+    def test_media_details_renders_provider_language_list_with_null_entry(
+        self,
+        mock_get_metadata,
+    ):
+        """A null element in a provider language list must not 500 the detail page."""
+        Item.objects.create(
+            media_id="316239",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.TV.value,
+            title="Toonout",
+            image="https://example.com/cover.jpg",
+        )
+        mock_get_metadata.return_value = {
+            "media_id": "316239",
+            "title": "Toonout",
+            "media_type": MediaTypes.TV.value,
+            "source": Sources.TMDB.value,
+            "image": "https://example.com/cover.jpg",
+            "synopsis": "Synopsis",
+            "details": {
+                "format": "TV",
+                "status": "Ended",
+                "episodes": 12,
+                "country": None,
+                "languages": ["English", None],
+            },
+            "related": {},
+            "cast": [],
+            "crew": [],
+            "studios_full": [],
+        }
+
+        response = self.client.get(
+            reverse(
+                "media_details",
+                kwargs={
+                    "source": Sources.TMDB.value,
+                    "media_type": MediaTypes.TV.value,
+                    "media_id": "316239",
+                    "title": "toonout",
+                },
+            ),
+            {"fragment": "secondary"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "English")
+
+    @override_settings(TVDB_API_KEY="test-tvdb-key")
+    @patch("app.views.metadata_resolution.resolve_detail_metadata")
+    @patch("app.providers.services.get_media_metadata")
+    def test_grouped_anime_media_details_render_with_null_country(
+        self,
+        mock_get_metadata,
+        mock_resolve_detail_metadata,
+    ):
+        """TVDB anime with a null country/languages must not 500 (#1223)."""
+        Item.objects.create(
+            media_id="467209",
+            source=Sources.TVDB.value,
+            media_type=MediaTypes.TV.value,
+            library_media_type=MediaTypes.ANIME.value,
+            title="Liar Game",
+            image="https://example.com/cover.jpg",
+        )
+        base_metadata = {
+            "media_id": "467209",
+            "title": "Liar Game",
+            "media_type": MediaTypes.ANIME.value,
+            "identity_media_type": MediaTypes.TV.value,
+            "library_media_type": MediaTypes.ANIME.value,
+            "source": Sources.TVDB.value,
+            "source_url": "https://www.thetvdb.com/dereferrer/series/467209",
+            "max_progress": 12,
+            "image": "https://example.com/cover.jpg",
+            "synopsis": "Synopsis",
+            "details": {
+                "format": "TV",
+                "status": "Ended",
+                "episodes": 12,
+                "country": None,
+                "languages": None,
+            },
+            "related": {},
+            "cast": [],
+            "crew": [],
+            "studios_full": [],
+            "external_links": {},
+        }
+        mock_get_metadata.return_value = base_metadata
+        mock_resolve_detail_metadata.return_value = MetadataResolutionResult(
+            display_provider=Sources.TVDB.value,
+            identity_provider=Sources.TVDB.value,
+            mapping_status="identity",
+            header_metadata=base_metadata,
+            grouped_preview=None,
+            provider_media_id="467209",
+        )
+
+        response = self.client.get(
+            reverse(
+                "media_details",
+                kwargs={
+                    "source": Sources.TVDB.value,
+                    "media_type": MediaTypes.ANIME.value,
+                    "media_id": "467209",
+                    "title": "liar-game-2026",
+                },
+            ),
+            {"fragment": "secondary"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Unknown")
+
     @patch("app.views.metadata_resolution.resolve_mal_tmdb_identity")
     @patch("app.providers.services.get_media_metadata")
     def test_media_details_enriches_mal_anime_with_tmdb_watch_providers(

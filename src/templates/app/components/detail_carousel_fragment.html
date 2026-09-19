@@ -11,7 +11,8 @@
               class="relative block h-full w-full cursor-pointer"
               @click="videoPlaying = true"
               aria-label="{% translate "Play trailer" %}">
-        <img class="w-full h-full object-cover"
+        <img class="w-full h-full"
+             :class="fit === 'cover' ? 'object-cover' : 'object-contain'"
              :src="'https://img.youtube.com/vi/' + items[selected].key + '/maxresdefault.jpg'"
              onload="if (this.naturalWidth === 120) { this.src = this.src.replace('maxresdefault', 'hqdefault') }"
              alt="">

@@ -1052,3 +1052,98 @@ class ImportYamtrackSourceValidation(TestCase):
             CustomList.objects.filter(owner=self.user, name="Orphan").exists(),
         )
         self.assertTrue(any("garbage" in w for w in self.importer.warnings))
+
+
+class ImportYamtrackMediaIdValidation(TestCase):
+    """Non-numeric provider ids are healed by title instead of persisted (#1201).
+
+    A homemade import tool emitted UUIDs as TMDB media_ids. Those can never
+    resolve, so every metadata/genre/runtime backfill 404s and the imported
+    movies end up with no genres, breaking the genre filter.
+    """
+
+    def setUp(self):
+        """Create user for the tests."""
+        self.user = get_user_model().objects.create_user(
+            username="media-id-validation",
+            password="12345",
+        )
+
+    def _movie_csv(self, media_id, title="Some Movie"):
+        header = (
+            '"media_id","source","media_type","title","image","season_number",'
+            '"episode_number","score","progress","status","start_date","end_date",'
+            '"notes","progressed_at"\n'
+        )
+        row = (
+            f'"{media_id}","tmdb","movie","{title}",'
+            '"https://image.tmdb.org/t/p/w500/x.jpg","","","","1","Completed",'
+            '"","2024-02-09","","2024-02-09T15:30:00Z"'
+        )
+        return (header + row + "\n").encode("utf-8")
+
+    def _search_result(self, media_id="603", title="Some Movie"):
+        return {
+            "page": 1,
+            "total_results": 1,
+            "total_pages": 1,
+            "results": [
+                {
+                    "title": title,
+                    "source": "tmdb",
+                    "media_id": media_id,
+                    "image": "https://image.tmdb.org/t/p/w500/resolved.jpg",
+                },
+            ],
+        }
+
+    def test_non_numeric_tmdb_id_is_resolved_by_title(self):
+        """A UUID TMDB id is discarded and the row is matched by title."""
+        bad_id = "07b6ec19-40fb-5259-bb89-914b38eee381"
+        with patch(
+            "app.providers.services.search",
+            return_value=self._search_result(),
+        ) as mock_search:
+            yamtrack.importer(
+                BytesIO(self._movie_csv(bad_id)),
+                self.user,
+                "new",
+            )
+
+        mock_search.assert_called_once()
+        movie = Movie.objects.get(user=self.user)
+        self.assertEqual(movie.item.media_id, "603")
+        self.assertFalse(Item.objects.filter(media_id=bad_id).exists())
+
+    def test_unresolvable_title_is_skipped_with_a_warning(self):
+        """When no provider match exists the row is skipped, not persisted."""
+        with patch(
+            "app.providers.services.search",
+            return_value={
+                "page": 1,
+                "total_results": 0,
+                "total_pages": 1,
+                "results": [],
+            },
+        ):
+            counts, warnings = yamtrack.importer(
+                BytesIO(self._movie_csv("07b6ec19-40fb-5259-bb89-914b38eee381")),
+                self.user,
+                "new",
+            )
+
+        self.assertEqual(Movie.objects.filter(user=self.user).count(), 0)
+        self.assertIn("Could not resolve", warnings)
+
+    def test_numeric_tmdb_id_is_left_alone(self):
+        """A valid numeric TMDB id is not sent through title search."""
+        with patch("app.providers.services.search") as mock_search:
+            yamtrack.importer(
+                BytesIO(self._movie_csv("603")),
+                self.user,
+                "new",
+            )
+
+        mock_search.assert_not_called()
+        movie = Movie.objects.get(user=self.user)
+        self.assertEqual(movie.item.media_id, "603")

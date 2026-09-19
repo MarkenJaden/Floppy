@@ -111,6 +111,55 @@ def redact_secrets(text: str) -> str:
     return redacted
 
 
+_REDACTED_VALUE = "[REDACTED]"
+
+# Structured payload keys that name a person, a device, or a private server
+# rather than the media event a log line exists to diagnose. Matched
+# case-insensitively on the whole key.
+_PII_FIELD_NAMES = frozenset(
+    {
+        "publicaddress",
+        "public_address",
+        "uuid",
+        "machineidentifier",
+        "machine_identifier",
+        "librarysectiontitle",
+        "library_section_title",
+    }
+)
+
+# Identity containers are redacted whole. A Plex "Account" is a person's
+# identity and a "Server" is a private server's name and machine identifier;
+# no field in either is needed to diagnose media routing. "Player" is not a
+# container because its connection and platform fields are diagnostic, so only
+# the address and device identifiers inside it are redacted.
+_PII_CONTAINER_NAMES = frozenset({"account", "server"})
+
+
+def redact_payload_pii(value: Any) -> Any:
+    """Return a copy of a structured payload with identity fields redacted.
+
+    Webhook payloads carry a person's account identity, a device's public
+    address, and a private server's name and machine identifier next to the
+    media event a log line exists to diagnose. A text rule cannot tell
+    ``Account.title`` from ``Metadata.title``, so match on structure: redact the
+    containers that are identity end to end, and the named fields everywhere
+    else. The input is not modified.
+    """
+    if isinstance(value, Mapping):
+        redacted: dict[Any, Any] = {}
+        for key, item in value.items():
+            name = str(key).strip().casefold()
+            if name in _PII_CONTAINER_NAMES or name in _PII_FIELD_NAMES:
+                redacted[key] = _REDACTED_VALUE
+            else:
+                redacted[key] = redact_payload_pii(item)
+        return redacted
+    if isinstance(value, (list, tuple)):
+        return [redact_payload_pii(item) for item in value]
+    return value
+
+
 _REDACTING_FACTORY_MARKER = "_floppy_redacts_secrets"
 
 

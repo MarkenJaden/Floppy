@@ -2018,6 +2018,214 @@ class PlexWebhookTests(TestCase):
         )
 
     @patch("app.providers.tmdb.tv")
+    def test_show_rating_updates_tracked_tv(self, mock_tv):
+        """A show-level media.rate updates the tracked TV show rating."""
+        mock_tv.return_value = {
+            "title": "Breaking Bad",
+            "image": "",
+        }
+        tv_item = Item.objects.create(
+            media_id="1396",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.TV.value,
+            title="Breaking Bad",
+            image="",
+        )
+        tv_instance = TV.objects.create(
+            item=tv_item,
+            user=self.user,
+            status=Status.IN_PROGRESS.value,
+        )
+
+        payload = {
+            "event": "media.rate",
+            "Account": {"title": "testuser"},
+            "Metadata": {
+                "type": "show",
+                "title": "Breaking Bad",
+                "userRating": 7,
+                "Guid": [
+                    {"id": "imdb://tt0903747"},
+                    {"id": "tmdb://1396"},
+                    {"id": "tvdb://81189"},
+                ],
+            },
+        }
+
+        response = self._post_payload(payload)
+
+        self.assertEqual(response.status_code, 200)
+        tv_instance.refresh_from_db()
+        self.assertEqual(tv_instance.score, 7)
+
+    @patch("app.providers.tmdb.search")
+    @patch("app.providers.tmdb.find")
+    @patch("app.providers.tmdb.tv_with_seasons")
+    def test_season_rating_creates_and_updates_season(
+        self,
+        mock_tv_with_seasons,
+        mock_find,
+        mock_search,
+    ):
+        """A season-level media.rate updates the matching Season rating."""
+        mock_find.return_value = {
+            "tv_season_results": [
+                {"show_id": 1396, "season_number": 4},
+            ],
+            "tv_results": [],
+        }
+        mock_tv_with_seasons.return_value = {
+            "title": "Breaking Bad",
+            "image": "",
+            "season/4": {"image": "http://example.com/s4.jpg"},
+        }
+
+        payload = {
+            "event": "media.rate",
+            "Account": {"title": "testuser"},
+            "Metadata": {
+                "type": "season",
+                "title": "Season 4",
+                "parentTitle": "Breaking Bad",
+                "userRating": 7,
+                "Guid": [
+                    {"id": "tmdb://525713"},
+                    {"id": "tvdb://2191495"},
+                ],
+            },
+        }
+
+        response = self._post_payload(payload)
+
+        self.assertEqual(response.status_code, 200)
+        season = Season.objects.get(
+            item__media_id="1396",
+            item__season_number=4,
+            user=self.user,
+        )
+        self.assertEqual(season.score, 7)
+        mock_find.assert_called_once_with("2191495", "tvdb_id")
+        mock_search.assert_not_called()
+
+    @patch("app.providers.tmdb.search")
+    @patch("app.providers.tmdb.find")
+    @patch("app.providers.tmdb.tv_with_seasons")
+    def test_season_rating_falls_back_to_parent_title(
+        self,
+        mock_tv_with_seasons,
+        mock_find,
+        mock_search,
+    ):
+        """A season rating without a season GUID resolves via parentTitle."""
+        mock_find.return_value = {"tv_season_results": [], "tv_results": []}
+        mock_search.return_value = {
+            "results": [{"media_id": "1396", "title": "Breaking Bad"}],
+        }
+        mock_tv_with_seasons.return_value = {
+            "title": "Breaking Bad",
+            "image": "",
+        }
+
+        payload = {
+            "event": "media.rate",
+            "Account": {"title": "testuser"},
+            "Metadata": {
+                "type": "season",
+                "title": "Season 4",
+                "parentTitle": "Breaking Bad",
+                "index": 4,
+                "userRating": 6,
+                "Guid": [{"id": "plex://season/abc"}],
+            },
+        }
+
+        response = self._post_payload(payload)
+
+        self.assertEqual(response.status_code, 200)
+        season = Season.objects.get(
+            item__media_id="1396",
+            item__season_number=4,
+            user=self.user,
+        )
+        self.assertEqual(season.score, 6)
+        mock_search.assert_called_once_with(
+            MediaTypes.TV.value,
+            "Breaking Bad",
+            page=1,
+        )
+
+    @patch("app.providers.tmdb.search")
+    @patch("app.providers.tmdb.find")
+    def test_season_rating_removal_clears_existing_score(
+        self,
+        mock_find,
+        mock_search,
+    ):
+        """A -1.0 season rating clears the tracked Season score."""
+        mock_find.return_value = {
+            "tv_season_results": [
+                {"show_id": 1396, "season_number": 4},
+            ],
+            "tv_results": [],
+        }
+        tv_item = Item.objects.create(
+            media_id="1396",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.TV.value,
+            title="Breaking Bad",
+            image="",
+        )
+        tv_instance = TV.objects.create(
+            item=tv_item,
+            user=self.user,
+            status=Status.IN_PROGRESS.value,
+        )
+        season_item = Item.objects.create(
+            media_id="1396",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.SEASON.value,
+            season_number=4,
+            title="Breaking Bad",
+            image="",
+        )
+        season_instance = Season.objects.create(
+            item=season_item,
+            user=self.user,
+            related_tv=tv_instance,
+            score=7,
+        )
+
+        payload = {
+            "event": "media.rate",
+            "Account": {"title": "testuser"},
+            "Metadata": {
+                "type": "season",
+                "title": "Season 4",
+                "parentTitle": "Breaking Bad",
+                "index": 4,
+                "userRating": -1.0,
+                "Guid": [
+                    {"id": "tmdb://525713"},
+                    {"id": "tvdb://2191495"},
+                ],
+            },
+        }
+
+        response = self._post_payload(payload)
+
+        self.assertEqual(response.status_code, 200)
+        season_instance.refresh_from_db()
+        self.assertIsNone(season_instance.score)
+        self.assertEqual(
+            Season.objects.filter(
+                item__media_id="1396",
+                item__season_number=4,
+                user=self.user,
+            ).count(),
+            1,
+        )
+
+    @patch("app.providers.tmdb.tv")
     def test_remove_rating_reuses_tv_item_from_existing_bucket(self, mock_tv):
         """Rating removal should find a TV item already tracked in another bucket.
 

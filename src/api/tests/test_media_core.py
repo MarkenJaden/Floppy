@@ -2031,6 +2031,89 @@ class MediaCoreTests(FloppyApiTestCase):
         self.assertEqual(response.status_code, 204)
         self.assertFalse(MoviePlay.objects.filter(id=play.id).exists())
 
+    def test_media_consumption_entry_detail_colliding_movie_id_deletes_play(self):
+        """A play id equal to the Movie id deletes the play, not the movie.
+
+        Movie and MoviePlay use independent id sequences, so an entry id can
+        match both. Checking the Movie row first deleted the whole movie and
+        its plays (issue #1217).
+        """
+        movie = self.movie_medias[0]
+        movie_item = self.items_by_type[MediaTypes.MOVIE.value][0]
+        MoviePlay.objects.create(
+            id=movie.id,
+            movie=movie,
+            end_date=datetime.datetime(2024, 1, 1, tzinfo=datetime.UTC),
+        )
+        survivor = MoviePlay.objects.create(
+            id=movie.id + 1000,
+            movie=movie,
+            end_date=datetime.datetime(2025, 2, 14, tzinfo=datetime.UTC),
+        )
+
+        response = self.call_api(
+            "delete",
+            "api_media_consumption_entry_detail",
+            args=(
+                MediaTypes.MOVIE.value,
+                movie_item.source,
+                movie_item.media_id,
+                movie.id,
+            ),
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertTrue(Movie.objects.filter(id=movie.id).exists())
+        self.assertFalse(MoviePlay.objects.filter(id=movie.id).exists())
+        self.assertTrue(MoviePlay.objects.filter(id=survivor.id).exists())
+
+    def test_media_consumption_entry_detail_colliding_movie_id_reads_play(self):
+        """GET and PATCH resolve a colliding entry id to the play, not the movie.
+
+        The movie's own end_date/notes must stay untouched when the id belongs
+        to a MoviePlay (issue #1217).
+        """
+        movie = self.movie_medias[0]
+        movie_item = self.items_by_type[MediaTypes.MOVIE.value][0]
+        MoviePlay.objects.create(
+            id=movie.id,
+            movie=movie,
+            end_date=datetime.datetime(2024, 1, 1, tzinfo=datetime.UTC),
+        )
+
+        get_response = self.call_api(
+            "get",
+            "api_media_consumption_entry_detail",
+            args=(
+                MediaTypes.MOVIE.value,
+                movie_item.source,
+                movie_item.media_id,
+                movie.id,
+            ),
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(get_response.status_code, 200)
+        self.assertIsNotNone(get_response.json()["end_date"])
+
+        patch_response = self.call_api(
+            "patch",
+            "api_media_consumption_entry_detail",
+            args=(
+                MediaTypes.MOVIE.value,
+                movie_item.source,
+                movie_item.media_id,
+                movie.id,
+            ),
+            payload={"notes": "collision-note"},
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(patch_response.status_code, 200)
+        movie.refresh_from_db()
+        self.assertNotEqual(movie.notes, "collision-note")
+
     def test_media_consumption_entry_detail_delete_removes_history_entry(self):
         """Entry-detail DELETE should remove an existing consumption row."""
         movie_item = self.items_by_type[MediaTypes.MOVIE.value][0]

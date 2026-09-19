@@ -8,8 +8,8 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.db import close_old_connections, connection
-from django.test import TestCase, TransactionTestCase
-from django.urls import reverse
+from django.test import TestCase, TransactionTestCase, override_settings
+from django.urls import reverse, set_script_prefix
 
 from app import live_playback
 from app.models import Item, MediaTypes, PlaybackProgress, Sources
@@ -93,6 +93,64 @@ class ScrobbleProgressFloorTests(TestCase):
 
         state = live_playback.get_user_playback_state(self.user.id)
         self.assertEqual(state["view_offset_seconds"], 600)
+
+
+class OffsetlessPauseTests(TestCase):
+    """A pause must keep the position playing had already established."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="offsetlesspause",
+            password="pw",
+        )
+
+    def tearDown(self):
+        live_playback.clear_user_playback_state(self.user.id)
+        cache.clear()
+        super().tearDown()
+
+    @patch("app.live_playback._attach_resolved_image")
+    def _event(self, _mock_image, *, event_type, offset):
+        live_playback.apply_playback_event(
+            user_id=self.user.id,
+            event_type=event_type,
+            playback_media_type=MediaTypes.MOVIE.value,
+            media_id="701",
+            source=Sources.TMDB.value,
+            rating_key="rk-1",
+            title="A Movie",
+            view_offset_seconds=offset,
+            duration_seconds=5340,
+        )
+
+    def test_offsetless_pause_keeps_the_extrapolated_position(self):
+        """Not every client reports a view offset, and a pause writes state.
+
+        Storing the raw offset there discarded what playing had established: a
+        session that began at zero and ran two minutes was stored as zero the
+        moment it was paused, and every reader showed 0:00 for something two
+        minutes in.
+        """
+        self._event(event_type="media.play", offset=0)
+
+        # Two minutes of playback, then a pause the client reports no offset for.
+        state = live_playback.get_user_playback_state(self.user.id)
+        state["updated_at_ts"] = state["updated_at_ts"] - 120
+        live_playback.set_user_playback_state(self.user.id, state)
+
+        self._event(event_type="media.pause", offset=None)
+        paused = live_playback.get_user_playback_state(self.user.id)
+
+        self.assertEqual(paused["status"], live_playback.PLAYBACK_STATUS_PAUSED)
+        self.assertGreaterEqual(paused["view_offset_seconds"], 118)
+
+    def test_a_reported_offset_still_wins(self):
+        """The estimate only stands in when the event says nothing."""
+        self._event(event_type="media.play", offset=0)
+        self._event(event_type="media.pause", offset=42)
+
+        state = live_playback.get_user_playback_state(self.user.id)
+        self.assertEqual(state["view_offset_seconds"], 42)
 
 
 class ApplyPlaybackEventImageTests(TestCase):
@@ -345,6 +403,117 @@ class MalCourCardTests(TestCase):
         )
         self.assertEqual(card["image"], "https://example.com/haruhi.jpg")
         self.assertEqual(card["episode_code"], "E03")
+
+
+class LiveDetailsUrlTests(TestCase):
+    """The card's hand-built links are exactly what ``reverse()`` produces.
+
+    They are built without ``reverse()`` so a Celery worker can render the
+    card; this holds each branch to the real route in ``app/urls.py``.
+    """
+
+    CASES = (
+        ({"media_id": None}, None, "home", {}),
+        (
+            {
+                "media_id": "603",
+                "media_type": MediaTypes.MOVIE.value,
+                "title": "The Matrix",
+            },
+            None,
+            "media_details",
+            {
+                "media_type": MediaTypes.MOVIE.value,
+                "media_id": "603",
+                "title": "the-matrix",
+            },
+        ),
+        (
+            {"media_id": "603", "media_type": None, "title": "The Matrix"},
+            None,
+            "media_details",
+            {
+                "media_type": MediaTypes.MOVIE.value,
+                "media_id": "603",
+                "title": "the-matrix",
+            },
+        ),
+        (
+            {
+                "media_id": "849",
+                "media_type": MediaTypes.EPISODE.value,
+                "series_title": "Haruhi",
+            },
+            MediaTypes.ANIME.value,
+            "media_details",
+            {
+                "media_type": MediaTypes.ANIME.value,
+                "media_id": "849",
+                "title": "haruhi",
+            },
+        ),
+        (
+            {
+                "media_id": "1668",
+                "media_type": MediaTypes.EPISODE.value,
+                "series_title": "Friends",
+                "season_number": 3,
+            },
+            None,
+            "season_details",
+            {"media_id": "1668", "title": "friends", "season_number": 3},
+        ),
+        (
+            {
+                "media_id": "1668",
+                "media_type": MediaTypes.EPISODE.value,
+                "series_title": "Friends",
+            },
+            None,
+            "media_details",
+            {"media_type": MediaTypes.TV.value, "media_id": "1668", "title": "friends"},
+        ),
+        # `<path:media_id>` keeps slashes and quotes the rest; so must we.
+        (
+            {
+                "media_id": "a b/ç",
+                "media_type": MediaTypes.MOVIE.value,
+                "title": "Odd Id",
+            },
+            None,
+            "media_details",
+            {
+                "media_type": MediaTypes.MOVIE.value,
+                "media_id": "a b/ç",
+                "title": "odd-id",
+            },
+        ),
+    )
+
+    def _assert_matches_reverse(self):
+        for overrides, library_media_type, name, route_kwargs in self.CASES:
+            state = {"source": Sources.TMDB.value, **overrides}
+            kwargs = (
+                {"source": Sources.TMDB.value, **route_kwargs} if route_kwargs else None
+            )
+            with self.subTest(name=name, state=state):
+                self.assertEqual(
+                    live_playback._build_details_url(state, library_media_type),
+                    reverse(name, kwargs=kwargs),
+                )
+
+    def test_links_match_reverse(self):
+        self._assert_matches_reverse()
+
+    @override_settings(FORCE_SCRIPT_NAME="/floppy")
+    def test_request_script_prefix_is_not_applied_twice(self):
+        """In a request under BASE_URL the prefix is already set; keep it once."""
+        set_script_prefix("/floppy/")
+        self.addCleanup(set_script_prefix, "/")
+        self._assert_matches_reverse()
+        self.assertTrue(
+            live_playback._build_details_url({"media_id": None}).startswith("/floppy/"),
+        )
 
 
 class ResolveStateImageTaskTests(TestCase):

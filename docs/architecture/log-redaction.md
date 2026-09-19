@@ -92,6 +92,26 @@ The keyword must be the last part of the name, so diagnostic fields stay
 readable: `status_code=200`, `error_code=RATE_LIMIT`, `token_count=512` and
 `tokenizer_config=default` are not changed.
 
+## Structured payloads
+
+A webhook payload holds a person's account identity, their device's public
+address, and the private server's name and machine identifier next to the media
+event the log line exists to diagnose. A text rule cannot tell `Account.title`
+(a username) from `Metadata.title` (a media title), so
+`redact_payload_pii()` in `src/app/log_safety.py` matches on structure before
+`_process_webhook` dumps the payload.
+
+| Key | Treatment |
+|---|---|
+| `Account`, `Server` | The whole object is replaced with `[REDACTED]`. |
+| `publicAddress`, `uuid`, `machineIdentifier` | The value is replaced, at any depth. |
+| `librarySectionTitle` | The value is replaced. |
+| `Metadata.title`, ids, `event`, `Player.local` | Kept: media identity is not PII. |
+
+The scrubber returns a copy, so the payload the processor handles is unchanged.
+It runs before `redact_secrets()`, which still applies to the dumped text as a
+second boundary.
+
 ## What the rules do not cover
 
 **OAuth `code` parameters.** `code` is too general to match. `status_code`,

@@ -817,3 +817,15 @@ class MediaListSqlPushdownTests(FloppyApiTestCase):
                 "title",
             ),
         )
+        # Season rows derive end_date/progressed_at from episodes, so the SQL
+        # latest-status subquery is only unsafe when a status filter is active.
+        self.assertTrue(
+            can_paginate_in_sql(base, MediaTypes.SEASON.value, "title"),
+        )
+        self.assertFalse(
+            can_paginate_in_sql(
+                replace(base, statuses=("In progress",)),
+                MediaTypes.SEASON.value,
+                "title",
+            ),
+        )

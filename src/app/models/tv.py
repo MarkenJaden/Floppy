@@ -1286,7 +1286,12 @@ class Season(Media):
         return None
 
     def watch(
-        self, episode_number, end_date, watch_operation_id=None, **episode_fields
+        self,
+        episode_number,
+        end_date,
+        watch_operation_id=None,
+        external_id=None,
+        **episode_fields,
     ):
         """Create or add a repeat to an episode of the season."""
         from app import fork_services_episode
@@ -1298,6 +1303,7 @@ class Season(Media):
             item,
             end_date,
             watch_operation_id=watch_operation_id,
+            external_id=external_id,
             **episode_fields,
         )
         if result.created:
@@ -1310,8 +1316,12 @@ class Season(Media):
         """Unwatch the current episode of the season."""
         self.unwatch(self.progress)
 
-    def unwatch(self, episode_number):
-        """Unwatch the episode instance."""
+    def unwatch(self, episode_number, external_id=None):
+        """Unwatch the episode instance.
+
+        Targets the play matching ``external_id`` when one is given, otherwise
+        the most recent play of the episode.
+        """
         item = self.get_episode_item(episode_number)
 
         episodes = Episode.objects.filter(
@@ -1319,7 +1329,10 @@ class Season(Media):
             item=item,
         ).order_by("-end_date")
 
-        episode = episodes.first()
+        if external_id:
+            episode = episodes.filter(external_id=external_id).first()
+        else:
+            episode = episodes.first()
 
         if episode is None:
             logger.warning(
@@ -1831,6 +1844,7 @@ class Episode(models.Model):
             "created_at",
             "score",
             "watch_operation_id",
+            "external_id",
             # `status` stays excluded: every episode row is a watch, so its
             # status is inert noise in the timeline. `start_date` is tracked so
             # the history modal can show "Started on …" (issue #377).
@@ -1841,6 +1855,7 @@ class Episode(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     watch_operation_id = models.UUIDField(null=True, unique=True, editable=False)
+    external_id = models.CharField(max_length=255, null=True, blank=True)
     item = models.ForeignKey(Item, on_delete=models.CASCADE, null=True)
     related_season = models.ForeignKey(
         Season,
@@ -1876,6 +1891,15 @@ class Episode(models.Model):
             "item__episode_number",
             "-end_date",
             "-created_at",
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["related_season", "item", "external_id"],
+                name="app_episode_unique_episode_external_id",
+                condition=models.Q(external_id__isnull=False) & ~models.Q(
+                    external_id="",
+                ),
+            ),
         ]
 
     def __str__(self):

@@ -173,13 +173,6 @@
     <div class="mb-3 sm:mb-1 text-center md:text-start">
       <div class="inline-flex items-center gap-2 md:flex md:gap-2">
         <h1 class="text-3xl font-bold">{{ media|display_title:user }}</h1>
-        {% if media_type == MediaTypes.TV.value and current_instance and not public_view %}
-          <a href="{% url 'episode_ordering_settings' current_instance.pk %}"
-             class="text-sm text-[var(--color-link)] hover:text-[var(--color-link-hover)]"
-             aria-label="{% translate 'Episode ordering' %}">
-            {% translate "Episode ordering" %}
-          </a>
-        {% endif %}
         {% if detail_alt_title %}
           <div class="relative shrink-0" x-data="{ tooltipOpen: false }">
             <button @mouseenter="tooltipOpen = true"

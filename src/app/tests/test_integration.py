@@ -781,6 +781,144 @@ class IntegrationTest(StaticLiveServerTestCase):
         edit_modal.locator("button[type='button']").first.click()
         expect(self.page.locator("[data-track-modal-root]:visible")).to_have_count(0)
 
+    def _stretch_content_container(self):
+        """Make the details page long, as the reported scenario describes."""
+        self.page.evaluate(
+            """() => {
+                const container = document.querySelector('main > .container');
+                const spacer = document.createElement('div');
+                spacer.style.height = '2500px';
+                container.appendChild(spacer);
+            }"""
+        )
+
+    def _assert_visible_overlay_fills_viewport(self):
+        """A `fixed inset-0` overlay must cover the viewport, not the document.
+
+        A `transform`, `filter` or `backdrop-filter` on any ancestor makes that
+        ancestor the CSS containing block for `position: fixed` descendants, so
+        the overlay would be sized to the (document-tall) content container and
+        its content centered far below the visible viewport (#1203).
+        """
+        overlay = self.page.locator("div.fixed.inset-0:visible").first
+        expect(overlay).to_be_visible()
+        box = overlay.bounding_box()
+        viewport = self.page.viewport_size
+        self.assertIsNotNone(box)
+        self.assertLess(abs(box["x"]), 2)
+        self.assertLess(abs(box["y"]), 2)
+        self.assertLess(abs(box["width"] - viewport["width"]), 2)
+        self.assertLess(abs(box["height"] - viewport["height"]), 2)
+
+    @patch("app.providers.services.get_media_metadata")
+    def test_track_modal_overlay_is_viewport_anchored_on_long_page(
+        self,
+        mock_get_metadata,
+    ):
+        """The logging modal must anchor to the viewport on a long page (#1203)."""
+        mock_get_metadata.return_value = {
+            "media_id": "238",
+            "title": "Test Movie",
+            "media_type": MediaTypes.MOVIE.value,
+            "source": Sources.TMDB.value,
+            "image": "http://example.com/image.jpg",
+            "max_progress": 1,
+            "details": {"release_date": "2019-11-08"},
+            "related": {},
+        }
+        item = Item.objects.create(
+            media_id="238",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.MOVIE.value,
+            title="Test Movie",
+            image="http://example.com/image.jpg",
+        )
+        Movie.objects.create(
+            item=item,
+            user=self.user,
+            status=Status.COMPLETED.value,
+            progress=1,
+        )
+
+        self.page.goto(
+            self.live_server_url
+            + reverse(
+                "media_details",
+                kwargs={
+                    "source": Sources.TMDB.value,
+                    "media_type": MediaTypes.MOVIE.value,
+                    "media_id": "238",
+                    "title": "test-movie",
+                },
+            ),
+        )
+        expect(self.page.get_by_role("main")).to_contain_text("Test Movie")
+        self._stretch_content_container()
+
+        self.page.get_by_role("button", name="More tracking actions").click()
+        self.page.get_by_role("button", name="Add new entry").click()
+        expect(self.page.locator("[data-track-modal-root]:visible")).to_be_visible()
+
+        self._assert_visible_overlay_fills_viewport()
+
+    @patch("app.providers.tmdb.carousel_media")
+    @patch("app.providers.services.get_media_metadata")
+    def test_gallery_lightbox_overlay_is_viewport_anchored_on_long_page(
+        self,
+        mock_get_metadata,
+        mock_carousel_media,
+    ):
+        """The gallery lightbox must anchor to the viewport on a long page (#1203)."""
+        mock_get_metadata.return_value = {
+            "media_id": "carousel-1203",
+            "title": "Carousel Movie",
+            "media_type": MediaTypes.MOVIE.value,
+            "source": Sources.TMDB.value,
+            "image": "http://example.com/image.jpg",
+            "max_progress": 1,
+            "details": {"release_date": "2019-11-08"},
+            "related": {},
+        }
+        mock_carousel_media.return_value = {
+            "video": {"key": "dQw4w9WgXcQ"},
+            "photos": [{"file_path": "/photo-a.jpg"}, {"file_path": "/photo-b.jpg"}],
+        }
+        item = Item.objects.create(
+            media_id="carousel-1203",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.MOVIE.value,
+            title="Carousel Movie",
+            image="http://example.com/image.jpg",
+        )
+        Movie.objects.create(
+            item=item,
+            user=self.user,
+            status=Status.COMPLETED.value,
+            progress=1,
+        )
+
+        self.page.goto(
+            self.live_server_url
+            + reverse(
+                "media_details",
+                kwargs={
+                    "source": Sources.TMDB.value,
+                    "media_type": MediaTypes.MOVIE.value,
+                    "media_id": "carousel-1203",
+                    "title": "carousel-movie",
+                },
+            ),
+        )
+        expect(self.page.get_by_role("main")).to_contain_text("Carousel Movie")
+
+        expand = self.page.locator("button[aria-label='View full size']").first
+        expect(expand).to_be_visible()
+        self._stretch_content_container()
+        expand.click()
+        expect(self.page.locator("div.fixed.inset-0.z-50:visible")).to_be_visible()
+
+        self._assert_visible_overlay_fills_viewport()
+
     @patch("app.providers.services.get_media_metadata")
     def test_session_history_calendar_and_shared_date_picker_navigation(
         self,

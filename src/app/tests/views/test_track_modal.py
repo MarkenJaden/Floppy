@@ -182,6 +182,7 @@ class TrackModalViewTests(TestCase):
         self.assertContains(response, "Image URL")
         self.assertContains(response, "Save Image")
         self.assertContains(response, "Metadata Provider")
+        self.assertContains(response, "Fix match")
         self.assertContains(response, "Custom")
         self.assertContains(response, "Currently visible in Discover.")
         self.assertContains(response, 'hx-post="/discover/toggle-hidden"', html=False)
@@ -1242,6 +1243,7 @@ class TrackModalViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Episode Plays")
+        self.assertContains(response, "Episode ordering")
         self.assertEqual(
             response.context["episode_plays_form"].initial["first_episode_number"],
             1,

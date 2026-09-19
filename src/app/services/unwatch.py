@@ -85,14 +85,21 @@ def retract_movie_watch(user, item, *, external_id=None):
 
 
 @transaction.atomic
-def retract_episode_watch(user, item, *, watch_operation_id=None):
+def retract_episode_watch(
+    user,
+    item,
+    *,
+    external_id=None,
+    watch_operation_id=None,
+):
     """Retract an episode watch, keeping unattributable plays.
 
     Every ``Episode`` row is one watch, so there is no status to revert
-    independently of the rows. With a ``watch_operation_id`` exactly the
-    matching play is removed. Without one the most recent play is dropped and
-    the rest are kept — a provider saying "unwatched" is at most evidence about
-    the latest viewing, never about all of them.
+    independently of the rows. With an ``external_id`` or
+    ``watch_operation_id`` exactly the matching play is removed. Without one
+    the most recent play is dropped and the rest are kept — a provider saying
+    "unwatched" is at most evidence about the latest viewing, never about all
+    of them.
     """
     from app.models import Episode
 
@@ -102,6 +109,9 @@ def retract_episode_watch(user, item, *, watch_operation_id=None):
 
     if watch_operation_id:
         target = rows.filter(watch_operation_id=watch_operation_id).first()
+        attributable = target is not None
+    elif external_id:
+        target = rows.filter(external_id=external_id).first()
         attributable = target is not None
     else:
         target = rows.order_by("-end_date", "-id").first()
@@ -129,6 +139,7 @@ def retract_watch(user, item, *, external_id=None, watch_operation_id=None):
         return retract_episode_watch(
             user,
             item,
+            external_id=external_id,
             watch_operation_id=watch_operation_id,
         )
 

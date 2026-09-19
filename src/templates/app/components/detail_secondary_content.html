@@ -1,4 +1,3 @@
-
 {% load i18n %}
 {% load app_tags %}
 {% load user_tags %}
@@ -162,12 +161,20 @@
                       {{ value|default_if_none:_("Unknown") }}{% if media.details.episodes %}<span class="text-[var(--color-text-muted)] mx-1">·</span>{% blocktranslate trimmed with value_1=media.details.episodes count count=media.details.episodes|safe_count %}{{ value_1 }} episode{% plural %}{{ value_1 }} episodes{% endblocktranslate %}{% endif %}
                     </p>
                   {% else %}
-                    <h3 class="text-sm font-semibold text-[var(--color-text-muted)] tracking-wide">{{ key|no_underscore|upper }}</h3>
+                    {% with detail_label=key|no_underscore|title %}
+                      <h3 class="text-sm font-semibold text-[var(--color-text-muted)] tracking-wide">{% translate detail_label %}</h3>
+                    {% endwith %}
                     {% if value|is_list %}
-                      {% for item in value %}<p class="text-sm text-[var(--color-text-secondary)]">{{ item|iso_date_format:request.user }}</p>{% endfor %}
+                      {% if key == "languages" or key == "country" or key == "countries" or key == "production_countries" or key == "origin_country" %}
+                        {% for item in value %}<p class="text-sm text-[var(--color-text-secondary)]">{% if item %}{% translate item %}{% else %}{% translate "Unknown" %}{% endif %}</p>{% endfor %}
+                      {% else %}
+                        {% for item in value %}<p class="text-sm text-[var(--color-text-secondary)]">{{ item|iso_date_format:request.user }}</p>{% endfor %}
+                      {% endif %}
                     {% else %}
                       {% if key == 'format' and media_type == MediaTypes.ANIME.value %}
                         <p class="text-sm text-[var(--color-text-secondary)]">{% translate "Anime" %}</p>
+                      {% elif key == 'status' or key == 'country' or key == 'countries' or key == 'production_countries' or key == 'origin_country' %}
+                        <p class="text-sm text-[var(--color-text-secondary)]">{% if value %}{% translate value %}{% else %}{% translate "Unknown" %}{% endif %}</p>
                       {% else %}
                         <p class="text-sm text-[var(--color-text-secondary)]">{{ value|default_if_none:_("Unknown") }}</p>
                       {% endif %}
@@ -347,7 +354,9 @@
                        x-init="syncDetailGrid()"
                        @resize.window.debounce.100ms="syncDetailGrid()">
                 <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
-                  <h2 class="text-xl font-bold">{{ name|no_underscore|title }}</h2>
+                  {% with related_label=name|no_underscore|title %}
+                    <h2 class="text-xl font-bold">{% translate related_label %}</h2>
+                  {% endwith %}
                   {% if not public_view|default:False and user.is_authenticated %}
                     <button type="button"
                             hx-get="{% url 'collection_add_to_list_modal' %}?source={{ media.source|urlencode }}&media_type={{ media.media_type|urlencode }}&media_id={{ media.media_id|urlencode }}&collection_name={{ name|urlencode }}"

@@ -170,7 +170,8 @@ what the user approved, and the settings page names the shortfall as
 operations.
 
 - With an identifiable play (`MoviePlay.external_id`,
-  `Episode.watch_operation_id`) exactly that play is removed.
+  `Episode.external_id`, `Episode.watch_operation_id`) exactly that play is
+  removed.
 - Without one, an episode retraction drops the latest play and keeps the rest;
   a movie retraction keeps every play and reverts the row's status. A provider
   saying "unwatched" is at most evidence about the most recent viewing.

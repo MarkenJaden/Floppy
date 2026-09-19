@@ -503,6 +503,20 @@ class MediaListViewTests(TestCase):
             app_tags.media_type_readable_plural(MediaTypes.MOVIE.value).lower(),
         )
 
+    def test_season_media_list_with_status_filter_does_not_500(self):
+        """Season rows derive end_date from episodes, so the SQL latest-status
+        subquery must not be used for them (#1222).
+        """
+        self._create_tv_runtime_entry("season-status-filter", "Season Status TV", [24])
+
+        response = self.client.get(
+            reverse("medialist", args=[MediaTypes.SEASON.value]),
+            {"status": Status.IN_PROGRESS.value, "sort": "title"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Season Status TV Season 1")
+
     def test_default_media_list_excludes_untracked_collection_entries(self):
         item = Item.objects.create(
             media_id="untracked-manga-default",
