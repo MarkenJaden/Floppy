@@ -117,10 +117,7 @@ def _cleanup_duplicate_episodes_global():
         grouped_ids.setdefault(key, []).append(episode_id)
 
     duplicate_ids = [
-        episode_id
-        for ids in grouped_ids.values()
-        if len(ids) > 1
-        for episode_id in ids
+        episode_id for ids in grouped_ids.values() if len(ids) > 1 for episode_id in ids
     ]
     grouped_ids = {key: ids for key, ids in grouped_ids.items() if len(ids) > 1}
 

@@ -16,7 +16,9 @@ from django.urls import ResolverMatch
 from app import memory_envelope
 
 _STATM = "1000 2048 300 40 0 500 0\n"
-_STATUS = "Name:\tpython\nVmPeak:\t  900000 kB\nVmHWM:\t   16384 kB\nVmRSS:\t    8192 kB\n"
+_STATUS = (
+    "Name:\tpython\nVmPeak:\t  900000 kB\nVmHWM:\t   16384 kB\nVmRSS:\t    8192 kB\n"
+)
 _MEMORY_STAT = (
     "anon 104857600\nfile 209715200\nkernel_stack 131072\n"
     "kernel 8388608\nslab 4194304\npgfault 12345\n"
@@ -326,7 +328,7 @@ class RedactedRouteTests(SimpleTestCase):
         return memory_envelope.redacted_route(FakeRequest())
 
     def test_keeps_the_part_that_identifies_the_page(self):
-        """"/medialist/<str:media_type>" alone would not say *movie*."""
+        """ "/medialist/<str:media_type>" alone would not say *movie*."""
         self.assertEqual(
             self.name_for("medialist/<str:media_type>", {"media_type": "movie"}),
             "/medialist/movie",
@@ -378,6 +380,7 @@ class MiddlewareTests(SimpleTestCase):
         middleware = memory_envelope.MemoryHighWaterMiddleware(
             lambda request: HttpResponse("ok"),
         )
+
         class FakeRequest:
             method = "GET"
             resolver_match = None

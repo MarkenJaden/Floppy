@@ -693,7 +693,9 @@ class PlaybackWebhookTests(FloppyApiTestCase):
         # — `requests` re-encoding a dict would produce bytes the receiver
         # cannot reproduce from what it was given.
         self.assertNotIn("json", post.call_args.kwargs)
-        self.assertEqual(json.loads(sent)["status"], live_playback.PLAYBACK_STATUS_PLAYING)
+        self.assertEqual(
+            json.loads(sent)["status"], live_playback.PLAYBACK_STATUS_PLAYING
+        )
 
     def test_no_secret_sends_no_signature(self):
         """Signing is optional; without a secret the header is absent."""

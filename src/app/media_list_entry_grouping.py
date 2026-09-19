@@ -31,6 +31,7 @@ _ENTRY_GROUPING_MODE: ContextVar[bool | None] = ContextVar(
 )
 _POST_SORT_KEYS = frozenset({"progress", "plays", "next_episode_air_date"})
 
+
 def preference_field(media_type: str) -> str | None:
     """Return the saved preference field for a supported media type."""
     return ENTRY_GROUPING_PREFERENCE_FIELDS.get(media_type)

@@ -804,7 +804,9 @@ class StatisticsRefreshHistoryDebounceTests(StatisticsRunTestCase):
         """Start a run, advance it once, then move History under it."""
         statistics_refresh_run.begin_run(self.user.id, "All Time", chunk_size=2)
         run = statistics_refresh_run.load_run(self.user.id, "All Time")
-        with patch("app.tasks_interactive.continue_statistics_refresh_task.apply_async"):
+        with patch(
+            "app.tasks_interactive.continue_statistics_refresh_task.apply_async"
+        ):
             statistics_refresh_run.advance_chunked_run(
                 self.user.id,
                 "All Time",

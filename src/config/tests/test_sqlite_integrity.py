@@ -1970,7 +1970,10 @@ class SnapshotPageCacheReleaseTests(SimpleTestCase):
         with (
             tempfile.TemporaryDirectory() as tmp_dir,
             mock.patch.object(
-                sqlite_integrity.os, "posix_fadvise", None, create=True,
+                sqlite_integrity.os,
+                "posix_fadvise",
+                None,
+                create=True,
             ),
         ):
             db_path = _small_database(tmp_dir)

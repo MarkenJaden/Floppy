@@ -250,7 +250,7 @@ class DuplicateAggregationProjectionTests(MediaListProjectionTestCase):
 
 
 class SeparateEntriesProjectionTests(MediaListProjectionTestCase):
-    """"Show each play separately" must defer the same columns as grouping."""
+    """ "Show each play separately" must defer the same columns as grouping."""
 
     def test_separate_mode_defers_watch_providers(self):
         """The drifted local copy of the deferral list is the regression.

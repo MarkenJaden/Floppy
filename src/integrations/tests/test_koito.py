@@ -656,9 +656,7 @@ class KoitoExportTests(KoitoTestCase):
         }
 
         self.account.history_import_status = LastFMHistoryImportStatus.RUNNING
-        self.account.history_import_started_at = timezone.now() - timedelta(
-            minutes=30
-        )
+        self.account.history_import_started_at = timezone.now() - timedelta(minutes=30)
         self.account.history_import_last_error_message = ""
         self.account.save()
 
@@ -675,7 +673,9 @@ class KoitoExportTests(KoitoTestCase):
             LastFMHistoryImportStatus.COMPLETED,
         )
         self.assertTrue(self.account.history_import_completed_at)
-        self.assertIsNone(cache.get(koito_sync.get_koito_history_import_lock_key(self.user.id)))
+        self.assertIsNone(
+            cache.get(koito_sync.get_koito_history_import_lock_key(self.user.id))
+        )
 
     @patch("integrations.koito_api.get_album")
     @patch("integrations.koito_api.get_track")

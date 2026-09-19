@@ -93,7 +93,6 @@ class CatalogFixtureMixin:
 
 
 class PocketCastsCatalogFreshnessTests(CatalogFixtureMixin, TestCase):
-
     def _sync_writes_something(self, payload):
         """Run the real sync and report whether it changed the stored row."""
         before = PodcastEpisode.objects.filter(pk=self.episode.pk).values().first()
@@ -302,7 +301,7 @@ class PocketCastsCatalogConvergenceTests(CatalogFixtureMixin, TestCase):
         return not unchanged
 
     def test_a_string_duration_converges_after_at_most_one_write(self):
-        """"1800" must not be a difference from a stored 1800, forever."""
+        """ "1800" must not be a difference from a stored 1800, forever."""
         payload = _catalog_payload(duration="1800")
 
         self.assertFalse(

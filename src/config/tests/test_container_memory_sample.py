@@ -446,9 +446,7 @@ class ReconciliationTests(SimpleTestCase):
         # on that, but only for a process the sampler could not classify:
         # an unreadable gunicorn or celery process is still a real failure,
         # which is the regression this test exists to catch.
-        unmeasured = [
-            item for item in sampled["processes"] if item["pss_kib"] is None
-        ]
+        unmeasured = [item for item in sampled["processes"] if item["pss_kib"] is None]
         if unmeasured and all(item["role"] == "other" for item in unmeasured):
             names = ", ".join(sorted({item["name"] for item in unmeasured}))
             self.skipTest(f"host has unreadable foreign processes: {names}")

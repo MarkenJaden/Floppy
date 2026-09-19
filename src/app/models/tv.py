@@ -1896,7 +1896,8 @@ class Episode(models.Model):
             models.UniqueConstraint(
                 fields=["related_season", "item", "external_id"],
                 name="app_episode_unique_episode_external_id",
-                condition=models.Q(external_id__isnull=False) & ~models.Q(
+                condition=models.Q(external_id__isnull=False)
+                & ~models.Q(
                     external_id="",
                 ),
             ),

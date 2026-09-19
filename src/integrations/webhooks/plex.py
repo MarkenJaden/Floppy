@@ -575,8 +575,7 @@ class PlexWebhookProcessor(BaseWebhookProcessor):
                 find_results = app.providers.tmdb.find(external_id, source)
             except Exception as exc:
                 logger.warning(
-                    "TMDB find failed while resolving Plex season rating "
-                    "source=%s: %s",
+                    "TMDB find failed while resolving Plex season rating source=%s: %s",
                     source,
                     exception_summary(exc),
                 )
@@ -724,9 +723,7 @@ class PlexWebhookProcessor(BaseWebhookProcessor):
                 has_rating_id = (
                     bool(ids.get("tmdb_id"))
                     if media_type in (MediaTypes.TV.value, MediaTypes.SEASON.value)
-                    else any(
-                        ids.get(key) for key in ("tmdb_id", "imdb_id", "tvdb_id")
-                    )
+                    else any(ids.get(key) for key in ("tmdb_id", "imdb_id", "tvdb_id"))
                 )
                 if not has_rating_id:
                     logger.warning(
