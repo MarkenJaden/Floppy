@@ -46,6 +46,19 @@ MIN_SUGGESTION_QUERY_LENGTH = 2
 LOCAL_GROUP_LIMIT = 12
 ALL_SUGGESTIONS_PER_TYPE = 3
 
+SEARCH_ALL_PRIORITY_ORDER = [
+    (MediaTypes.MOVIE.value, "load"),
+    (MediaTypes.TV.value, "load"),
+    (MediaTypes.ANIME.value, "load delay:120ms"),
+    (MediaTypes.MANGA.value, "load delay:120ms"),
+    (MediaTypes.GAME.value, "load delay:120ms"),
+    (MediaTypes.BOOK.value, "load delay:250ms"),
+    (MediaTypes.COMIC.value, "load delay:250ms"),
+    (MediaTypes.BOARDGAME.value, "load delay:250ms"),
+    (MediaTypes.PODCAST.value, "load delay:250ms"),
+    (MediaTypes.MUSIC.value, "load delay:250ms"),
+]
+
 
 def _mark_grouped_anime_route(media_items):
     """Annotate grouped-anime rows so templates route them through the Anime UI."""
