@@ -72,6 +72,11 @@ urlpatterns = [
         name="music_album_details",
     ),
     path(
+        "details/music/artist/<int:artist_id>/<slug:artist_slug>/album/<int:album_id>/<slug:album_slug>/track/<int:track_id>/<slug:track_slug>/",
+        views.music_track_details,
+        name="music_track_details",
+    ),
+    path(
         "details/music/album/<int:album_id>/releases",
         views.list_music_releases,
         name="list_music_releases",
@@ -182,6 +187,11 @@ urlpatterns = [
         "details/library-move-search/<int:item_id>",
         views.search_library_move_candidates,
         name="search_library_move_candidates",
+    ),
+    path(
+        "details/tv-provider-switch/<int:item_id>",
+        views.switch_tv_provider,
+        name="switch_tv_provider",
     ),
     path(
         "details/library-move/<int:item_id>",
@@ -343,6 +353,7 @@ urlpatterns = [
         name="update_artist_score",
     ),
     path("music/album/<int:album_id>/", views.album_detail, name="album_detail"),
+    path("music/track/<int:track_id>/", views.track_detail, name="track_detail"),
     path(
         "music/album/<int:album_id>/update-score/",
         views.update_album_score,

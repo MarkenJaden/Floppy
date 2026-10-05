@@ -10,6 +10,7 @@ from unittest.mock import call, patch
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import Client, SimpleTestCase, TestCase
 from django.urls import reverse
 from simple_history.models import HistoricalRecords
@@ -29,6 +30,53 @@ class WebhookViewEnqueueTests(TestCase):
             password="12345",
             token="hook-token",
         )
+
+    @patch("integrations.tasks.process_webhook.delay")
+    def test_inactive_user_webhooks_are_not_enqueued(self, mock_delay):
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+        for provider in ("jellyfin", "plex", "emby", "jellyseerr", "kodi"):
+            with self.subTest(provider=provider):
+                response = self.client.post(
+                    reverse(f"{provider}_webhook", kwargs={"token": self.user.token}),
+                    data="{}",
+                    content_type="application/json",
+                )
+                self.assertEqual(response.status_code, 401)
+        mock_delay.assert_not_called()
+
+    @patch("integrations.tasks.process_webhook.delay")
+    def test_malformed_json_does_not_enqueue(self, mock_delay):
+        for provider in ("jellyfin", "emby"):
+            with self.subTest(provider=provider):
+                url = reverse(f"{provider}_webhook", kwargs={"token": self.user.token})
+                response = (
+                    self.client.post(url, data={"data": "{"})
+                    if provider == "emby"
+                    else self.client.post(
+                        url, data="{", content_type="application/json"
+                    )
+                )
+                self.assertEqual(response.status_code, 400)
+        mock_delay.assert_not_called()
+
+    @patch("integrations.tasks.process_webhook.delay")
+    def test_non_object_payloads_do_not_enqueue(self, mock_delay):
+        for provider in ("jellyfin", "emby"):
+            for payload in ("null", "[]", '"text"'):
+                with self.subTest(provider=provider, payload=payload):
+                    url = reverse(
+                        f"{provider}_webhook", kwargs={"token": self.user.token}
+                    )
+                    response = (
+                        self.client.post(url, data={"data": payload})
+                        if provider == "emby"
+                        else self.client.post(
+                            url, data=payload, content_type="application/json"
+                        )
+                    )
+                    self.assertEqual(response.status_code, 400)
+        mock_delay.assert_not_called()
 
     @patch("integrations.tasks.process_webhook.delay")
     def test_jellyfin_enqueues_task(self, mock_delay):
@@ -169,6 +217,13 @@ class ProcessWebhookTaskTests(TestCase):
         )
 
     @patch("integrations.webhooks.plex.PlexWebhookProcessor.process_payload")
+    def test_user_deactivated_after_enqueue_is_not_processed(self, mock_process):
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+        tasks.process_webhook("plex", {"event": "media.scrobble"}, self.user.id)
+        mock_process.assert_not_called()
+
+    @patch("integrations.webhooks.plex.PlexWebhookProcessor.process_payload")
     def test_plex_success_marks_received(self, mock_process):
         """A successful Plex run records the webhook as received."""
         tasks.process_webhook("plex", {"event": "media.scrobble"}, self.user.id)
@@ -283,7 +338,7 @@ class ProcessWebhookTaskTests(TestCase):
             tasks.process_webhook("jellyfin", {"Event": "Stop"}, missing_id)
         self.assertIn("missing user", logs.output[0])
 
-    @patch("integrations.tasks.push_jellyfin_watched.delay")
+    @patch("integrations.tasks.push_jellyfin_watched.apply_async")
     @patch("integrations.webhooks.jellyfin.JellyfinWebhookProcessor.process_payload")
     def test_jellyfin_instant_push_when_enabled(self, _mock_process, mock_push_delay):
         """A Jellyfin webhook should queue a push-back when instant push is enabled."""
@@ -295,11 +350,16 @@ class ProcessWebhookTaskTests(TestCase):
             instant_push_enabled=True,
         )
 
+        cache.clear()
         tasks.process_webhook("jellyfin", {"Event": "Stop"}, self.user.id)
 
-        mock_push_delay.assert_called_once_with(user_id=self.user.id)
+        mock_push_delay.assert_called_once()
+        self.assertEqual(
+            mock_push_delay.call_args.kwargs["kwargs"],
+            {"user_id": self.user.id},
+        )
 
-    @patch("integrations.tasks.push_jellyfin_watched.delay")
+    @patch("integrations.tasks.push_jellyfin_watched.apply_async")
     @patch("integrations.webhooks.jellyfin.JellyfinWebhookProcessor.process_payload")
     def test_jellyfin_instant_push_skipped_when_disabled(
         self,
@@ -319,7 +379,7 @@ class ProcessWebhookTaskTests(TestCase):
 
         mock_push_delay.assert_not_called()
 
-    @patch("integrations.tasks.push_jellyfin_watched.delay")
+    @patch("integrations.tasks.push_jellyfin_watched.apply_async")
     @patch("integrations.webhooks.jellyfin.JellyfinWebhookProcessor.process_payload")
     def test_jellyfin_instant_push_skipped_without_account(
         self,

@@ -9,6 +9,7 @@ from django.contrib.auth import get_user_model
 from django.utils.module_loading import import_string
 from simple_history.models import HistoricalRecords
 
+from app import cache_safety
 from app.log_safety import redact_payload_pii, redact_secrets
 from app.providers.services import ProviderAPIError
 from integrations import anime_mapping
@@ -93,6 +94,10 @@ def _process_webhook(provider, payload, user_id, share_id=None):
             )
             return
 
+    if not user.is_active:
+        logger.info("Skipping %s webhook for inactive user id %s", provider, user.id)
+        return
+
     processor = import_string(WEBHOOK_PROCESSORS[provider])()
     if user.anime_enabled:
         try:
@@ -144,11 +149,41 @@ def _process_webhook(provider, payload, user_id, share_id=None):
         user.mark_plex_webhook_received()
 
     if provider == "jellyfin":
+        _queue_jellyfin_instant_push(user, payload)
+
+
+# Only events that can change watched state warrant a push. Play, Pause and
+# progress events arrive every few seconds during playback, and each push is a
+# full library walk.
+_JELLYFIN_INSTANT_PUSH_EVENTS = frozenset({"Stop", "MarkPlayed", "MarkUnplayed"})
+
+
+def _queue_jellyfin_instant_push(user, payload):
+    """Queue one delayed push per user, however many events arrive meanwhile."""
         account = getattr(user, "jellyfin_account", None)
-        if account and account.is_connected and account.instant_push_enabled:
+    if not (account and account.is_connected and account.instant_push_enabled):
+        return
+    if payload.get("Event") not in _JELLYFIN_INSTANT_PUSH_EVENTS:
+        return
+
+    from integrations.tasks._jellyfin_health import (
+        INSTANT_PUSH_DEBOUNCE_SECONDS,
+        instant_push_lock_key,
+    )
             from integrations.tasks._media_imports import push_jellyfin_watched
 
-            push_jellyfin_watched.delay(user_id=user.id)
+    # The push releases this key when it starts, so a pending push absorbs
+    # every event until then. The timeout only covers a push that never runs.
+    if not cache_safety.acquire_lock(
+        instant_push_lock_key(user.id),
+        timeout=INSTANT_PUSH_DEBOUNCE_SECONDS * 5,
+        on_error=cache_safety.ON_ERROR_PROCEED,
+    ):
+        return
+    push_jellyfin_watched.apply_async(
+        kwargs={"user_id": user.id},
+        countdown=INSTANT_PUSH_DEBOUNCE_SECONDS,
+    )
 
 
 @shared_task(

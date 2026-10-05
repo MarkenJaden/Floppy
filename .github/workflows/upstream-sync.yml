@@ -24,6 +24,7 @@ permissions:
   pull-requests: write
   issues: write
   actions: write
+  workflows: write
 
 jobs:
   sync-and-validate:
@@ -137,8 +138,11 @@ jobs:
         if: steps.gemini_resolve.outputs.resolve_status == 'success'
         run: |
           echo "Running ruff check --fix and ruff format on resolved code..."
-          uv run --no-sync ruff check --fix src || true
-          uv run --no-sync ruff format src || true
+          CHANGED_PY=$(git diff --name-only HEAD~1 | grep -E '\.py$' || true)
+          if [ -n "$CHANGED_PY" ]; then
+            echo "$CHANGED_PY" | xargs -r uv run --no-sync ruff check --fix || true
+            echo "$CHANGED_PY" | xargs -r uv run --no-sync ruff format || true
+          fi
           if [ -n "$(git status --porcelain)" ]; then
             git commit -am "style: format auto-resolved conflicts with ruff" || true
           fi

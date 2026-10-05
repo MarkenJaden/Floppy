@@ -27,6 +27,7 @@ from app.models import (
     WatchState,
     WatchStateChange,
 )
+from app.providers import services
 from integrations.external_references import save_correction
 from lists.models import CustomListItem, ListRecommendation
 
@@ -75,7 +76,6 @@ def _episode_queryset(user, item):
 
 def _state_payload(user, item):
     """Serialize the mutable user-owned state used for stale-preview checks."""
-
     def media_rows(queryset):
         """Serialize only concrete fields available on this media model."""
         rows = []
@@ -114,9 +114,8 @@ def _state_payload(user, item):
         "movie": movie_rows,
         "episodes": episodes,
         "plays": list(
-            Movie.objects.filter(user=user, item=item).values_list(
-                "plays__id", "plays__external_id", "plays__end_date"
-            ),
+            Movie.objects.filter(user=user, item=item)
+            .values_list("plays__id", "plays__external_id", "plays__end_date"),
         ),
         "collection": list(
             CollectionEntry.objects.filter(user=user, item=item).values_list("id"),
@@ -143,9 +142,9 @@ def _state_payload(user, item):
             ItemTag.objects.filter(tag__user=user, item=item).values_list("id"),
         ),
         "list_items": list(
-            CustomListItem.objects.filter(
-                _user_list_filter(user), item=item
-            ).values_list("id", "custom_list_id", "list_item_id"),
+            CustomListItem.objects.filter(_user_list_filter(user), item=item).values_list(
+                "id", "custom_list_id", "list_item_id"
+            ),
         ),
         "recommendations": list(
             ListRecommendation.objects.filter(
@@ -186,6 +185,76 @@ def _source_episodes(user, item):
     return keys, episodes
 
 
+def _destination_sources(source_item):
+    """Return the providers a corrected match may point at."""
+    if source_item.media_type == MediaTypes.TV.value:
+        return {Sources.TMDB.value, Sources.TVDB.value}
+    return {Sources.TMDB.value}
+
+
+def destination_episodes(destination_item):
+    """Return the destination show's episodes for the numbering picker."""
+    metadata = services.get_media_metadata(
+        destination_item.media_type,
+        destination_item.media_id,
+        destination_item.source,
+    ) or {}
+    seasons = sorted(
+        {
+            int(season["season_number"])
+            for season in (metadata.get("related") or {}).get("seasons") or []
+            if isinstance(season, dict) and season.get("season_number") is not None
+        },
+    )
+    if not seasons:
+        return []
+    payload = services.get_media_metadata(
+        "tv_with_seasons",
+        destination_item.media_id,
+        destination_item.source,
+        seasons,
+    ) or {}
+    rows = []
+    for number in seasons:
+        for episode in (payload.get(f"season/{number}") or {}).get("episodes") or []:
+            if not isinstance(episode, dict) or episode.get("episode_number") is None:
+                continue
+            rows.append(
+                {
+                    "id": f"{number}:{int(episode['episode_number'])}",
+                    "code": f"S{number}E{int(episode['episode_number'])}",
+                    "title": episode.get("title") or episode.get("name") or "",
+                    "air_date": str(episode.get("air_date") or ""),
+                },
+            )
+    return rows
+
+
+def suggest_mapping(source_episodes, catalogue):
+    """Propose a destination episode for each source episode.
+
+    Returns ``{key: (destination_id, kind)}``; keys with no safe proposal are
+    left out. ``matched`` means the same number and the same title,
+    ``suggested`` means only a unique title or only the number agrees.
+    """
+    by_id = {row["id"]: row for row in catalogue}
+    titles = {}
+    for row in catalogue:
+        titles.setdefault(row["title"].casefold(), []).append(row["id"])
+    proposals = {}
+    for row in source_episodes:
+        title = (row["title"] or "").casefold()
+        title_matches = titles.get(title, []) if title else []
+        if len(title_matches) == 1:
+            # An exact, unique title outranks the number: renumbering is the
+            # usual reason to be here.
+            kind = "matched" if title_matches[0] == row["key"] else "suggested"
+            proposals[row["key"]] = (title_matches[0], kind)
+        elif row["key"] in by_id:
+            proposals[row["key"]] = (row["key"], "suggested")
+    return proposals
+
+
 def _default_mapping(episodes):
     """Propose equal-number episode mappings."""
     return {
@@ -217,12 +286,10 @@ def preview_match_correction(user, source_item, destination_item, episode_mappin
     if source_item.media_type not in TRACKABLE_TYPES:
         raise InvalidMatchCorrectionError("Only movies and TV shows can be corrected.")
     if destination_item.media_type != source_item.media_type:
+        raise InvalidMatchCorrectionError("The destination must have the same media type.")
+    if destination_item.source not in _destination_sources(source_item):
         raise InvalidMatchCorrectionError(
-            "The destination must have the same media type."
-        )
-    if destination_item.source != Sources.TMDB.value:
-        raise InvalidMatchCorrectionError(
-            "The destination must use verified TMDB metadata."
+            "The destination must use verified provider metadata.",
         )
 
     source_media = (
@@ -231,9 +298,7 @@ def preview_match_correction(user, source_item, destination_item, episode_mappin
         else TV.objects.filter(user=user, item=source_item).first()
     )
     if source_media is None:
-        raise InvalidMatchCorrectionError(
-            "The source item is not tracked by this user."
-        )
+        raise InvalidMatchCorrectionError("The source item is not tracked by this user.")
     destination_media = (
         Movie.objects.filter(user=user, item=destination_item).first()
         if source_item.media_type == MediaTypes.MOVIE.value
@@ -250,10 +315,10 @@ def preview_match_correction(user, source_item, destination_item, episode_mappin
         if not episode_mapping:
             mapping = _default_mapping(episodes)
 
+    # The mapping is chosen after the preview, so only tracked state is digested.
     payload = {
         "source": source_payload,
         "destination": destination_payload,
-        "mapping": mapping,
     }
     return {
         "token": _digest(payload),
@@ -304,11 +369,7 @@ def _merge_scalars(source, destination, decisions):
             raise InvalidMatchCorrectionError(
                 f"Choose the {field.replace('_', ' ')} value before applying."
             )
-        setattr(
-            destination,
-            field,
-            getattr(source if choice == "source" else destination, field),
-        )
+        setattr(destination, field, getattr(source if choice == "source" else destination, field))
     field_names = {field.name for field in destination._meta.concrete_fields}
     for field in SCALAR_FIELDS:
         if field not in field_names:
@@ -381,9 +442,7 @@ def _move_relations(user, source_item, destination_item):
         ).exists():
             feedback.delete()
         else:
-            DiscoverFeedback.objects.filter(pk=feedback.pk).update(
-                item=destination_item
-            )
+            DiscoverFeedback.objects.filter(pk=feedback.pk).update(item=destination_item)
 
     for tag in list(ItemTag.objects.filter(tag__user=user, item=source_item)):
         if ItemTag.objects.filter(tag_id=tag.tag_id, item=destination_item).exists():
@@ -403,7 +462,9 @@ def _move_relations(user, source_item, destination_item):
             CustomListItem.objects.filter(pk=list_item.pk).update(item=destination_item)
 
     for recommendation in list(
-        ListRecommendation.objects.filter(_user_list_filter(user), item=source_item),
+        ListRecommendation.objects.filter(
+            _user_list_filter(user), item=source_item
+        ),
     ):
         if ListRecommendation.objects.filter(
             custom_list_id=recommendation.custom_list_id,
@@ -420,9 +481,7 @@ def _move_movie(user, source_item, destination_item, decisions):
     """Move movie tracking and deduplicate only identified plays."""
     source = Movie.objects.filter(user=user, item=source_item).first()
     if not source:
-        raise InvalidMatchCorrectionError(
-            "The source movie is not tracked by this user."
-        )
+        raise InvalidMatchCorrectionError("The source movie is not tracked by this user.")
     destination = Movie.objects.filter(user=user, item=destination_item).first()
     if destination:
         _merge_scalars(source, destination, decisions)
@@ -445,9 +504,7 @@ def _move_tv(user, source_item, destination_item, mapping, decisions):
     """Move TV tracking while preserving every episode watch row."""
     source = TV.objects.filter(user=user, item=source_item).first()
     if not source:
-        raise InvalidMatchCorrectionError(
-            "The source TV show is not tracked by this user."
-        )
+        raise InvalidMatchCorrectionError("The source TV show is not tracked by this user.")
     # Read the source's seasons before the show can be repointed below: with no
     # destination row the source row becomes the destination, and these seasons
     # would then look like they already belong to it.
@@ -471,7 +528,9 @@ def _move_tv(user, source_item, destination_item, mapping, decisions):
         source_season = season.item.season_number
         destination_season_number = source_season
         if source_season is not None:
-            candidates = [key for key in mapping if key.startswith(f"{source_season}:")]
+            candidates = [
+                key for key in mapping if key.startswith(f"{source_season}:")
+            ]
             if candidates:
                 destination_season_number, _ = _mapping_value(mapping, candidates[0])
         destination_season = destination_seasons.get(destination_season_number)
@@ -503,9 +562,7 @@ def _move_tv(user, source_item, destination_item, mapping, decisions):
 
         for episode in list(Episode.objects.filter(related_season=season)):
             if not episode.item:
-                Episode.objects.filter(pk=episode.pk).update(
-                    related_season=destination_season
-                )
+                Episode.objects.filter(pk=episode.pk).update(related_season=destination_season)
                 continue
             key = f"{source_season}:{episode.item.episode_number}"
             target_season_number, target_episode_number = _mapping_value(mapping, key)

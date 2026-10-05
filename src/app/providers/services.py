@@ -20,17 +20,20 @@ from redis import ConnectionPool
 from redis.exceptions import RedisError
 from requests.adapters import HTTPAdapter
 from requests_ratelimiter import LimiterAdapter, LimiterSession
+from urllib3.util.retry import Retry
 
-from app import config, helpers
+from app import config, helpers, request_timing
 from app.log_safety import exception_summary, mapping_keys
 from app.models import Item, MediaTypes, Sources
 from app.providers import (
     bgg,
     comicvine,
+    gcd,
     googlebooks,
     hardcover,
     igdb,
     mal,
+    mangabaka,
     mangaupdates,
     manual,
     musicbrainz,
@@ -66,6 +69,10 @@ RATE_LIMIT_DEFAULT_WAIT_SECONDS = 5
 RATE_LIMIT_MAX_COOLDOWN_SECONDS = 60 * 60
 RATE_LIMIT_MAX_RETRIES_INTERACTIVE = 1
 RATE_LIMIT_MAX_WAIT_SECONDS_INTERACTIVE = 5
+# A provider that accepts the connection but never answers would hold a web
+# thread for the full REQUEST_TIMEOUT, longer than nginx waits for the page.
+# An interactive caller has a stored-metadata fallback, so it gives up sooner.
+REQUEST_TIMEOUT_INTERACTIVE = 10
 
 _interactive_request = contextvars.ContextVar("_interactive_request", default=False)
 
@@ -83,11 +90,6 @@ def interactive_request_scope():
         yield
     finally:
         _interactive_request.reset(token)
-
-
-# MusicBrainz MBIDs are UUIDs (36 chars); shorter values are not valid
-# recording IDs and should be treated as not found.
-MUSICBRAINZ_MBID_MIN_LENGTH = 30
 
 # ISBN-10 and ISBN-13 identifier lengths (digits only, after cleaning).
 ISBN_10_LENGTH = 10
@@ -398,8 +400,12 @@ _host_limiter_bucket_name = (
     f"{settings.REDIS_PREFIX}_api_hosts" if settings.REDIS_PREFIX else "api_hosts"
 )
 
-session.mount("http://", HTTPAdapter(max_retries=3))
-session.mount("https://", HTTPAdapter(max_retries=3))
+# A read timeout is not retried: a provider that accepted the connection and
+# never answered would otherwise hold the thread for (retries + 1) x the
+# timeout, 480 s at REQUEST_TIMEOUT. Failing to connect is still retried.
+_GENERIC_RETRY = Retry(total=3, read=False)
+session.mount("http://", HTTPAdapter(max_retries=_GENERIC_RETRY))
+session.mount("https://", HTTPAdapter(max_retries=_GENERIC_RETRY))
 
 session.mount(
     "https://api.myanimelist.net/v2",
@@ -408,6 +414,11 @@ session.mount(
 session.mount(
     "https://graphql.anilist.co",
     _build_host_limiter_adapter(per_minute=85),
+)
+session.mount(
+    "https://api.mangabaka.org/v1",
+    # MangaBaka allows 30 uncached searches a minute per IP.
+    _build_host_limiter_adapter(per_minute=30),
 )
 session.mount(
     "https://api.igdb.com/v4",
@@ -420,6 +431,11 @@ session.mount(
 session.mount(
     "https://comicvine.gamespot.com/api",
     _build_host_limiter_adapter(per_hour=190),
+)
+session.mount(
+    "https://www.comics.org/api",
+    # GCD allows 2000 requests a day to a logged-in account.
+    _build_host_limiter_adapter(per_hour=80),
 )
 session.mount(
     "https://openlibrary.org",
@@ -443,6 +459,7 @@ session.mount(
 )
 
 
+@request_timing.timed_provider_call
 def resilient_request(method, url, **kwargs):
     """GET/POST through the shared rate-limited session.
 
@@ -567,7 +584,7 @@ class ProviderNotConfiguredError(ProviderAPIError):
         Exception.__init__(self, message)
 
 
-def raise_not_found_error(provider, media_id, media_type="item"):
+def raise_not_found_error(provider, media_id, media_type="item", *, confirmed_absent=False):
     """
     Raise a 404 ProviderAPIError for when a media item is not found.
 
@@ -592,7 +609,9 @@ def raise_not_found_error(provider, media_id, media_type="item"):
     )()
     mock_error = requests.exceptions.HTTPError(response=mock_response)
 
-    raise ProviderAPIError(provider, mock_error, error_msg)
+    error = ProviderAPIError(provider, mock_error, error_msg)
+    error.confirmed_absent = confirmed_absent
+    raise error
 
 
 def _get_tmdb_proxy_url():
@@ -697,6 +716,7 @@ def _raise_rate_limited(provider, error, retry_after, headers=None):
     )
 
 
+@request_timing.timed_provider_call
 def api_request(
     provider,
     method,
@@ -722,9 +742,7 @@ def api_request(
         Parsed JSON dict or ElementTree for XML
     """
     if cache.get(_rate_limit_cooldown_key(provider, headers)):
-        logger.warning(
-            "%s request skipped: provider is in rate-limit cooldown", provider
-        )
+        logger.warning("%s request skipped: provider is in rate-limit cooldown", provider)
         raise ProviderAPIError(
             provider,
             requests.exceptions.RequestException("rate-limit cooldown"),
@@ -735,7 +753,11 @@ def api_request(
         request_kwargs = {
             "url": url,
             "headers": headers,
-            "timeout": settings.REQUEST_TIMEOUT,
+            "timeout": (
+                min(settings.REQUEST_TIMEOUT, REQUEST_TIMEOUT_INTERACTIVE)
+                if _interactive_request.get()
+                else settings.REQUEST_TIMEOUT
+            ),
         }
 
         if provider == Sources.TMDB.value:
@@ -763,9 +785,7 @@ def api_request(
         # handle rate limiting
         interactive = _interactive_request.get()
         max_retries = (
-            RATE_LIMIT_MAX_RETRIES_INTERACTIVE
-            if interactive
-            else RATE_LIMIT_MAX_RETRIES
+            RATE_LIMIT_MAX_RETRIES_INTERACTIVE if interactive else RATE_LIMIT_MAX_RETRIES
         )
         if status_code == requests.codes.too_many_requests:
             max_wait = (
@@ -1064,14 +1084,10 @@ def get_media_metadata(
         if order is not None:
             from app.services.episode_ordering import metadata_for_order
 
-            return _ensure_title_fields(
-                metadata_for_order(
-                    media_type,
-                    order,
-                    season_numbers=season_numbers,
-                    episode_number=episode_number,
-                )
-            )
+            return _ensure_title_fields(metadata_for_order(
+                media_type, order, season_numbers=season_numbers,
+                episode_number=episode_number,
+            ))
     if media_type == MediaTypes.MUSIC.value and source == Sources.MANUAL.value:
         item = Item.objects.filter(
             media_id=media_id,
@@ -1106,13 +1122,18 @@ def get_media_metadata(
 
     def tmdb_season_metadata():
         """Return TMDB season metadata or raise a not-found error."""
-        seasons = tmdb.tv_with_seasons(media_id, season_numbers, language)
-        season_key = f"season/{season_numbers[0]}"
+        missing_seasons = set()
+        seasons = tmdb.tv_with_seasons(
+            media_id, season_numbers, language, missing_seasons=missing_seasons
+        )
+        requested_season = tmdb._normalize_season_numbers(season_numbers)[0]
+        season_key = f"season/{requested_season}"
         if season_key not in seasons:
             raise_not_found_error(
                 Sources.TMDB.value,
                 media_id,
                 media_type=f"season {season_numbers[0]}",
+                confirmed_absent=requested_season in missing_seasons,
             )
         season_data = seasons[season_key]
         if not season_data.get("cast"):
@@ -1167,6 +1188,8 @@ def get_media_metadata(
         MediaTypes.MANGA.value: lambda: (
             mangaupdates.manga(media_id)
             if source == Sources.MANGAUPDATES.value
+            else mangabaka.manga(media_id)
+            if source == Sources.MANGABAKA.value
             else mal.manga(media_id)
         ),
         MediaTypes.TV.value: lambda: (
@@ -1214,9 +1237,15 @@ def get_media_metadata(
             if source == Sources.PLEX.value
             else openlibrary.book(media_id)
         ),
-        MediaTypes.COMIC.value: lambda: comicvine.comic(media_id, user=user),
-        MediaTypes.COMIC_ISSUE.value: lambda: comicvine.comic_issue(
-            media_id, user=user
+        MediaTypes.COMIC.value: lambda: (
+            gcd.comic(media_id, user=user)
+            if source == Sources.GCD.value
+            else comicvine.comic(media_id, user=user)
+        ),
+        MediaTypes.COMIC_ISSUE.value: lambda: (
+            gcd.comic_issue(media_id, user=user)
+            if source == Sources.GCD.value
+            else comicvine.comic_issue(media_id, user=user)
         ),
         MediaTypes.BOARDGAME.value: lambda: bgg.boardgame(media_id),
         MediaTypes.MUSIC.value: lambda: musicbrainz.recording(media_id),
@@ -1227,7 +1256,9 @@ def get_media_metadata(
         ),
     }
     if media_type == MediaTypes.MUSIC.value:
-        if not media_id or len(str(media_id)) < MUSICBRAINZ_MBID_MIN_LENGTH:
+        # A MusicBrainz MBID is a UUID. Anything else (a title slug, say) can
+        # only earn a 400 from the API, so treat it as not found without asking.
+        if not media_id or not _UUID_RE.match(str(media_id)):
             raise_not_found_error(source, media_id, "music recording")
         return _ensure_title_fields(metadata_retrievers[media_type]())
 
@@ -1259,8 +1290,12 @@ def _resolve_search_source(media_type, source=None):
     """Return the effective search provider for a media type."""
     resolved = _normalize_source_value(source)
     if resolved:
-        if (resolved == Sources.TVDB.value and not tvdb.enabled()) or (
-            resolved == Sources.GOOGLEBOOKS.value and not googlebooks.enabled()
+        if (
+            resolved == Sources.TVDB.value
+            and not tvdb.enabled()
+        ) or (
+            resolved == Sources.GOOGLEBOOKS.value
+            and not googlebooks.enabled()
         ):
             resolved = None
         else:
@@ -1268,10 +1303,12 @@ def _resolve_search_source(media_type, source=None):
 
     default_source = config.get_default_source_name(media_type)
     default_value = _normalize_source_value(default_source)
-    if (
-        default_value not in {Sources.TVDB.value, Sources.GOOGLEBOOKS.value}
-        or (default_value == Sources.TVDB.value and tvdb.enabled())
-        or (default_value == Sources.GOOGLEBOOKS.value and googlebooks.enabled())
+    if default_value not in {Sources.TVDB.value, Sources.GOOGLEBOOKS.value} or (
+        default_value == Sources.TVDB.value
+        and tvdb.enabled()
+    ) or (
+        default_value == Sources.GOOGLEBOOKS.value
+        and googlebooks.enabled()
     ):
         return default_value
 
@@ -1500,12 +1537,18 @@ def _lookup_by_numeric_id(media_type, query, source, user=None):
     if media_type == MediaTypes.MANGA.value:
         if source == Sources.MANGAUPDATES.value:
             return mangaupdates.manga(query)
+        if source == Sources.MANGABAKA.value:
+            # Direct ID lookups follow the same filters as search results.
+            metadata = mangabaka.manga(n)
+            return metadata if mangabaka.is_searchable(metadata) else None
         return mal.manga(n)
     if media_type == MediaTypes.GAME.value:
         return igdb.game(n)
     if media_type == MediaTypes.BOOK.value and source == Sources.HARDCOVER.value:
         return hardcover.book(n, user=user)
     if media_type == MediaTypes.COMIC.value:
+        if source == Sources.GCD.value:
+            return gcd.comic(query, user=user)
         return comicvine.comic(query, user=user)
     if media_type == MediaTypes.BOARDGAME.value:
         return bgg.boardgame(query)
@@ -1593,6 +1636,8 @@ def search(
         MediaTypes.MANGA.value: lambda: (
             mangaupdates.search(query, page)
             if source == Sources.MANGAUPDATES.value
+            else mangabaka.search(query, page)
+            if source == Sources.MANGABAKA.value
             else mal.search(media_type, query, page)
         ),
         MediaTypes.ANIME.value: lambda: (
@@ -1629,9 +1674,15 @@ def search(
             if source == Sources.GOOGLEBOOKS.value
             else hardcover.search(query, page, user=user)
         ),
-        MediaTypes.COMIC.value: lambda: comicvine.search(query, page, user=user),
-        MediaTypes.COMIC_ISSUE.value: lambda: comicvine.search_issues(
-            query, page, user=user
+        MediaTypes.COMIC.value: lambda: (
+            gcd.search(query, page, user=user)
+            if source == Sources.GCD.value
+            else comicvine.search(query, page, user=user)
+        ),
+        MediaTypes.COMIC_ISSUE.value: lambda: (
+            gcd.search_issues(query, page, user=user)
+            if source == Sources.GCD.value
+            else comicvine.search_issues(query, page, user=user)
         ),
         MediaTypes.BOARDGAME.value: lambda: bgg.search(query, page),
         MediaTypes.MUSIC.value: lambda: musicbrainz.search_combined(query, page),

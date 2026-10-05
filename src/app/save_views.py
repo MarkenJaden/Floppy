@@ -5,6 +5,7 @@ from datetime import datetime, time, timedelta
 from urllib.parse import quote, urlparse
 from uuid import uuid4
 
+import requests
 from django.apps import apps
 from django.conf import settings
 from django.contrib import messages
@@ -21,6 +22,7 @@ from app import cache_utils, fork_services_episode, helpers, history_cache
 from app.activity_builders import _build_detail_activity_state
 from app.discover import tab_cache as discover_tab_cache
 from app.forms import EpisodeForm, get_form_class
+from app.history_processor import USER_EDIT_REASON
 from app.models import (
     TV,
     BasicMedia,
@@ -34,6 +36,7 @@ from app.models import (
     Status,
 )
 from app.providers import services
+from app.request_timing import boundary
 from app.services import metadata_resolution
 from app.services.episode_coordinates import (
     InvalidEpisodeCoordinateError,
@@ -206,6 +209,7 @@ def media_save(request):
         )
     else:
         try:
+            with boundary("media_save_hydrate"):
             hydrated = ensure_item_metadata(
                 request.user,
                 media_type,
@@ -216,6 +220,40 @@ def media_save(request):
                 library_media_type=library_media_type,
                 edition_id=(request.POST.get("edition_id") or "").strip() or None,
             )
+        except services.ProviderNotConfiguredError:
+            # Setup guidance is rendered by the provider-error middleware.
+            raise
+        except services.ProviderAPIError as error:
+            # A provider that no longer has the title, or is down, is a failed
+            # save the user can read about, not a server error.
+            logger.warning(
+                "First-save metadata hydration hit a provider error for "
+                "media_type=%s source=%s media_id=%s status=%s user_id=%s",
+                media_type,
+                source,
+                media_id,
+                error.status_code,
+                request.user.id,
+            )
+            if error.status_code == requests.codes.not_found:
+                message = gettext(
+                    "%(provider)s no longer has this title, so it can't be saved."
+                ) % {"provider": error.provider_label}
+            else:
+                message = gettext(
+                    "%(provider)s did not respond. Please try saving again."
+                ) % {"provider": error.provider_label}
+            if request.headers.get("HX-Request"):
+                # htmx follows a redirect and would swap the whole page in, and
+                # the messages framework is never rendered for it, so answer
+                # with a toast. It does not swap a non-2xx body.
+                response = HttpResponse(status=502)
+                response["HX-Trigger"] = json.dumps(
+                    {"showToast": {"message": message, "type": "error"}},
+                )
+                return response
+            messages.error(request, message)
+            return helpers.redirect_back(request)
         except Exception:
             logger.exception(
                 "First-save metadata hydration failed for "
@@ -258,23 +296,37 @@ def media_save(request):
         if not instance_id
         else pgettext("saved action", "Updated")
     )
-    if form.is_valid():
+    with boundary("media_save_validate"):
+        valid = form.is_valid()
+    if valid:
         if isinstance(instance, (Season, TV)):
             media = form.save(commit=False)
             media._pending_end_date = form.cleaned_data.get("end_date")
+            # Recorded in history so an automatic change can be told apart
+            # from the user's own edit (#1133).
+            media._change_reason = USER_EDIT_REASON
+            with boundary("media_save_persist"):
             media.save()
             if (
                 isinstance(media, Season)
                 and old_status == Status.COMPLETED.value
                 and media.status == Status.IN_PROGRESS.value
-                and media.rewatch_started_at is None
             ):
                 # The status dropdown is the only "reopen" affordance there
                 # is - treat it as starting a rewatch pass so a season with
                 # historical repeat plays can still complete normally, see #929.
+                # Deliberately bypasses start_rewatch's "a pass is already
+                # open" no-op: an explicit Completed -> In progress reopen is
+                # the user asking for a new pass from now, so the cutoff has to
+                # move. Only reachable from that transition - any future caller
+                # reaching this with an open pass would strand plays logged
+                # against the original cutoff as pre-cutoff history.
+                if media.rewatch_started_at is not None:
+                    media.rewatch_started_at = None
                 with contextlib.suppress(RewatchAlreadyCompleteError):
                     media.start_rewatch()
         else:
+            with boundary("media_save_persist"):
             media = form.save()
         if (
             media_type == MediaTypes.BOOK.value
@@ -306,6 +358,7 @@ def media_save(request):
                             "That KOReader document ID is already linked to another book."
                         ),
                     )
+        with boundary("media_save_progress"):
         BasicMedia.objects.annotate_max_progress([media], media_type)
         image_url = form.cleaned_data.get("image_url")
         if image_url and media.item.image != image_url:
@@ -338,6 +391,7 @@ def media_save(request):
                     "current_instance": media,
                     "return_url": return_url,
                     "track_action_update": True,
+                    "swap_oob": True,
                 },
             )
 
@@ -386,12 +440,30 @@ def media_save(request):
                     request=request,
                 )
 
+            def _progress_card_fragment():
+                if media_type not in (MediaTypes.TV.value, MediaTypes.SEASON.value):
+                    return None
+                return render_to_string(
+                    "app/components/detail_progress_card_slot.html",
+                    {
+                        "media": media.item,
+                        "media_type": media_type,
+                        "current_instance": media,
+                        "progress_card_slot_oob": True,
+                    },
+                    request=request,
+                )
+
             def _card_rating_fragment():
                 return render_to_string(
                     "app/components/media_card_rating_oob.html",
                     {
                         "media_instance_id": media.id,
                         "rating_value": media.formatted_score,
+                        "rate_url": reverse(
+                            "update_media_score",
+                            args=[media.item.media_type, media.id],
+                        ),
                         "user": request.user,
                     },
                     request=request,
@@ -444,6 +516,7 @@ def media_save(request):
             for label, build in (
                 ("activity subtitle", _activity_subtitle_fragment),
                 ("score chip", _score_chip_fragment),
+                ("progress card", _progress_card_fragment),
                 ("card rating", _card_rating_fragment),
                 ("status chip", _status_chip_fragment),
                 ("season cascade pill", _season_cascade_fragment),
@@ -507,6 +580,7 @@ def media_save(request):
                     "track_open": True,
                     "track_modal_content": modal_response.content.decode(),
                     "track_action_update": True,
+                    "swap_oob": True,
                 },
             )
             response["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -970,6 +1044,14 @@ def _write_episode_save_oob(
         ),
     )
     response.write(_render_season_progress_oob(related_season))
+    response["HX-Trigger-After-Swap"] = json.dumps(
+        {
+            "detail-progress-updated": {
+                "id": related_season.id,
+                "completed": related_season.completed_episode_count,
+            },
+        },
+    )
     response.write(
         _render_track_action_oob(request, related_season, parsed_next),
     )
@@ -1301,6 +1383,14 @@ def episode_history_poll(request, season_id):
         )
 
     response.write(_render_season_progress_oob(related_season))
+    response["HX-Trigger-After-Swap"] = json.dumps(
+        {
+            "detail-progress-updated": {
+                "id": related_season.id,
+                "completed": related_season.completed_episode_count,
+            },
+        },
+    )
     response.write(
         _render_track_action_oob(
             request,

@@ -145,6 +145,7 @@ _NUMERIC_MEDIA_ID_SOURCES = {
     Sources.TVDB.value,
     Sources.MAL.value,
     Sources.MANGAUPDATES.value,
+    Sources.MANGABAKA.value,
     Sources.IGDB.value,
     Sources.COMICVINE.value,
     Sources.BGG.value,
@@ -238,12 +239,14 @@ class YamtrackImporter:
         # this run (overwrite mode wipes once per item, then recreates
         # every CSV copy).
         self._collection_overwritten_item_ids = set()
-        # (parent_type, source, media_id) keys already queued for their
-        # one-time overwrite-mode wipe this run. Without this, a repeat
-        # watch of the same item arriving in a later batch would look
-        # "existing" again (existing_media is intentionally never updated
-        # mid-run, see _flush_media_batch) and get re-queued for deletion,
-        # wiping the repeat an earlier batch had already recreated.
+        # (parent_type, source, media_id) keys whose overwrite-mode delete
+        # has actually run this run (marked in _cleanup_pending_overwrite,
+        # not merely when first queued - see the comment there). Without
+        # this, a repeat watch of the same item arriving in a later batch
+        # would look "existing" again (existing_media is intentionally
+        # never updated mid-run, see _flush_media_batch) and get re-queued
+        # for deletion, wiping the repeat an earlier batch had already
+        # recreated.
         self._overwrite_wiped_media_keys = set()
         self.collection_field_resolver = ImportedFieldResolver(
             user,
@@ -426,6 +429,12 @@ class YamtrackImporter:
         """Delete old overwrite rows before persisting their replacements."""
         if not self.to_delete:
             return
+        for parent_type, sources in self.to_delete.items():
+            for source, media_ids in sources.items():
+                for media_id in media_ids:
+                    self._overwrite_wiped_media_keys.add(
+                        (parent_type, source, media_id),
+                    )
         helpers.cleanup_existing_media(self.to_delete, self.user)
         self.to_delete.clear()
 
@@ -591,18 +600,19 @@ class YamtrackImporter:
         )
         if self.mode == "overwrite":
             overwrite_key = (parent_type, row["source"], row["media_id"])
-            if row["media_id"] in self.to_delete[parent_type][row["source"]]:
                 if overwrite_key in self._overwrite_wiped_media_keys:
-                    # Already wiped once this run - a repeat watch of this
-                    # item landed in a later batch (existing_media still
-                    # shows it as pre-existing, by design). Undo the re-queue
-                    # so the next cleanup doesn't delete what an earlier
-                    # batch already recreated.
+                # This item's delete already ran this run - a repeat watch
+                # (or, for games, another session row) landed in a later
+                # batch (existing_media still shows it as pre-existing, by
+                # design). Undo the re-queue should_process_media just made
+                # so the next cleanup doesn't delete what an earlier batch
+                # already recreated. A same-batch repeat is unaffected: the
+                # key isn't marked wiped until _cleanup_pending_overwrite
+                # actually runs, so the delete stays queued through every
+                # row sharing this item before that happens.
                     self.to_delete[parent_type][row["source"]].discard(
                         row["media_id"],
                     )
-                else:
-                    self._overwrite_wiped_media_keys.add(overwrite_key)
         if (
             not should_process
             and self.mode == "new"
@@ -672,6 +682,11 @@ class YamtrackImporter:
                         self.status_overrides[media_type][
                             (row["source"], row["media_id"], season_number)
                         ] = status_value
+            # Keep the backup's rating time; otherwise the insert stamps "now".
+            scored_at = parse_datetime(row.get("scored_at") or "")
+            # A cleared rating keeps its time too, so the removal survives.
+            if scored_at:
+                form.instance.scored_at = scored_at
             self.bulk_media[media_type].append(form.instance)
         else:
             error_msg = f"{row['title']} ({media_type}): {form.errors.as_json()}"

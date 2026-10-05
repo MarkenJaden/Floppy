@@ -24,6 +24,19 @@ class PreferencesViewTests(TestCase):
         self.assertEqual(self.user.date_format, "m_d_yyyy")
         self.assertEqual(self.user.time_format, "hh_mm")
 
+    def test_preferences_post_can_disable_ratings(self):
+        """Disabled is a rating scale choice and does not change the max used for stored scores."""
+        response = self.client.post(reverse("preferences"), {"rating_scale": "0"})
+        self.assertRedirects(response, reverse("preferences"))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.rating_scale, "0")
+        self.assertFalse(self.user.ratings_enabled)
+        self.assertEqual(self.user.rating_scale_max, 10)
+        self.assertEqual(self.user.scale_score_for_display(8), 8)
+
+        response = self.client.get(reverse("preferences"))
+        self.assertContains(response, "Disabled")
+
     def test_preferences_post_persists_theme(self):
         """POSTing a new theme should persist to the DB."""
         response = self.client.post(reverse("preferences"), {"theme": "light"})
@@ -57,6 +70,13 @@ class PreferencesViewTests(TestCase):
         self.assertRedirects(response, reverse("preferences"))
         self.user.refresh_from_db()
         self.assertEqual(self.user.theme, "system")
+
+    def test_preferences_does_not_manage_home_media_type_label_appearance(self):
+        response = self.client.get(reverse("preferences"))
+
+        self.assertNotContains(response, 'name="home_media_type_chips_enabled"')
+        self.assertNotContains(response, 'name="home_media_type_chip_style"')
+        self.assertNotContains(response, "home_media_type_chip_color_")
 
     def test_preferences_display_labels_and_logo(self):
         """The display cards expose the simplified labels and logo choice."""

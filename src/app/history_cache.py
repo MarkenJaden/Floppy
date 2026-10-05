@@ -62,26 +62,33 @@ from app.history_cache_utils import (  # noqa: F401
     HISTORY_DAY_PREFIX,
     HISTORY_DAYS_PER_PAGE,
     HISTORY_ENTRIES_PER_DAY_PAGE,
+    HISTORY_ERA_TIMEOUT,
     HISTORY_INDEX_PREFIX,
     HISTORY_REFRESH_LOCK_MAX_AGE,
     HISTORY_REFRESH_LOCK_PREFIX,
     HISTORY_STALE_AFTER,
     HISTORY_WARM_DAYS,
+    _bump_history_era,
     _cache_key,
     _coerce_genre_list,
     _coerce_timedelta,
     _coverage_repair_key,
+    _current_history_era,
     _date_from_day_key,
     _day_cache_key,
     _day_key_for_date,
     _day_key_from_value,
     _get_rss_kb,
+    _history_era_key,
     _localize_datetime,
     _music_history_user_q,
     _normalize_logging_style,
     _refresh_lock_key,
     _resolve_genres,
     _resolve_music_genres,
+    _touch_history_era,
+    _typed_history_index_key,
+    _typed_history_index_registry_key,
     expand_history_media_types,
     history_day_key,
     history_day_keys_for_range,
@@ -154,7 +161,11 @@ def _fetch_episode_data(
 
     episodes = Episode.all_objects.filter(related_season__user=user)
     if not include_undated:
-        episodes = episodes.filter(end_date__isnull=False)
+        # An open play has no end date yet; like a movie, it is listed on the
+        # day it started (issue #1278).
+        episodes = episodes.filter(
+            models.Q(end_date__isnull=False) | models.Q(start_date__isnull=False),
+        )
     episodes = (
         episodes.select_related(
             "item",
@@ -168,13 +179,19 @@ def _fetch_episode_data(
                 "related_season__related_tv__item",
             ),
         )
-        .order_by("-end_date")
+        .order_by("-end_date", "-start_date")
     )
 
     if start_date:
-        episodes = episodes.filter(end_date__gte=start_date)
+        episodes = episodes.filter(
+            models.Q(end_date__gte=start_date)
+            | (models.Q(end_date__isnull=True) & models.Q(start_date__gte=start_date))
+        )
     if end_date:
-        episodes = episodes.filter(end_date__lte=end_date)
+        episodes = episodes.filter(
+            models.Q(end_date__lte=end_date)
+            | (models.Q(end_date__isnull=True) & models.Q(start_date__lte=end_date))
+        )
     if filters.get("tv"):
         episodes = episodes.filter(related_season__related_tv_id=filters["tv"])
     if filters.get("season"):
@@ -1422,7 +1439,7 @@ def build_history_days(
                 continue
             entry = _build_episode_entry(episode, episode_title_map)
             if entry:
-                if include_undated and not episode.end_date:
+                if include_undated and not episode.end_date and not episode.start_date:
                     entry["played_at_local"] = None
                 entries.append(entry)
                 entry_counts["episodes"] += 1

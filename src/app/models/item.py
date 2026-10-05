@@ -169,6 +169,43 @@ class Item(CalendarTriggerMixin, models.Model):
         blank=True,
         help_text="User rating count from IGDB metadata",
     )
+    opencritic_id = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Matched OpenCritic game ID",
+    )
+    opencritic_score = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="OpenCritic top critic average (0-100)",
+    )
+    opencritic_percent_recommended = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Share of OpenCritic critics who recommend the game",
+    )
+    opencritic_tier = models.CharField(
+        max_length=20,
+        blank=True,
+        default="",
+        help_text="OpenCritic tier: Mighty, Strong, Fair or Weak",
+    )
+    opencritic_review_count = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Number of top critic reviews on OpenCritic",
+    )
+    opencritic_url = models.URLField(
+        max_length=500,
+        blank=True,
+        default="",
+        help_text="OpenCritic page for the matched game",
+    )
+    opencritic_checked_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When OpenCritic was last asked about this game",
+    )
     trakt_popularity_score = models.FloatField(
         null=True,
         blank=True,
@@ -438,7 +475,15 @@ class Item(CalendarTriggerMixin, models.Model):
             "provider_game_lengths",
             "watch_providers",
         ]
+        update_fields = kwargs.get("update_fields")
+        deferred_fields = self.get_deferred_fields()
         for field_name in json_object_fields:
+            if (
+                update_fields is not None
+                and field_name not in update_fields
+                and field_name in deferred_fields
+            ):
+                continue
             value = getattr(self, field_name, None)
             if value is None:
                 setattr(self, field_name, {})

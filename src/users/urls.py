@@ -79,6 +79,13 @@ urlpatterns = [
         views.toggle_home_screen_row_direction,
         name="toggle_home_screen_row_direction",
     ),
+    path("saved-views/create", views.saved_view_create, name="saved_view_create"),
+    path(
+        "saved-views/<int:view_id>/delete",
+        views.saved_view_delete,
+        name="saved_view_delete",
+    ),
+    path("saved-views/reorder", views.saved_view_reorder, name="saved_view_reorder"),
     path(
         "settings/toggle-obfuscate-episodes",
         views.toggle_obfuscate_episodes,
@@ -90,7 +97,17 @@ urlpatterns = [
         views.convert_anime_library,
         name="convert_anime_library",
     ),
+    path(
+        "settings/metadata/convert-tv-library",
+        views.convert_tv_library,
+        name="convert_tv_library",
+    ),
     path("settings/integrations", views.integrations, name="integrations"),
+    path(
+        "settings/integrations/stremio-catalog-status",
+        views.stremio_catalog_status,
+        name="stremio_catalog_status",
+    ),
     path("settings/rss", views.rss_settings, name="rss_settings"),
     path(
         "settings/metadata",
@@ -171,6 +188,11 @@ urlpatterns = [
         "cancel_import_run/<int:run_id>",
         views.cancel_import_run,
         name="cancel_import_run",
+    ),
+    path(
+        "cancel_pending_import/<str:task_id>",
+        views.cancel_pending_import,
+        name="cancel_pending_import",
     ),
     path(
         "bulk_delete_by_import_source/<str:media_type>/<str:source>",
@@ -255,6 +277,11 @@ urlpatterns = [
         "delete_plex_webhook_share",
         views.delete_plex_webhook_share,
         name="delete_plex_webhook_share",
+    ),
+    path(
+        "update_plex_mark_watched",
+        views.update_plex_mark_watched,
+        name="update_plex_mark_watched",
     ),
     path(
         "update_jellyfin_webhook_events",

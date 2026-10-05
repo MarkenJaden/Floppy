@@ -15,12 +15,14 @@ from app.history_cache_utils import (
     HISTORY_CACHE_TIMEOUT,
     HISTORY_DAY_CACHE_TIMEOUT,
     _cache_key,
+    _current_history_era,
     _day_cache_key,
     _day_key_for_date,
     _day_key_from_value,
     _localize_datetime,
     _music_history_user_q,
     _normalize_logging_style,
+    _touch_history_era,
     _typed_history_index_key,
     _typed_history_index_registry_key,
     expand_history_media_types,
@@ -39,41 +41,47 @@ def _add_days(days_set, days_iterable):
     return added
 
 
-def build_history_index(user, logging_style_override=None, media_types=None):
+def build_history_index(
+    user, logging_style_override=None, media_types=None
+):
     """Build an ordered list of active history days for a user."""
     build_start = time.perf_counter()
     logging_style = _normalize_logging_style(logging_style_override, user)
     requested_media_types = expand_history_media_types(media_types)
-    include_episode = (
-        requested_media_types is None or "episode" in requested_media_types
-    )
+    include_episode = requested_media_types is None or "episode" in requested_media_types
     include_movie = requested_media_types is None or "movie" in requested_media_types
     include_music = requested_media_types is None or "music" in requested_media_types
-    include_podcast = (
-        requested_media_types is None or "podcast" in requested_media_types
-    )
+    include_podcast = requested_media_types is None or "podcast" in requested_media_types
     include_game = requested_media_types is None or "game" in requested_media_types
-    include_boardgame = (
-        requested_media_types is None or "boardgame" in requested_media_types
-    )
+    include_boardgame = requested_media_types is None or "boardgame" in requested_media_types
     days = set()
 
     episode_days = (
-        (
-            Episode.all_objects.filter(
-                related_season__user=user,
-                end_date__isnull=False,
-            )
-            .annotate(
-                day=TruncDate("end_date"),
-            )
-            .values_list("day", flat=True)
-            .distinct()
+        Episode.all_objects.filter(
+            related_season__user=user,
+            end_date__isnull=False,
         )
-        if include_episode
-        else []
-    )
+        .annotate(
+            day=TruncDate("end_date"),
+        )
+        .values_list("day", flat=True)
+        .distinct()
+    ) if include_episode else []
+    # An open play is indexed on the day it started, as a movie is.
+    episode_start_days = (
+        Episode.all_objects.filter(
+            related_season__user=user,
+            end_date__isnull=True,
+            start_date__isnull=False,
+        )
+        .annotate(
+            day=TruncDate("start_date"),
+        )
+        .values_list("day", flat=True)
+        .distinct()
+    ) if include_episode else []
     episode_count = _add_days(days, episode_days)
+    episode_count += _add_days(days, episode_start_days)
 
     movie_qs = Movie.objects.none()
     if include_movie:
@@ -115,7 +123,9 @@ def build_history_index(user, logging_style_override=None, media_types=None):
         (Manga, "manga"),
         (Anime, "anime"),
     ):
-        if not (requested_media_types is None or media_type in requested_media_types):
+        if not (
+            requested_media_types is None or media_type in requested_media_types
+        ):
             continue
         reading_qs = model.objects.filter(user=user)
         reading_end_days = (
@@ -338,7 +348,12 @@ def cache_history_days(user_id: int, logging_style: str, history_days):
     cache_history_payloads(user_id, logging_style, history_days)
 
 
-def cache_history_payloads(user_id: int, logging_style: str, history_days):
+def cache_history_payloads(
+    user_id: int,
+    logging_style: str,
+    history_days,
+    era: str | None = None,
+):
     """Persist index + per-day history payloads in cache."""
     logging_style = _normalize_logging_style(logging_style)
     index_days = []
@@ -360,11 +375,14 @@ def cache_history_payloads(user_id: int, logging_style: str, history_days):
             _serialize_history_day(day)
         )
 
+    if era is None:
+        era = _current_history_era(user_id, logging_style)
     cache.set(
         _cache_key(user_id, logging_style),
         {
             "days": index_days,
             "built_at": timezone.now(),
+            "era": era,
         },
         timeout=HISTORY_CACHE_TIMEOUT,
     )
@@ -385,26 +403,40 @@ def cache_history_index(
     day_keys,
     built_at=None,
     media_types=None,
+    era: str | None = None,
 ):
-    """Return the cache history index."""
+    """Return the cache history index.
+
+    ``era`` must be the token captured *before* the rows the index was built
+    from were read (callers that build from rows pass their captured token;
+    callers without row reads may omit it and the current era is resolved at
+    publish time). The token is embedded in the payload and, for typed
+    indexes, namespaced into the key, which is what lets invalidation retire
+    a concurrent builder's publish without deleting it first.
+    """
     logging_style = _normalize_logging_style(logging_style)
     if built_at is None:
         built_at = timezone.now()
+    if era is None:
+        era = _current_history_era(user_id, logging_style)
     cache_key = _cache_key(user_id, logging_style)
     if media_types is not None:
         cache_key = _typed_history_index_key(
             user_id,
             logging_style,
             media_types,
+            era,
         )
     cache.set(
         cache_key,
         {
             "days": day_keys,
             "built_at": built_at,
+            "era": era,
         },
         timeout=HISTORY_CACHE_TIMEOUT,
     )
+    _touch_history_era(user_id, logging_style)
     if media_types is not None:
         registry_key = _typed_history_index_registry_key(user_id, logging_style)
         registry = cache.get(registry_key) or []

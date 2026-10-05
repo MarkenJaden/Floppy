@@ -5,13 +5,16 @@
 import logging
 from http import HTTPStatus as HTTP  # noqa: N814
 
+from django.conf import settings
 from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import views as drf_views
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
+from app.redis_diagnosis import queue_failure_message
 from integrations import exports, tasks
+from integrations.imports import helpers as import_helpers
 from integrations.upload_staging import (
     enqueue_staged_task,
     stage_uploaded_file,
@@ -28,6 +31,13 @@ _USERNAME_IMPORTS = {
     "anilist": ("import_anilist", "AniList username"),
     "kitsu": ("import_kitsu", "Kitsu user ID"),
     "steam": ("import_steam", "Steam ID"),
+}
+
+# Token-driven imports: service -> (task export, credential label). These have
+# no public username to read, so the credential is the only way in, and it is
+# encrypted before it reaches the broker.
+_TOKEN_IMPORTS = {
+    "mangabaka": ("import_mangabaka", "MangaBaka API token"),
 }
 
 # File-driven imports: service -> (task export, file label).
@@ -53,11 +63,23 @@ def _resolve_mode(request):
     return mode
 
 
+def _queue_failure_response(error):
+    """Return 503 naming an unreachable Redis broker rather than a bare 500."""
+    detail = queue_failure_message(
+        error,
+        "The import could not be queued.",
+        "",
+        settings.CELERY_BROKER_URL,
+    )
+    return Response({"detail": detail}, status=HTTP.SERVICE_UNAVAILABLE)
+
+
 # /api/v1/imports/[service]/
 class ImportDispatchView(drf_views.APIView):
     """Queue a one-off import for a service (mirrors the web import forms).
 
     Username services (mal, anilist, kitsu, steam) take {"username", "mode"}.
+    Token services (mangabaka) take {"token", "mode"} and never a username.
     File services (yamtrack, trakt-collection, trakt-export, hltb, grouvee,
     imdb, goodreads, hardcover, storygraph) take a multipart upload in the
     "file" field plus an optional "mode". Returns 202 with a task_id pollable at
@@ -87,8 +109,28 @@ class ImportDispatchView(drf_views.APIView):
                     {"detail": f"{label} is required in 'username'."},
                     status=HTTP.BAD_REQUEST,
                 )
+            try:
+                task = task_fn.delay(
+                    username=username,
+                    user_id=request.user.id,
+                    mode=mode,
+                )
+            except Exception as error:
+                logger.exception("Could not queue %s import", label)
+                return _queue_failure_response(error)
+            return Response({"task_id": task.id}, status=HTTP.ACCEPTED)
+
+        if service in _TOKEN_IMPORTS:
+            task_export, label = _TOKEN_IMPORTS[service]
+            task_fn = getattr(tasks, task_export)
+            token = (str(request.data.get("token") or "")).strip()
+            if not token:
+                return Response(
+                    {"detail": f"{label} is required in 'token'."},
+                    status=HTTP.BAD_REQUEST,
+                )
             task = task_fn.delay(
-                username=username,
+                token=import_helpers.encrypt(token),
                 user_id=request.user.id,
                 mode=mode,
             )
@@ -119,18 +161,17 @@ class ImportDispatchView(drf_views.APIView):
                     mode=mode,
                     staged_paths=(staged_file,),
                 )
-            except Exception:
+            except Exception as error:
                 logger.exception("Could not queue %s upload", label)
-                return Response(
-                    {"detail": "The import could not be queued."},
-                    status=HTTP.SERVICE_UNAVAILABLE,
-                )
+                return _queue_failure_response(error)
             return Response({"task_id": task.id}, status=HTTP.ACCEPTED)
 
         return Response(
             {
                 "detail": "Unknown import service.",
-                "services": sorted([*_USERNAME_IMPORTS, *_FILE_IMPORTS]),
+                "services": sorted(
+                    [*_USERNAME_IMPORTS, *_TOKEN_IMPORTS, *_FILE_IMPORTS],
+                ),
             },
             status=HTTP.NOT_FOUND,
         )

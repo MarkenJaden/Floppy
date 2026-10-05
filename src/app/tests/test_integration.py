@@ -5,20 +5,22 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from django.contrib.auth import get_user_model
-from django.contrib.staticfiles.testing import StaticLiveServerTestCase
-from django.test import tag
+from django.db import OperationalError
+from django.test import RequestFactory, tag
 from django.urls import reverse
 from django.utils import timezone
 from playwright.sync_api import expect, sync_playwright
 
 from app.discover.schemas import RowResult
+from app.middleware import DatabaseRetryMiddleware
 from app.models import Game, Item, MediaTypes, Movie, Sources, Status
+from app.tests.live_server import SerialStaticLiveServerTestCase
 from app.tests.views.test_track_modal import _tv_with_seasons_payload
-from users.models import DateFormatChoices
+from users.models import DateFormatChoices, HomeScreenRow, HomeScreenRowTypeChoices
 
 
 @tag("slow", "playwright")
-class IntegrationTest(StaticLiveServerTestCase):
+class IntegrationTest(SerialStaticLiveServerTestCase):
     """Integration tests for the application."""
 
     @classmethod
@@ -123,6 +125,71 @@ class IntegrationTest(StaticLiveServerTestCase):
         self.page.locator("#global-search").fill(query)
         self.page.locator('form:has(#global-search) button[type="submit"]').click()
 
+    def test_htmx_database_contention_retries_original_get(self):
+        """A failed fragment retries its full URL without another user click."""
+        requests = []
+
+        def respond(route):
+            requests.append(route.request.url)
+            if len(requests) <= 2:
+                route.fulfill(
+                    status=503,
+                    headers={"X-Floppy-Transient-DB": "contention"},
+                    body="",
+                )
+            else:
+                route.fulfill(status=200, body='<p id="contention-loaded">Loaded</p>')
+
+        self.page.route("**/track_modal/tmdb/tv/1396?*", respond)
+        self.page.evaluate(
+            """() => {
+                const target = document.createElement('div');
+                target.id = 'contention-test-target';
+                document.body.append(target);
+                const button = document.createElement('button');
+                button.id = 'contention-test-button';
+                button.textContent = 'Open';
+                button.setAttribute('hx-get', '/track_modal/tmdb/tv/1396?instance_id=7&home_row_id=recent');
+                button.setAttribute('hx-target', '#contention-test-target');
+                button.setAttribute('hx-trigger', 'click once');
+                document.body.append(button);
+                htmx.process(button);
+            }"""
+        )
+        self.page.locator("#contention-test-button").click()
+        expect(self.page.locator("#contention-test-target #contention-loaded")).to_be_visible()
+        self.assertEqual(len(requests), 3)
+        for request_url in requests:
+            query = parse_qs(urlparse(request_url).query)
+            self.assertEqual(query["instance_id"], ["7"])
+            self.assertEqual(query["home_row_id"], ["recent"])
+            self.assertEqual(len(query.get("org.htmx.cache-buster", [])), 1)
+            self.assertEqual(len(query.get("cache_bust", [])), 1)
+
+    def test_full_page_database_contention_reloads_until_success(self):
+        response = DatabaseRetryMiddleware(lambda _request: None).process_exception(
+            RequestFactory().get("/medialist/tv?page=2"),
+            OperationalError("database is locked"),
+        )
+        failures = 0
+
+        def fail_twice(route):
+            nonlocal failures
+            failures += 1
+            if failures <= 2:
+                route.fulfill(
+                    status=503,
+                    headers={"Content-Type": "text/html"},
+                    body=response.content,
+                )
+            else:
+                route.continue_()
+
+        self.page.route("**/medialist/tv?page=2", fail_twice)
+        self.page.goto(f"{self.live_server_url}/medialist/tv?page=2")
+        expect(self.page.locator("#global-search")).to_be_visible()
+        self.assertEqual(failures, 3)
+
     def test_touch_media_card_reveals_and_executes_wrapped_actions(self):
         """A coarse-pointer card reveals, dismisses, and accepts an action tap."""
         touch_context = self.browser.new_context(
@@ -181,6 +248,78 @@ class IntegrationTest(StaticLiveServerTestCase):
                 lambda request: "lists_modal" in request.url,
             ):
                 card.get_by_title("Add to custom lists").click()
+            lists_modal = card.locator("[x-show='listsOpen']")
+            expect(lists_modal).to_be_visible()
+            expect(lists_modal.locator(".list-modal-root")).to_be_visible()
+        finally:
+            touch_context.close()
+
+    def test_home_poster_action_modal_is_visible_on_touch(self):
+        item = Item.objects.create(
+            media_id="poster-action-test",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.MOVIE.value,
+            title="Poster Action Test",
+            image="https://example.com/poster.jpg",
+        )
+        Movie.objects.create(item=item, user=self.user, status=Status.IN_PROGRESS.value)
+        HomeScreenRow.objects.create(
+            user=self.user,
+            media_type=MediaTypes.MOVIE.value,
+            position=10,
+            row_type=HomeScreenRowTypeChoices.LIBRARY_QUERY,
+            sort_by="recent",
+            direction="desc",
+            filters={"status": [Status.IN_PROGRESS.value]},
+        )
+        touch_context = self.browser.new_context(
+            storage_state=self.context.storage_state(),
+            has_touch=True,
+            is_mobile=True,
+            viewport={"width": 390, "height": 844},
+        )
+        try:
+            page = touch_context.new_page()
+            page.goto(self.live_server_url + "/")
+            cards = page.locator(
+                '.home-row-card .media-card:has(a.media-card-title[title="Poster Action Test"])'
+            )
+            expect(cards).to_have_count(2)
+            for title in ("Add to tracker", "Add to custom lists"):
+                first_target = (
+                    cards.nth(0).get_by_title(title).get_attribute("hx-target")
+                )
+                second_target = (
+                    cards.nth(1).get_by_title(title).get_attribute("hx-target")
+                )
+                self.assertNotEqual(first_target, second_target)
+                self.assertEqual(page.locator(second_target).count(), 1)
+            card = cards.nth(1)
+            expect(card).to_be_visible()
+            card.locator(".media-card-poster").click()
+            card.get_by_title("Add to custom lists").click()
+            modal = card.locator("[x-show='listsOpen']")
+            expect(modal.locator(".list-modal-root")).to_be_visible()
+            box = modal.bounding_box()
+            self.assertIsNotNone(box)
+            self.assertLess(abs(box["x"]), 2)
+            self.assertLess(abs(box["y"]), 2)
+            self.assertLess(abs(box["width"] - 390), 2)
+            self.assertLess(abs(box["height"] - 844), 2)
+            self.assertTrue(
+                modal.evaluate(
+                    "element => element.contains(document.elementFromPoint(innerWidth / 2, innerHeight / 2))"
+                )
+            )
+            modal.locator(".list-modal-root button").first.click()
+            expect(modal).not_to_be_visible()
+            card.get_by_title("Add to tracker").click()
+            track_modal = card.locator("[x-show='trackOpen']")
+            expect(track_modal.locator("[data-track-modal-root]")).to_be_visible()
+            page.keyboard.press("Escape")
+            expect(track_modal).not_to_be_visible()
+            card.get_by_title("View your activity history").click()
+            page.wait_for_url("**/history?*")
         finally:
             touch_context.close()
 
@@ -598,15 +737,23 @@ class IntegrationTest(StaticLiveServerTestCase):
         expect(end_quick_actions).to_be_visible()
         expect(start_quick_actions).to_be_visible()
         expect(create_modal.get_by_text("Select date", exact=True)).to_have_count(0)
+        # Split per #1243: the start picker offers Start Now and Release Date,
+        # the end picker only Just Finished.
         expect(
-            end_quick_actions.get_by_role("button", name="Start Now", exact=True)
+            start_quick_actions.get_by_role("button", name="Start Now", exact=True)
+        ).to_be_visible()
+        expect(
+            start_quick_actions.get_by_role("button", name="Release Date", exact=True)
         ).to_be_visible()
         expect(
             end_quick_actions.get_by_role("button", name="Just Finished", exact=True)
         ).to_be_visible()
         expect(
+            end_quick_actions.get_by_role("button", name="Start Now", exact=True)
+        ).to_have_count(0)
+        expect(
             end_quick_actions.get_by_role("button", name="Release Date", exact=True)
-        ).to_be_visible()
+        ).to_have_count(0)
         end_picker_dialog = create_modal.get_by_role("dialog", name="End date picker")
         expect(end_picker_dialog).not_to_be_visible()
 
@@ -647,26 +794,19 @@ class IntegrationTest(StaticLiveServerTestCase):
         expect(start_quick_actions).to_be_visible()
         expect(end_quick_actions).to_be_visible()
 
-        before_start_now = self.page.evaluate("Date.now()")
-        end_quick_actions.get_by_role("button", name="Start Now", exact=True).click()
-        after_start_now = self.page.evaluate("Date.now()")
+        before_end_finished = self.page.evaluate("Date.now()")
+        end_quick_actions.get_by_role(
+            "button", name="Just Finished", exact=True
+        ).click()
+        after_end_finished = self.page.evaluate("Date.now()")
         expect(end_picker_dialog).not_to_be_visible()
         expect(end_quick_actions).not_to_be_visible()
         end_value_ms = self.page.evaluate(
             "value => new Date(value).getTime()",
             end_date_input.input_value(),
         )
-        self.assertGreaterEqual(
-            end_value_ms,
-            before_start_now + 95 * 60 * 1000 - 1000,
-        )
-        self.assertLessEqual(
-            end_value_ms,
-            after_start_now + 95 * 60 * 1000 + 1000,
-        )
-        expect(create_modal.locator('select[name="status"]')).to_have_value(
-            Status.IN_PROGRESS.value
-        )
+        self.assertGreaterEqual(end_value_ms, before_end_finished - 1000)
+        self.assertLessEqual(end_value_ms, after_end_finished + 1000)
 
         create_modal.locator(".date-picker-closed-field").first.get_by_role(
             "button", name="Clear date"
@@ -689,7 +829,9 @@ class IntegrationTest(StaticLiveServerTestCase):
         create_modal.locator(".date-picker-closed-field").first.get_by_role(
             "button", name="Clear date"
         ).click()
-        expect(start_quick_actions).to_be_visible()
+        if end_clear.is_visible():
+            end_clear.click()
+        expect(end_quick_actions).to_be_visible()
         # Bracket the click, the way the two assertions above already do. Taking
         # a single timestamp after the click and using it for the lower bound
         # charges every millisecond of click handling, re-render and round-trip
@@ -697,10 +839,10 @@ class IntegrationTest(StaticLiveServerTestCase):
         # input loses by truncating to whole seconds. That left about a
         # millisecond of real headroom, and CI duly missed it by 49ms.
         before_just_finished = self.page.evaluate("Date.now()")
-        start_quick_actions.get_by_role(
+        end_quick_actions.get_by_role(
             "button", name="Just Finished", exact=True
         ).click()
-        expect(start_quick_actions).not_to_be_visible()
+        expect(end_quick_actions).not_to_be_visible()
         after_just_finished = self.page.evaluate("Date.now()")
         just_finished_start_ms = self.page.evaluate(
             "value => new Date(value).getTime()",
@@ -728,9 +870,10 @@ class IntegrationTest(StaticLiveServerTestCase):
         ).click()
 
         self.page.set_viewport_size({"width": 375, "height": 812})
-        expect(end_quick_actions).to_be_visible()
+        expect(start_quick_actions).to_be_visible()
+        # At phone width the shortcut shows its short label.
         expect(
-            end_quick_actions.get_by_role("button", name="Release Date", exact=True)
+            start_quick_actions.get_by_role("button", name="Release", exact=True)
         ).to_be_visible()
 
         end_time_segment = "14:25"
@@ -1302,4 +1445,6 @@ class IntegrationTest(StaticLiveServerTestCase):
             desktop_signal_box["x"] + desktop_signal_box["width"],
             desktop_row_box["x"] + desktop_row_box["width"],
         )
-        self.assertEqual(desktop_signal_box["height"], 16)
+        # Layout boxes are sub-pixel (15.99997 is 16 on screen), so compare
+        # to within a rounding error rather than exactly.
+        self.assertAlmostEqual(desktop_signal_box["height"], 16, delta=0.5)

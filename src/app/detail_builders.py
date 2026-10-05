@@ -689,6 +689,26 @@ def _build_mal_rating_context(detail_item, route_media_type):
     }
 
 
+def _build_opencritic_context(detail_item, route_media_type):
+    """Return template-ready stored OpenCritic scores for a game."""
+    if (
+        not detail_item
+        or route_media_type != MediaTypes.GAME.value
+        or detail_item.opencritic_score is None
+    ):
+        return None
+    return {
+        "score": round(detail_item.opencritic_score),
+        "percent_recommended": (
+            round(detail_item.opencritic_percent_recommended)
+            if detail_item.opencritic_percent_recommended is not None
+            else None
+        ),
+        "tier": detail_item.opencritic_tier,
+        "url": detail_item.opencritic_url,
+    }
+
+
 def _apply_cached_hltb_link(media_metadata, detail_item):
     """Prefer a stored direct HLTB link when one has already been resolved."""
     if not detail_item or not isinstance(media_metadata, dict):
@@ -745,6 +765,13 @@ _DETAIL_LINK_BRANDS = {
         "badge_classes": "border-fuchsia-400/28 bg-fuchsia-500/14",
         "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
         "fallback_text": "MU",
+    },
+    Sources.MANGABAKA.value: {
+        "logo_src": static("img/mangabaka-logo.png"),
+        "chip_classes": "border-violet-400/18 bg-violet-500/[0.07]",
+        "badge_classes": "border-violet-400/28 bg-violet-500/14",
+        "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
+        "fallback_text": "MB",
     },
     Sources.IGDB.value: {
         "logo_src": static("img/igdb-logo.png"),
@@ -857,6 +884,18 @@ _DETAIL_LINK_BRANDS = {
         "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
         "fallback_text": "LFM",
     },
+    "soundcloud": {
+        "chip_classes": "border-orange-400/18 bg-orange-500/[0.07]",
+        "badge_classes": "border-orange-400/28 bg-orange-500/14",
+        "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
+        "fallback_text": "SC",
+    },
+    "spotify": {
+        "chip_classes": "border-green-400/18 bg-green-500/[0.07]",
+        "badge_classes": "border-green-400/28 bg-green-500/14",
+        "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
+        "fallback_text": "SP",
+    },
     "imdb": {
         "logo_src": static("img/imdb-logo.png"),
         "chip_classes": "border-amber-400/18 bg-amber-500/[0.07]",
@@ -924,6 +963,7 @@ def _build_detail_link_entry(label, url, brand_key):
     return {
         "label": label,
         "url": url,
+        "brand": _normalize_detail_link_brand_key(brand_key),
         "chip_classes": brand["chip_classes"],
         "badge_classes": brand["badge_classes"],
         "accent_classes": brand["accent_classes"],

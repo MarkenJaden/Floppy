@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Automated Git merge conflict resolver using Google Gemini API.
+Automated Git merge conflict resolver using Google Gemini API with smart filtering and rate-limit handling.
 """
 
 import json
@@ -12,10 +12,48 @@ import urllib.error
 import urllib.request
 
 MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
+    "gemini-3.1-flash-lite",  # 500 requests/day, 15 RPM on free tier
+    "gemini-3-flash",         # 20 requests/day, 5 RPM
+    "gemini-2.5-flash-lite",   # 20 requests/day, 10 RPM
+    "gemini-2.5-flash",        # 20 requests/day, 5 RPM
 ]
+
+AUTOMATED_COMMIT_PREFIXES = (
+    "style: format",
+    "merge: auto-resolve",
+    "Merge remote-tracking",
+    "Merge branch",
+)
+
+
+def get_merge_base() -> str:
+    """Find the common ancestor commit between HEAD and the incoming merge."""
+    for ref in ["MERGE_HEAD", "FETCH_HEAD", "upstream/latest"]:
+        res = subprocess.run(["git", "merge-base", "HEAD", ref], capture_output=True, text=True)
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    return ""
+
+
+def file_has_custom_fork_commits(file_path: str, merge_base: str) -> bool:
+    """Return True if the file was ever touched by custom fork commits, False if only by automated commits."""
+    if not merge_base:
+        return True
+    res = subprocess.run(
+        ["git", "log", "--oneline", f"{merge_base}..HEAD", "--", file_path],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        return True
+    commits = [l.strip() for l in res.stdout.splitlines() if l.strip()]
+    if not commits:
+        return False
+    for c in commits:
+        msg = " ".join(c.split()[1:])
+        if not any(msg.startswith(p) for p in AUTOMATED_COMMIT_PREFIXES):
+            return True
+    return False
 
 
 def get_conflicted_files():
@@ -47,9 +85,11 @@ def call_gemini(prompt: str, api_key: str) -> str:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 print(f"Calling {model} (attempt {attempt + 1})...")
+                # Throttle to stay safely within RPM limits
+                time.sleep(4)
                 with urllib.request.urlopen(req, timeout=90) as resp:
                     resp_json = json.loads(resp.read().decode("utf-8"))
                     text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
@@ -59,7 +99,8 @@ def call_gemini(prompt: str, api_key: str) -> str:
                 print(f"HTTPError {e.code} with {model}: {err_body}")
                 last_error = e
                 if e.code == 429:
-                    time.sleep(5)
+                    print("Rate limit hit. Waiting 10s before retry/fallback...")
+                    time.sleep(10)
                     continue
                 break
             except Exception as e:
@@ -82,8 +123,32 @@ def clean_resolved_content(content: str) -> str:
     return cleaned.rstrip() + "\n"
 
 
-def resolve_file(file_path: str, api_key: str) -> bool:
+def resolve_file(file_path: str, api_key: str, merge_base: str) -> bool:
     print(f"\n--- Resolving conflict in: {file_path} ---")
+
+    # 1. Binary or compiled files -> accept upstream
+    if file_path.endswith((".mo", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".lock", ".woff", ".woff2")):
+        print(f"Auto-resolving compiled/binary file {file_path} from upstream.")
+        st = subprocess.run(["git", "status", "--porcelain", file_path], capture_output=True, text=True).stdout[:2]
+        if st == "UD":
+            subprocess.run(["git", "rm", file_path], check=True)
+        else:
+            subprocess.run(["git", "checkout", "--theirs", file_path], check=True)
+            subprocess.run(["git", "add", file_path], check=True)
+        return True
+
+    # 2. Check if file has any custom commits from fork
+    if not file_has_custom_fork_commits(file_path, merge_base):
+        print(f"Auto-resolving {file_path}: No custom fork commits (only formatting churn). Accepting upstream.")
+        st = subprocess.run(["git", "status", "--porcelain", file_path], capture_output=True, text=True).stdout[:2]
+        if st == "UD":
+            subprocess.run(["git", "rm", file_path], check=True)
+        else:
+            subprocess.run(["git", "checkout", "--theirs", file_path], check=True)
+            subprocess.run(["git", "add", file_path], check=True)
+        return True
+
+    # 3. Text file with genuine custom commits -> use Gemini
     try:
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
@@ -102,7 +167,7 @@ Below is the complete file content containing Git merge conflict markers (`<<<<<
 
 Git Context:
 - The `HEAD` block contains the local fork's custom features and changes (e.g. cross-category search, collaborator sync, collection bulk add, custom UI/views).
-- The incoming branch block (e.g. `upstream/latest`) contains new upstream features, bug fixes, and refactorings (e.g. bulk actions, API changes, memory optimizations).
+- The incoming branch block (e.g. `upstream/latest`) contains new upstream features, bug fixes, and refactorings.
 
 Instructions:
 1. Merge both sides intelligently and cleanly.
@@ -146,13 +211,13 @@ def main():
         print("No conflicted files found.")
         sys.exit(0)
 
-    print(f"Found {len(conflicted_files)} conflicted file(s):")
-    for f in conflicted_files:
-        print(f"  - {f}")
+    merge_base = get_merge_base()
+    print(f"Merge base: {merge_base or 'unknown'}")
+    print(f"Found {len(conflicted_files)} conflicted file(s):\n" + "\n".join(f"  - {f}" for f in conflicted_files))
 
     all_resolved = True
     for f in conflicted_files:
-        success = resolve_file(f, api_key)
+        success = resolve_file(f, api_key, merge_base)
         if not success:
             all_resolved = False
 

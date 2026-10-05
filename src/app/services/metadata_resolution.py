@@ -159,6 +159,8 @@ def metadata_default_source(user, media_type: str) -> str:
             provider = getattr(user, "anime_metadata_source_default", None)
         elif media_type == MediaTypes.BOOK.value:
             provider = getattr(user, "book_metadata_source_default", None)
+        elif media_type in (MediaTypes.COMIC.value, MediaTypes.COMIC_ISSUE.value):
+            provider = getattr(user, "comic_metadata_source_default", None)
 
     provider = provider or config.get_default_source_name(media_type).value
     if provider_is_enabled(provider, user):
@@ -454,6 +456,25 @@ def _normalize_external_ids(
     }
 
 
+def _upsert_provider_link(*, defaults: dict, **lookup):
+    """Upsert one provider link, skipping the write when nothing changed.
+
+    Detail pages and the track modal call this on GET. update_or_create saves
+    an existing row even when every field matches, and on SQLite that write
+    queues behind any background writer; a matching row needs no write.
+    """
+    existing = ItemProviderLink.objects.filter(**lookup).first()
+    if existing is not None and all(
+        getattr(existing, field) == value for field, value in defaults.items()
+    ):
+        return existing, False
+    return update_or_create_race_safe(
+        ItemProviderLink.objects,
+        defaults=defaults,
+        **lookup,
+    )
+
+
 def upsert_provider_links(
     item: Item | None,
     metadata: dict | None,
@@ -493,8 +514,7 @@ def upsert_provider_links(
         if episode_offset is not None:
             link_defaults["episode_offset"] = episode_offset
         provider_link_outcome = run_retryable_db_operation(
-            lambda: update_or_create_race_safe(
-                ItemProviderLink.objects,
+            lambda: _upsert_provider_link(
                 item=item,
                 provider=normalized_provider,
                 provider_media_type=normalized_media_type,
@@ -526,8 +546,7 @@ def upsert_provider_links(
             candidate_provider=candidate_provider,
             external_id=external_id,
         ):
-            return update_or_create_race_safe(
-                ItemProviderLink.objects,
+            return _upsert_provider_link(
                 item=item,
                 provider=candidate_provider,
                 provider_media_type=normalized_media_type,
@@ -949,6 +968,7 @@ def resolve_provider_media_id(
     persistence_mode: str = "required",
     retry_max_retries: int | None = None,
     on_deferred: Callable[[Exception], None] | None = None,
+    persist_links: bool = True,
 ) -> str | None:
     """Return the mapped provider ID for a tracked item."""
     if item is None:
@@ -1012,6 +1032,7 @@ def resolve_provider_media_id(
                 return None
             if not identity or identity.media_type != MediaTypes.TV.value:
                 return None
+            if persist_links:
             persist_mal_tmdb_identity(
                 item,
                 identity,
@@ -1027,6 +1048,7 @@ def resolve_provider_media_id(
         )
 
         if mapped_series_id:
+            if persist_links:
             run_retryable_db_operation(
                 lambda: update_or_create_race_safe(
                     ItemProviderLink.objects,
@@ -1349,6 +1371,7 @@ def resolve_detail_metadata(
     persistence_mode: str = "required",
     retry_max_retries: int | None = None,
     on_persistence_deferred: Callable[[Exception], None] | None = None,
+    persist_links: bool = True,
 ) -> MetadataResolutionResult:
     """Resolve the detail-page display provider and overlay metadata when mapped."""
     provider = get_preferred_provider(
@@ -1390,6 +1413,7 @@ def resolve_detail_metadata(
             persistence_mode=persistence_mode,
             retry_max_retries=retry_max_retries,
             on_deferred=on_persistence_deferred,
+            persist_links=persist_links,
         )
         if provider_media_id:
             overlay_metadata = services.get_media_metadata(
@@ -1437,7 +1461,7 @@ def resolve_detail_metadata(
                 )
         else:
             mapping_status = "missing"
-    elif item is not None and isinstance(base_metadata, dict):
+    elif persist_links and item is not None and isinstance(base_metadata, dict):
         upsert_provider_links(
             item,
             base_metadata,
