@@ -24,7 +24,13 @@ from app.models import (
 )
 from lists import smart_rules
 from lists.feeds import FloppyRssFeed
-from lists.models import CustomList, CustomListItem, ListActivity, ListActivityType, ListRecommendation
+from lists.models import (
+    CustomList,
+    CustomListItem,
+    ListActivity,
+    ListActivityType,
+    ListRecommendation,
+)
 from users.models import DateFormatChoices
 
 
