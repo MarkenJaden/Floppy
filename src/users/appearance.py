@@ -142,6 +142,7 @@ DETAIL_LAYOUT_FAMILIES = {
         "zones": {
             "content": _zone(
                 "Content",
+                ("genres", "Genres"),
                 ("notes", "Notes"),
                 ("cast", "Cast"),
                 ("crew", "Crew"),
@@ -184,6 +185,7 @@ DETAIL_LAYOUT_FAMILIES = {
             "sidebar": _zone(
                 "Information column",
                 ("details", "Details"),
+                ("genres", "Genres"),
                 ("collection", "Collection"),
             ),
             "content": _zone("Main content", ("notes", "Notes"), ("tracks", "Tracks")),
@@ -195,6 +197,7 @@ DETAIL_LAYOUT_FAMILIES = {
             "sidebar": _zone(
                 "Information column",
                 ("details", "Details"),
+                ("genres", "Genres"),
                 ("collection", "Collection"),
             ),
             "content": _zone(
