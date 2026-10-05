@@ -51,14 +51,6 @@ ALL_SUGGESTIONS_PER_TYPE = 3
 SEARCH_ALL_PRIORITY_ORDER = [
     (MediaTypes.MOVIE.value, "load"),
     (MediaTypes.TV.value, "load"),
-    (MediaTypes.ANIME.value, "load delay:120ms"),
-    (MediaTypes.MANGA.value, "load delay:120ms"),
-    (MediaTypes.GAME.value, "load delay:120ms"),
-    (MediaTypes.BOOK.value, "load delay:250ms"),
-    (MediaTypes.COMIC.value, "load delay:250ms"),
-    (MediaTypes.BOARDGAME.value, "load delay:250ms"),
-    (MediaTypes.PODCAST.value, "load delay:250ms"),
-    (MediaTypes.MUSIC.value, "load delay:250ms"),
 ]
 
 
@@ -508,6 +500,24 @@ def media_search(request):
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 logger.debug("Local search failed: %s", exception_summary(exc))
+
+        prioritized_categories = []
+        if query:
+            enabled_types = (
+                request.user.get_enabled_media_types()
+                if request.user.is_authenticated
+                else [MediaTypes.MOVIE.value, MediaTypes.TV.value]
+            )
+            prioritized_categories = [
+                {
+                    "value": mt,
+                    "display": media_type_readable_plural(mt),
+                    "trigger": trigger,
+                }
+                for mt, trigger in SEARCH_ALL_PRIORITY_ORDER
+                if mt in enabled_types
+            ]
+
         return render(
             request,
             "app/search.html",
@@ -517,6 +527,7 @@ def media_search(request):
                 "layout": layout,
                 "local_groups": local_groups,
                 "local_group_limit": LOCAL_GROUP_LIMIT,
+                "prioritized_categories": prioritized_categories,
             },
         )
 

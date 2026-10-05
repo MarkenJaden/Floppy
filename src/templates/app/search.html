@@ -46,57 +46,60 @@
   </div>
 
   {% if media_type == "all" %}
-    <p class="mb-6 text-sm text-[var(--color-text-muted)]">{% translate "Searching your library only: items you track, collect or tag. Pick a media type to search online." %}</p>
-
-    {% for group in local_groups %}
+    {% if local_groups %}
       <div class="mb-8">
-        <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-          <h3 class="text-lg font-semibold text-[var(--color-text-secondary)]">{{ group.label }}</h3>
-          <div class="flex items-center gap-x-4 text-sm text-[var(--color-text-muted)]">
-            <span>
-              {% blocktranslate trimmed with value_1=group.total count count=group.total %}{{ value_1 }} result{% plural %}{{ value_1 }} results{% endblocktranslate %}
-              {% if group.kind == "music" %}
-                {% if group.artists_total > group.artists|length or group.albums_total > group.albums|length %}
-                  <span>{% blocktranslate trimmed with value_1=local_group_limit %}· Showing first {{ value_1 }}{% endblocktranslate %}</span>
-                {% endif %}
-              {% elif group.total > group.results|length %}
-                <span>{% blocktranslate trimmed with value_1=group.results|length %}· Showing first {{ value_1 }}{% endblocktranslate %}</span>
+        <h3 class="text-xl font-semibold mb-6 text-[var(--color-text-secondary)]">{% translate "In Your Library" %}</h3>
+        {% for group in local_groups %}
+          <div class="mb-8">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+              <h4 class="text-lg font-semibold text-[var(--color-text-secondary)]">{{ group.label }}</h4>
+              <div class="flex items-center gap-x-4 text-sm text-[var(--color-text-muted)]">
+                <span>
+                  {% blocktranslate trimmed with value_1=group.total count count=group.total %}{{ value_1 }} result{% plural %}{{ value_1 }} results{% endblocktranslate %}
+                  {% if group.kind == "music" %}
+                    {% if group.artists_total > group.artists|length or group.albums_total > group.albums|length %}
+                      <span>{% blocktranslate trimmed with value_1=local_group_limit %}· Showing first {{ value_1 }}{% endblocktranslate %}</span>
+                    {% endif %}
+                  {% elif group.total > group.results|length %}
+                    <span>{% blocktranslate trimmed with value_1=group.results|length %}· Showing first {{ value_1 }}{% endblocktranslate %}</span>
+                  {% endif %}
+                </span>
+                <a href="{% url 'search' %}?q={{ request.GET.q|urlencode }}&media_type={{ group.media_type }}&layout={{ layout }}"
+                   class="text-[var(--color-link)] hover:underline">{% translate "Search online" %}</a>
+              </div>
+            </div>
+            {% if group.kind == "music" %}
+              {% if group.artists %}
+                <h5 class="text-base font-semibold text-[var(--color-text-secondary)] mb-4">{% translate "Artists" %}</h5>
+                <div class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-4 mb-6">
+                  {% with media_list=group.artists %}
+                    {% include "app/components/artist_grid_items.html" %}
+                  {% endwith %}
+                </div>
               {% endif %}
-            </span>
-            <a href="{% url 'search' %}?q={{ request.GET.q|urlencode }}&media_type={{ group.media_type }}&layout={{ layout }}"
-               class="text-[var(--color-link)] hover:underline">{% translate "Search online" %}</a>
+              {% if group.albums %}
+                <h5 class="text-base font-semibold text-[var(--color-text-secondary)] mb-4">{% translate "Albums" %}</h5>
+                <div class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-4">
+                  {% include "app/components/search_local_album_cards.html" with albums=group.albums %}
+                </div>
+              {% endif %}
+            {% elif layout == "grid" %}
+              <div class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-4">
+                {% for result in group.results %}
+                  {% media_card "search" item=result.item title=result.item.title media=result.media matched_title=result.matched_title %}
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="grid grid-cols-1 gap-4">
+                {% for result in group.results %}
+                  {% include "app/components/media_card_list.html" with item=result.item title=result.item.title media=result.media user=user matched_title=result.matched_title %}
+                {% endfor %}
+              </div>
+            {% endif %}
           </div>
-        </div>
-        {% if group.kind == "music" %}
-          {% if group.artists %}
-            <h4 class="text-base font-semibold text-[var(--color-text-secondary)] mb-4">{% translate "Artists" %}</h4>
-            <div class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-4 mb-6">
-              {% with media_list=group.artists %}
-                {% include "app/components/artist_grid_items.html" %}
-              {% endwith %}
-            </div>
-          {% endif %}
-          {% if group.albums %}
-            <h4 class="text-base font-semibold text-[var(--color-text-secondary)] mb-4">{% translate "Albums" %}</h4>
-            <div class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-4">
-              {% include "app/components/search_local_album_cards.html" with albums=group.albums %}
-            </div>
-          {% endif %}
-        {% elif layout == "grid" %}
-          <div class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-4">
-            {% for result in group.results %}
-              {% media_card "search" item=result.item title=result.item.title media=result.media matched_title=result.matched_title %}
-            {% endfor %}
-          </div>
-        {% else %}
-          <div class="grid grid-cols-1 gap-4">
-            {% for result in group.results %}
-              {% include "app/components/media_card_list.html" with item=result.item title=result.item.title media=result.media user=user matched_title=result.matched_title %}
-            {% endfor %}
-          </div>
-        {% endif %}
+        {% endfor %}
       </div>
-    {% empty %}
+    {% elif request.GET.q and not prioritized_categories %}
       <div class="flex flex-col items-center justify-center py-32 px-4 bg-[var(--color-surface)] rounded-lg">
         <div class="bg-[var(--color-surface-strong)] rounded-full p-4 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
           {% include "app/icons/magnifying-glass.svg" with classes="w-8 h-8 text-[var(--color-text-muted)]" %}
@@ -106,7 +109,53 @@
           {% blocktranslate trimmed with value_1=request.GET.q %}Nothing in your library matches &ldquo;{{ value_1 }}&rdquo;. Pick a media type to search online.{% endblocktranslate %}
         </p>
       </div>
-    {% endfor %}
+    {% elif request.GET.q %}
+      <p class="text-sm text-[var(--color-text-muted)] mb-6">
+        {% blocktranslate trimmed with value_1=request.GET.q %}Nothing in your library matches &ldquo;{{ value_1 }}&rdquo;. Pick a media type to search online.{% endblocktranslate %}
+      </p>
+    {% endif %}
+
+    {% if prioritized_categories %}
+      <div id="online-results-container" class="mb-8">
+        <h3 class="text-xl font-semibold mb-6 text-[var(--color-text-secondary)]">{% translate "Online Results" %}</h3>
+        <div id="filter-pills" class="flex flex-wrap gap-2 mb-6"></div>
+        {% for group in prioritized_categories %}
+          <div id="search-group-{{ group.value }}"
+               hx-get="{% url 'search_group' %}?q={{ request.GET.q|urlencode }}&media_type={{ group.value }}&layout={{ layout }}"
+               hx-trigger="{{ group.trigger }}"
+               hx-swap="outerHTML">
+            <div class="mb-8 p-4 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] opacity-60 animate-pulse">
+              <div class="flex items-center justify-between mb-4">
+                <div class="h-5 w-28 bg-[var(--color-surface-strong)] rounded"></div>
+                <div class="h-4 w-16 bg-[var(--color-surface-strong)] rounded"></div>
+              </div>
+              <div class="grid {% if layout == 'grid' %}grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6{% else %}grid-cols-1{% endif %} gap-4">
+                <div class="{% if layout == 'grid' %}aspect-[2/3]{% else %}h-16{% endif %} bg-[var(--color-surface-strong)] rounded-lg"></div>
+                <div class="{% if layout == 'grid' %}aspect-[2/3]{% else %}h-16{% endif %} bg-[var(--color-surface-strong)] rounded-lg"></div>
+                <div class="{% if layout == 'grid' %}aspect-[2/3]{% else %}h-16{% endif %} bg-[var(--color-surface-strong)] rounded-lg"></div>
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+        <div id="all-online-empty" class="hidden flex flex-col items-center justify-center py-20 px-4 bg-[var(--color-surface)] rounded-lg">
+          <h3 class="text-lg font-semibold mb-2">{% translate "No results found" %}</h3>
+          <p class="text-[var(--color-text-muted)] text-center text-sm">{% blocktranslate trimmed with value_1=request.GET.q %}We couldn't find any online matches for "{{ value_1 }}".{% endblocktranslate %}</p>
+        </div>
+      </div>
+      <script>
+        document.body.addEventListener('htmx:afterSettle', function() {
+          const c = document.getElementById('online-results-container');
+          if (!c) return;
+          const stillLoading = c.querySelector('.animate-pulse');
+          if (stillLoading) return;
+          const cards = c.querySelectorAll('.media-card');
+          const empty = document.getElementById('all-online-empty');
+          if (empty && cards.length === 0) {
+            empty.classList.remove('hidden');
+          }
+        });
+      </script>
+    {% endif %}
   {% elif media_type == MediaTypes.MUSIC.value %}
     {% if local_music_artists or local_music_albums %}
       <div class="mb-8">
