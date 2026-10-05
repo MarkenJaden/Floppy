@@ -24,7 +24,6 @@ permissions:
   pull-requests: write
   issues: write
   actions: write
-  workflows: write
 
 jobs:
   sync-and-validate:
