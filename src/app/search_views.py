@@ -3,6 +3,7 @@ import logging
 from django.conf import settings
 from django.contrib import messages
 from django.db.models import Exists, OuterRef, Q
+from django.http import HttpResponse
 from django.shortcuts import render
 from django.utils.translation import gettext
 from django.views.decorators.http import require_GET
@@ -24,6 +25,7 @@ from app.models import (
     ItemTag,
     MediaTypes,
     PodcastShowTracker,
+    Sources,
 )
 from app.providers import services
 from app.services import metadata_resolution
@@ -368,6 +370,114 @@ def _local_library_groups(user, query, limit):
         if group["total"]:
             groups.append(group)
     return groups
+
+
+@require_GET
+def media_search_group(request):
+    """Return an HTMX fragment containing search results for a single media type."""
+    media_type = request.GET.get("media_type", "").strip()
+    query = request.GET.get("q", "").strip()
+    layout = request.GET.get("layout", "grid")
+
+    if not query or media_type not in VALID_SEARCH_TYPES:
+        return HttpResponse("")
+
+    source_options = metadata_resolution.available_metadata_sources(
+        media_type, request.user
+    )
+    if not source_options:
+        return HttpResponse("")
+
+    default_source = metadata_resolution.metadata_default_source(
+        request.user, media_type
+    )
+    source = (
+        default_source
+        if default_source in {o.value for o in source_options}
+        else source_options[0].value
+    )
+    language = metadata_resolution.metadata_language_default(request.user)
+
+    try:
+        with services.interactive_request_scope():
+            data = services.search(
+                media_type,
+                query,
+                1,
+                source,
+                user=request.user,
+                language=language,
+            )
+    except Exception as exc:
+        logger.debug(
+            "Online search for %s failed: %s",
+            media_type,
+            exception_summary(exc),
+        )
+        return HttpResponse("")
+
+    if media_type == MediaTypes.MUSIC.value:
+        res = [
+            {
+                "media_id": rel.get("release_id"),
+                "title": rel.get("title"),
+                "media_type": MediaTypes.MUSIC.value,
+                "source": Sources.MUSICBRAINZ.value,
+                "image": rel.get("image") or settings.IMG_NONE,
+                "artist_name": rel.get("artist_name"),
+                "release_date": rel.get("release_date"),
+                "is_music_release": True,
+            }
+            for rel in data.get("releases", [])[:6]
+        ]
+        res.extend(
+            [
+                {
+                    "media_id": art.get("artist_id"),
+                    "title": art.get("name"),
+                    "media_type": MediaTypes.MUSIC.value,
+                    "source": Sources.MUSICBRAINZ.value,
+                    "image": art.get("image") or settings.IMG_NONE,
+                    "artist_name": art.get("name"),
+                    "disambiguation": art.get("disambiguation"),
+                    "is_music_artist": True,
+                }
+                for art in data.get("artists", [])[:4]
+            ]
+        )
+        results = res
+    else:
+        raw_results = data.get("results", [])[:8]
+        if raw_results:
+            results = helpers.enrich_items_with_user_data(
+                request,
+                raw_results,
+                section_name="search",
+            )
+            for r in results:
+                r["matched_title"] = _matched_title(
+                    r.get("item"), query, request.user
+                )
+        else:
+            results = []
+
+    if not results:
+        return HttpResponse("")
+
+    group = {
+        "value": media_type,
+        "display": media_type_readable_plural(media_type),
+        "results": results,
+        "total": len(results),
+    }
+
+    context = {
+        "group": group,
+        "query": query,
+        "layout": layout,
+        "user": request.user,
+    }
+    return render(request, "app/components/search_group_results.html", context)
 
 
 @require_GET
