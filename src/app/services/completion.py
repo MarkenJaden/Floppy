@@ -67,13 +67,14 @@ def _planning_entries(instance):
 
 def prepare_completed_entry(instance, *, planning_entries=None):
     """Merge missing metadata and return planning rows to remove after save."""
-    if getattr(
-        instance, "status", None
-    ) != Status.COMPLETED.value or not _is_normalizable(instance):
+    if (
+        getattr(instance, "status", None) != Status.COMPLETED.value
+        or not _is_normalizable(instance)
+    ):
         return [], set()
 
     if planning_entries is None:
-    planning_entries = _planning_entries(instance)
+        planning_entries = _planning_entries(instance)
     if not planning_entries:
         return [], set()
 

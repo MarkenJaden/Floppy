@@ -74,6 +74,7 @@ REASON_INVALID_REDIRECT = "invalid_redirect"
 REASON_TOO_MANY_REDIRECTS = "too_many_redirects"
 REASON_DEADLINE_EXCEEDED = "deadline_exceeded"
 
+
 class UnsafeUrlError(Exception):
     """Raised when a URL may not be fetched, with a stable reason code."""
 
@@ -395,7 +396,7 @@ def safe_fetch(url, *, headers=None, session=None, total_timeout=None):
     owned_sessions = []
     current = url
     try:
-    for _hop in range(MAX_REDIRECTS + 1):
+        for _hop in range(MAX_REDIRECTS + 1):
             parsed, addresses = _validate_target(current)
             address = addresses[0]
             hostname = (parsed.hostname or "").lower().rstrip(".")
@@ -412,24 +413,24 @@ def safe_fetch(url, *, headers=None, session=None, total_timeout=None):
                 owned_sessions.append(sender)
             else:
                 sender = session
-        response = sender.get(
+            response = sender.get(
                 _pinned_url(parsed, address),
                 headers=hop_headers,
                 timeout=timeout,
-            allow_redirects=False,
-            stream=True,
-        )
+                allow_redirects=False,
+                stream=True,
+            )
 
-        if response.is_redirect or response.is_permanent_redirect:
-            location = response.headers.get("Location")
+            if response.is_redirect or response.is_permanent_redirect:
+                location = response.headers.get("Location")
                 response.close()
-            if not location:
-                msg = "This redirect had no destination."
-                raise UnsafeUrlError(REASON_INVALID_REDIRECT, msg)
-            # Re-validated on the next pass: a permitted host is allowed to
-            # redirect, but not to somewhere this boundary would have refused.
-            current = requests.compat.urljoin(current, location)
-            continue
+                if not location:
+                    msg = "This redirect had no destination."
+                    raise UnsafeUrlError(REASON_INVALID_REDIRECT, msg)
+                # Re-validated on the next pass: a permitted host is allowed to
+                # redirect, but not to somewhere this boundary would have refused.
+                current = requests.compat.urljoin(current, location)
+                continue
 
             try:
                 return response, _read_bounded(response, deadline)

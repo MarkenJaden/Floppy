@@ -110,7 +110,6 @@ def _phase(name, username):
         username,
     )
 
-
 def _parse_watched_at(watched_at: str):
     if watched_at == TRAKT_UNKNOWN_DATE:
         return None
@@ -237,7 +236,8 @@ def request_device_code(client_id=None):
     except (services.ProviderAPIError, requests.RequestException) as error:
         logger.warning("Trakt device code request failed: %s", error)
         msg = (
-            "Could not start Trakt authorization. Check TRAKT_API and TRAKT_API_SECRET."
+            "Could not start Trakt authorization. "
+            "Check TRAKT_API and TRAKT_API_SECRET."
         )
         raise MediaImportError(msg) from error
 
@@ -424,15 +424,13 @@ class TraktMetadataResolverMixin:
         self._last_external_reference = None
         reference = self._get_trakt_reference(entry_data, media_type)
         self._last_external_reference = (entry_data, media_type, reference)
-        if (
-            reference
-            and reference.review_status
-            == external_references.ExternalReferenceReviewStatus.IGNORED.value
-        ):
+        if reference and reference.review_status == external_references.ExternalReferenceReviewStatus.IGNORED.value:
             return None
         target = external_references.reference_target(reference)
         target_type = (
-            MediaTypes.TV.value if media_type == MediaTypes.SEASON.value else media_type
+            MediaTypes.TV.value
+            if media_type == MediaTypes.SEASON.value
+            else media_type
         )
         if target and target.media_type == target_type:
             return str(target.media_id)
@@ -647,7 +645,9 @@ class TraktMetadataResolverMixin:
         # bucket, so the caller passes the show's anime route down to the season
         # and episode rows.
         desired_bucket = (
-            library_media_type or metadata.get("library_media_type") or media_type
+            library_media_type
+            or metadata.get("library_media_type")
+            or media_type
         )
         memo_key = (
             media_type, str(tmdb_id), season_number, episode_number,
@@ -664,7 +664,7 @@ class TraktMetadataResolverMixin:
             item = next(
                 (item for item in existing if item.library_media_type == desired_bucket),
                 existing[0],
-        )
+            )
         else:
             item = self._find_preferred_provider_item(
                 media_type, tmdb_id, season_number, desired_bucket,
@@ -674,10 +674,10 @@ class TraktMetadataResolverMixin:
                     # get_or_create rolls back creation and signal writes on
                     # failure, and observes another importer's committed Item.
                     return app.models.Item.objects.get_or_create(
-            **item_kwargs,
-            library_media_type=desired_bucket,
+                        **item_kwargs,
+                        library_media_type=desired_bucket,
                         defaults={
-            **app.models.Item.title_fields_from_metadata(metadata),
+                            **app.models.Item.title_fields_from_metadata(metadata),
                             "image": metadata["image"],
                         },
                     )[0]
@@ -890,24 +890,24 @@ class TraktImporter(TraktMetadataResolverMixin):
                 stage()
 
         with _phase("save media", self.username):
-        helpers.cleanup_existing_media(self.to_delete, self.user)
-        helpers.bulk_create_media(self.bulk_media, self.user)
+            helpers.cleanup_existing_media(self.to_delete, self.user)
+            helpers.bulk_create_media(self.bulk_media, self.user)
 
-        if self.completed_seasons:
-            bulk_update_with_history(
+            if self.completed_seasons:
+                bulk_update_with_history(
                     self.completed_seasons,
                     app.models.Season,
                     fields=["status"],
                     default_change_reason=f"Trakt import ({self.mode})",
-            )
-        if self.completed_tvs:
-            bulk_update_with_history(
+                )
+            if self.completed_tvs:
+                bulk_update_with_history(
                     self.completed_tvs,
                     app.models.TV,
                     fields=["status"],
                     default_change_reason=f"Trakt import ({self.mode})",
-            )
-        if self.dropped_tvs:
+                )
+            if self.dropped_tvs:
                 bulk_update_with_history(
                     self.dropped_tvs,
                     app.models.TV,
@@ -935,27 +935,27 @@ class TraktImporter(TraktMetadataResolverMixin):
         with _phase("finish shows", self.username):
             for i, tv_obj in enumerate(touched_tvs.values(), start=1):
                 import_progress.report(i, len(touched_tvs), "Trakt: finishing shows")
-            if tv_obj.status == Status.COMPLETED.value:
-                pending_date = self.tv_completion_dates.get(f"{tv_obj.item.media_id}")
-                if pending_date is not None:
-                    tv_obj._pending_end_date = pending_date
-                try:
-                    tv_obj._completed()
-                except (
-                    services.ProviderAPIError,
-                    requests.exceptions.RequestException,
-                    KeyError,
-                    TypeError,
-                    ValueError,
-                ) as error:
-                    logger.warning(
-                        "Skipping completion fan-out due to missing metadata"
-                        " for %s: %s",
-                        tv_obj.item.media_id,
-                        error,
-                    )
-            elif tv_obj.status == Status.DROPPED.value:
-                tv_obj._mark_in_progress_seasons_as_dropped()
+                if tv_obj.status == Status.COMPLETED.value:
+                    pending_date = self.tv_completion_dates.get(f"{tv_obj.item.media_id}")
+                    if pending_date is not None:
+                        tv_obj._pending_end_date = pending_date
+                    try:
+                        tv_obj._completed()
+                    except (
+                        services.ProviderAPIError,
+                        requests.exceptions.RequestException,
+                        KeyError,
+                        TypeError,
+                        ValueError,
+                    ) as error:
+                        logger.warning(
+                            "Skipping completion fan-out due to missing metadata"
+                            " for %s: %s",
+                            tv_obj.item.media_id,
+                            error,
+                        )
+                elif tv_obj.status == Status.DROPPED.value:
+                    tv_obj._mark_in_progress_seasons_as_dropped()
 
         imported_counts = {
             media_type: len(media_list)
@@ -999,86 +999,86 @@ class TraktImporter(TraktMetadataResolverMixin):
             if isinstance(all_data, HistoryPages):
                 cleanup.callback(all_data.close)
 
-        while True:
-            url = f"{endpoint}?page={page}&limit={BULK_PAGE_SIZE}"
+            while True:
+                url = f"{endpoint}?page={page}&limit={BULK_PAGE_SIZE}"
 
-            try:
-                page_data = self._make_api_request(url)
-            except requests.exceptions.HTTPError as error:
-                self._raise_for_user_error(error)
+                try:
+                    page_data = self._make_api_request(url)
+                except requests.exceptions.HTTPError as error:
+                    self._raise_for_user_error(error)
 
-                if error.response.status_code == requests.codes.method_not_allowed:
-                    logger.warning(
-                        "Trakt endpoint %s returned 405 (not available for this account), skipping.",
-                        endpoint,
-                    )
-                    return []
-                raise
+                    if error.response.status_code == requests.codes.method_not_allowed:
+                        logger.warning(
+                            "Trakt endpoint %s returned 405 (not available for this account), skipping.",
+                            endpoint,
+                        )
+                        return []
+                    raise
 
-            if not page_data:
-                # We've reached the end of the data
-                break
+                if not page_data:
+                    # We've reached the end of the data
+                    break
 
-            all_data.extend(page_data)
-            page += 1
-            import_progress.report(
-                len(all_data),
-                total=None,
-                label=f"Trakt: gathering {item_type}…",
-            )
+                all_data.extend(page_data)
+                page += 1
+                import_progress.report(
+                    len(all_data),
+                    total=None,
+                    label=f"Trakt: gathering {item_type}…",
+                )
+                logger.info(
+                    "Retrieved page %s of %s for user %s (%s items)",
+                    page - 1,
+                    item_type,
+                    self.username,
+                    len(page_data),
+                )
+
             logger.info(
-                "Retrieved page %s of %s for user %s (%s items)",
-                page - 1,
+                "Retrieved %s total %s for user %s",
+                len(all_data),
                 item_type,
                 self.username,
-                len(page_data),
             )
-
-        logger.info(
-            "Retrieved %s total %s for user %s",
-            len(all_data),
-            item_type,
-            self.username,
-        )
             cleanup.pop_all()
-        return all_data
+            return all_data
 
     def process_history(self):
         """Process watch history from Trakt."""
         logger.info("Importing watch history for user %s", self.username)
         history_endpoint = f"{self.user_base_url}/history"
         with contextlib.ExitStack() as cleanup:
-        full_history = self._get_paginated_data(history_endpoint, "history entries")
+            full_history = self._get_paginated_data(history_endpoint, "history entries")
             if isinstance(full_history, HistoryPages):
                 cleanup.callback(full_history.close)
 
-        # Some private profiles can return empty user history with OAuth.
-        # Fallback to the authenticated sync endpoint in that case.
-        if self.is_oauth_import and not full_history:
-            fallback_endpoint = f"{TRAKT_API_BASE_URL}/sync/history"
-            logger.warning(
-                "Empty Trakt history for OAuth user %s at %s. Trying %s",
-                self.username,
-                history_endpoint,
-                fallback_endpoint,
-            )
-            try:
-                full_history = self._get_paginated_data(
+            # Some private profiles can return empty user history with OAuth.
+            # Fallback to the authenticated sync endpoint in that case.
+            if self.is_oauth_import and not full_history:
+                fallback_endpoint = f"{TRAKT_API_BASE_URL}/sync/history"
+                logger.warning(
+                    "Empty Trakt history for OAuth user %s at %s. Trying %s",
+                    self.username,
+                    history_endpoint,
                     fallback_endpoint,
-                    "history entries",
                 )
+                try:
+                    full_history = self._get_paginated_data(
+                        fallback_endpoint,
+                        "history entries",
+                    )
                     if isinstance(full_history, HistoryPages):
                         cleanup.callback(full_history.close)
-            except Exception:
-                logger.exception(
-                    "Fallback Trakt history endpoint failed for user %s",
-                    self.username,
-                )
+                except Exception:
+                    logger.exception(
+                        "Fallback Trakt history endpoint failed for user %s",
+                        self.username,
+                    )
 
-        # Process in chronological order (oldest first)
-        total = len(full_history)
-        for i, entry in enumerate(reversed(full_history), start=1):
-            import_progress.report(i, total, "Trakt: watch history")
+            # Process in chronological order (oldest first)
+            total = len(full_history)
+            for i, entry in enumerate(reversed(full_history), start=1):
+                import_progress.report(i, total, "Trakt: watch history")
                 if i % HISTORY_LOG_EVERY == 0:
                     logger.info(
                         "Trakt history progress: %s of %s entries (user %s)",
@@ -1086,41 +1086,41 @@ class TraktImporter(TraktMetadataResolverMixin):
                         total,
                         self.username,
                     )
-            watched_at = entry["watched_at"]
-            try:
-                if entry["type"] == "movie":
+                watched_at = entry["watched_at"]
+                try:
+                    if entry["type"] == "movie":
                         logger.debug(
-                        "Processing movie %s watched at %s",
-                        entry["movie"]["title"],
-                        watched_at,
-                    )
-                    self.process_watched_movie(entry)
-                elif entry["type"] == "episode":
+                            "Processing movie %s watched at %s",
+                            entry["movie"]["title"],
+                            watched_at,
+                        )
+                        self.process_watched_movie(entry)
+                    elif entry["type"] == "episode":
                         logger.debug(
-                        "Processing episode %s S%sE%s watched at %s",
-                        entry["show"]["title"],
-                        entry["episode"]["season"],
-                        entry["episode"]["number"],
-                        watched_at,
-                    )
-                    self.process_watched_episode(entry)
-            except MediaImportError:
-                # Fatal, importer-level problems (auth, etc.) must still abort.
-                raise
+                            "Processing episode %s S%sE%s watched at %s",
+                            entry["show"]["title"],
+                            entry["episode"]["season"],
+                            entry["episode"]["number"],
+                            watched_at,
+                        )
+                        self.process_watched_episode(entry)
+                except MediaImportError:
+                    # Fatal, importer-level problems (auth, etc.) must still abort.
+                    raise
                 except DatabaseError as error:
                     # Failed persistence is not a malformed source entry. Do
                     # not report a successful import with missing watches.
                     msg = "Trakt history database write failed. Retry the import after background writes finish."
                     raise MediaImportError(msg) from error
-            except Exception as e:
-                # A single malformed/unexpected entry should not abort the whole
-                # import; record it as a warning and continue with the rest.
-                logger.exception("Skipping Trakt history entry")
-                source_data = entry.get("show") or entry.get("movie") or {}
-                title = source_data.get("title", "Unknown title")
-                self.warnings.append(
-                    f"{title}: skipped a watch entry due to an unexpected error ({e}).",
-                )
+                except Exception as e:
+                    # A single malformed/unexpected entry should not abort the whole
+                    # import; record it as a warning and continue with the rest.
+                    logger.exception("Skipping Trakt history entry")
+                    source_data = entry.get("show") or entry.get("movie") or {}
+                    title = source_data.get("title", "Unknown title")
+                    self.warnings.append(
+                        f"{title}: skipped a watch entry due to an unexpected error ({e}).",
+                    )
 
     def process_watched_movie(self, entry):
         """Process a single movie watch event."""

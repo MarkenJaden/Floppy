@@ -1033,13 +1033,13 @@ def resolve_provider_media_id(
             if not identity or identity.media_type != MediaTypes.TV.value:
                 return None
             if persist_links:
-            persist_mal_tmdb_identity(
-                item,
-                identity,
-                persistence_mode=persistence_mode,
-                retry_max_retries=retry_max_retries,
-                on_deferred=on_deferred,
-            )
+                persist_mal_tmdb_identity(
+                    item,
+                    identity,
+                    persistence_mode=persistence_mode,
+                    retry_max_retries=retry_max_retries,
+                    on_deferred=on_deferred,
+                )
             return identity.media_id
 
         mapped_series_id = anime_mapping.resolve_provider_series_id(
@@ -1049,22 +1049,22 @@ def resolve_provider_media_id(
 
         if mapped_series_id:
             if persist_links:
-            run_retryable_db_operation(
-                lambda: update_or_create_race_safe(
-                    ItemProviderLink.objects,
-                    item=item,
-                    provider=provider,
-                    provider_media_type=provider_media_type,
-                    season_number=season_number,
-                    defaults={"provider_media_id": str(mapped_series_id)},
-                ),
-                mode=persistence_mode,
-                fallback=lambda: (None, False),
-                operation_name="grouped-anime provider-link upsert",
-                operation_logger=logger,
-                on_deferred=on_deferred,
-                **retry_kwargs,
-            )
+                run_retryable_db_operation(
+                    lambda: update_or_create_race_safe(
+                        ItemProviderLink.objects,
+                        item=item,
+                        provider=provider,
+                        provider_media_type=provider_media_type,
+                        season_number=season_number,
+                        defaults={"provider_media_id": str(mapped_series_id)},
+                    ),
+                    mode=persistence_mode,
+                    fallback=lambda: (None, False),
+                    operation_name="grouped-anime provider-link upsert",
+                    operation_logger=logger,
+                    on_deferred=on_deferred,
+                    **retry_kwargs,
+                )
             return str(mapped_series_id)
 
     return None

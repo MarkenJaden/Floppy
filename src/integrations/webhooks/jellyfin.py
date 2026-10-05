@@ -129,7 +129,7 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
             self._process_rating(payload, user, ids)
             mark_event = self._manual_mark_event(payload, user)
             if mark_event is None:
-            return
+                return
             payload = {**payload, "Event": mark_event}
             event_type = mark_event
 
@@ -644,8 +644,9 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
         except (ValueError, TypeError):
             return None, None
 
-        if (season_number is not None and season_number < 0) or (
-            episode_number is not None and episode_number < 0
+        if (
+            (season_number is not None and season_number < 0)
+            or (episode_number is not None and episode_number < 0)
         ):
             return None, None
 

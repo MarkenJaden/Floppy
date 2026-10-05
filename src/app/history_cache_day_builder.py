@@ -221,19 +221,19 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
     # Play counts only for this day's titles, not the user's whole library.
     movie_play_map = {}
     if movies:
-    movie_play_counts = (
+        movie_play_counts = (
             movies_qs.filter(
                 item__media_id__in={movie.item.media_id for movie in movies},
                 item__source__in={movie.item.source for movie in movies},
             )
             .values("item__media_id", "item__source")
-        .annotate(play_count=models.Count("id"))
-        .order_by()
-    )
-    movie_play_map = {
-        (row["item__media_id"], row["item__source"]): row["play_count"]
-        for row in movie_play_counts
-    }
+            .annotate(play_count=models.Count("id"))
+            .order_by()
+        )
+        movie_play_map = {
+            (row["item__media_id"], row["item__source"]): row["play_count"]
+            for row in movie_play_counts
+        }
 
     for movie in movies:
         entry = _build_movie_entry(movie)
@@ -337,7 +337,9 @@ def build_history_day(user, day_key, logging_style_override=None, media_types=No
         music_map = (
             {
                 music.id: music
-                for music in Music.objects.filter(id__in=music_ids, user=user)
+                for music in Music.objects.filter(
+                    id__in=music_ids, user=user
+                )
                 .select_related("item", "album", "track")
                 .defer(*history_deferred_item_fields("item"))
             }

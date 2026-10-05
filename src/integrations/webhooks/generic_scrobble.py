@@ -64,7 +64,7 @@ class GenericScrobbleProcessor(BaseWebhookProcessor):
             played=self._is_played(payload),
             position_seconds=None,
         ):
-        self._process_media(payload, user, ids)
+            self._process_media(payload, user, ids)
 
     def _is_supported_event(self, event_type):
         return True
@@ -142,9 +142,7 @@ class GenericScrobbleProcessor(BaseWebhookProcessor):
             entry = next(
                 (
                     e
-                    for e in anime_mappings.find_entries_for_mal_id(
-                        mapping_data, mal_id
-                    )
+                    for e in anime_mappings.find_entries_for_mal_id(mapping_data, mal_id)
                     if e.get("tvdb_id") or e.get("tmdb_id")
                 ),
                 None,

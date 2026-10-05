@@ -210,7 +210,7 @@ def media_save(request):
     else:
         try:
             with boundary("media_save_hydrate"):
-            hydrated = ensure_item_metadata(
+                hydrated = ensure_item_metadata(
                 request.user,
                 media_type,
                 media_id,
@@ -297,7 +297,7 @@ def media_save(request):
         else pgettext("saved action", "Updated")
     )
     with boundary("media_save_validate"):
-        valid = form.is_valid()
+            valid = form.is_valid()
     if valid:
         if isinstance(instance, (Season, TV)):
             media = form.save(commit=False)
@@ -306,7 +306,7 @@ def media_save(request):
             # from the user's own edit (#1133).
             media._change_reason = USER_EDIT_REASON
             with boundary("media_save_persist"):
-            media.save()
+                media.save()
             if (
                 isinstance(media, Season)
                 and old_status == Status.COMPLETED.value
@@ -327,7 +327,7 @@ def media_save(request):
                     media.start_rewatch()
         else:
             with boundary("media_save_persist"):
-            media = form.save()
+                media = form.save()
         if (
             media_type == MediaTypes.BOOK.value
             and "koreader_document_id" in request.POST
@@ -359,7 +359,7 @@ def media_save(request):
                         ),
                     )
         with boundary("media_save_progress"):
-        BasicMedia.objects.annotate_max_progress([media], media_type)
+            BasicMedia.objects.annotate_max_progress([media], media_type)
         image_url = form.cleaned_data.get("image_url")
         if image_url and media.item.image != image_url:
             media.item.image = image_url

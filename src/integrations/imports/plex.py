@@ -752,16 +752,10 @@ class PlexHistoryImporter:
             self.user,
             self.account,
             metadata,
-            MediaTypes.EPISODE.value
-            if metadata.get("type") == "episode"
-            else media_type,
+            MediaTypes.EPISODE.value if metadata.get("type") == "episode" else media_type,
             payload=payload,
         )
-        if (
-            reference
-            and reference.review_status
-            == external_references.ExternalReferenceReviewStatus.IGNORED.value
-        ):
+        if reference and reference.review_status == external_references.ExternalReferenceReviewStatus.IGNORED.value:
             self.summary_counts["skipped_ignored"] += 1
             return
         target = external_references.reference_target(reference)
@@ -1463,7 +1457,9 @@ class PlexHistoryImporter:
             skip_existing=skip_existing,
         )
 
-    def _record_movie_entry(self, metadata: dict, ids: dict, reference=None) -> bool:
+    def _record_movie_entry(
+        self, metadata: dict, ids: dict, reference=None
+    ) -> bool:
         """Store a normalized movie history record for bulk import."""
         tmdb_id = self._resolve_movie_tmdb_id(ids)
         logger.debug(
@@ -1608,12 +1604,10 @@ class PlexHistoryImporter:
 
         if media_id is None:
             try:
-                media_id, found_season, found_episode = (
-                    self.processor._find_tv_media_id(
-                        lookup_ids,
-                        series_search_title,
-                        allow_title_fallback=False,
-                    )
+                media_id, found_season, found_episode = self.processor._find_tv_media_id(
+                    lookup_ids,
+                    series_search_title,
+                    allow_title_fallback=False,
                 )
             except Exception as exc:
                 logger.warning(
@@ -2429,23 +2423,18 @@ class PlexHistoryImporter:
             if self._has_active_episode_order(
                 record["tmdb_id"], Sources.TMDB.value,
             ):
-            from integrations.episode_orders import apply_targets, resolve_incoming
+                from integrations.episode_orders import apply_targets, resolve_incoming
 
-            ordered_targets = resolve_incoming(
-                self.user,
-                record["tmdb_id"],
-                Sources.TMDB.value,
-                record["season_number"],
-                record["episode_number"],
-                integration="plex",
-            )
-            if ordered_targets is not None:
-                apply_targets(
-                    self.user,
-                    ordered_targets,
-                    watched_at=record["watched_at"],
+                ordered_targets = resolve_incoming(
+                    self.user, record["tmdb_id"], Sources.TMDB.value,
+                    record["season_number"], record["episode_number"],
+                    integration="plex",
                 )
-                continue
+                if ordered_targets is not None:
+                    apply_targets(
+                        self.user, ordered_targets, watched_at=record["watched_at"],
+                    )
+                    continue
 
             tv_metadata = self._tv_metadata_cache.get(record["tmdb_id"])
             if not tv_metadata:

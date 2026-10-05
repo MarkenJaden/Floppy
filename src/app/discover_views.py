@@ -698,16 +698,16 @@ def discover_action(request):
             metadata_strategy = "local_seed"
         else:
             try:
-            hydrated = view_barrel.ensure_item_metadata(
-                request.user,
-                candidate_media_type,
-                media_id,
-                source,
-                season_number,
-                identity_media_type=identity_media_type,
-                library_media_type=library_media_type,
-                **candidate_seed,
-            )
+                hydrated = view_barrel.ensure_item_metadata(
+                    request.user,
+                    candidate_media_type,
+                    media_id,
+                    source,
+                    season_number,
+                    identity_media_type=identity_media_type,
+                    library_media_type=library_media_type,
+                    **candidate_seed,
+                )
             except services.ProviderNotConfiguredError:
                 # Setup guidance is rendered by the provider-error middleware.
                 raise

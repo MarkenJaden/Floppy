@@ -600,7 +600,7 @@ class YamtrackImporter:
         )
         if self.mode == "overwrite":
             overwrite_key = (parent_type, row["source"], row["media_id"])
-                if overwrite_key in self._overwrite_wiped_media_keys:
+            if overwrite_key in self._overwrite_wiped_media_keys:
                 # This item's delete already ran this run - a repeat watch
                 # (or, for games, another session row) landed in a later
                 # batch (existing_media still shows it as pre-existing, by
@@ -610,9 +610,9 @@ class YamtrackImporter:
                 # key isn't marked wiped until _cleanup_pending_overwrite
                 # actually runs, so the delete stays queued through every
                 # row sharing this item before that happens.
-                    self.to_delete[parent_type][row["source"]].discard(
-                        row["media_id"],
-                    )
+                self.to_delete[parent_type][row["source"]].discard(
+                    row["media_id"],
+                )
         if (
             not should_process
             and self.mode == "new"
@@ -832,7 +832,9 @@ class YamtrackImporter:
 
         library_media_type = (row.get("library_media_type") or "").strip().lower()
 
-        season_number = int(row["season_number"]) if row.get("season_number") else None
+        season_number = (
+            int(row["season_number"]) if row.get("season_number") else None
+        )
         episode_number = (
             int(row["episode_number"]) if row.get("episode_number") else None
         )

@@ -65,23 +65,17 @@ def _process_webhook(provider, payload, user_id, share_id=None):
                 recipient_enabled=True,
             )
         except PlexWebhookShare.DoesNotExist:
-            logger.info(
-                "Skipping disabled or missing Plex webhook share id %s", share_id
-            )
+            logger.info("Skipping disabled or missing Plex webhook share id %s", share_id)
             return
 
         if not share.owner.is_active:
-            logger.info(
-                "Skipping Plex webhook share from inactive owner id %s", share.owner_id
-            )
+            logger.info("Skipping Plex webhook share from inactive owner id %s", share.owner_id)
             return
 
         user = share.recipient
         source_account = getattr(share.owner, "plex_account", None)
         if not source_account or not source_account.plex_token:
-            logger.info(
-                "Skipping Plex webhook share %s without an owner Plex account", share.id
-            )
+            logger.info("Skipping Plex webhook share %s without an owner Plex account", share.id)
             return
         source_username = share.plex_username
         source_libraries = share.allowed_libraries
@@ -89,9 +83,7 @@ def _process_webhook(provider, payload, user_id, share_id=None):
         try:
             user = user_model.objects.get(pk=user_id)
         except user_model.DoesNotExist:
-            logger.warning(
-                "Skipping %s webhook for missing user id %s", provider, user_id
-            )
+            logger.warning("Skipping %s webhook for missing user id %s", provider, user_id)
             return
 
     if not user.is_active:
@@ -160,7 +152,7 @@ _JELLYFIN_INSTANT_PUSH_EVENTS = frozenset({"Stop", "MarkPlayed", "MarkUnplayed"}
 
 def _queue_jellyfin_instant_push(user, payload):
     """Queue one delayed push per user, however many events arrive meanwhile."""
-        account = getattr(user, "jellyfin_account", None)
+    account = getattr(user, "jellyfin_account", None)
     if not (account and account.is_connected and account.instant_push_enabled):
         return
     if payload.get("Event") not in _JELLYFIN_INSTANT_PUSH_EVENTS:
@@ -170,7 +162,7 @@ def _queue_jellyfin_instant_push(user, payload):
         INSTANT_PUSH_DEBOUNCE_SECONDS,
         instant_push_lock_key,
     )
-            from integrations.tasks._media_imports import push_jellyfin_watched
+    from integrations.tasks._media_imports import push_jellyfin_watched
 
     # The push releases this key when it starts, so a pending push absorbs
     # every event until then. The timeout only covers a push that never runs.

@@ -148,7 +148,7 @@ def touch_grant(grant, *, interval_minutes=60):
         .update(last_used_at=now)
     )
     if updated:
-    grant.last_used_at = now
+        grant.last_used_at = now
 
 
 def manifest_catalogs_for_grant(user, grant, selected=None):
@@ -191,7 +191,8 @@ def get_catalog_spec(stremio_type, catalog_id):
         (
             spec
             for spec in CATALOG_SPECS
-            if (spec.stremio_type, spec.catalog_id) == (stremio_type, catalog_id)
+            if (spec.stremio_type, spec.catalog_id)
+            == (stremio_type, catalog_id)
         ),
         None,
     )
@@ -238,7 +239,9 @@ def select_source_list(user, spec):
     """
     owned_lists = CustomList.objects.filter(owner=user)
     source_list = (
-        owned_lists.filter(name__iexact=spec.preferred_list_name).order_by("id").first()
+        owned_lists.filter(name__iexact=spec.preferred_list_name)
+        .order_by("id")
+        .first()
     )
     if source_list is not None and _list_feeds_catalog(source_list, spec):
         return source_list
@@ -524,14 +527,14 @@ def project_meta(user, stremio_type, imdb_id, *, grant=None):
             and grant.allows_catalog(spec.catalog_id)
         )
     else:
-    membership = (
-        CustomListItem.objects.filter(
+        membership = (
+            CustomListItem.objects.filter(
                 custom_list__owner=user,
-            item__media_type__in=media_types,
+                item__media_type__in=media_types,
+            )
+            .select_related("item")
+            .order_by("-date_added", "-id")
         )
-        .select_related("item")
-        .order_by("-date_added", "-id")
-    )
         items = (entry.item for entry in membership.iterator())
 
     for item in items:
@@ -551,3 +554,4 @@ def project_meta(user, stremio_type, imdb_id, *, grant=None):
         return meta
 
     return None
+

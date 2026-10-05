@@ -123,7 +123,7 @@ def _inspect_foreign_keys(conn: sqlite3.Connection) -> dict:
             continue
         shadowed_aliases = sorted(
             name
-            for (name,) in conn.execute(
+            for name, in conn.execute(
                 "SELECT name FROM pragma_table_xinfo(?, 'main')",
                 [table],
             )
@@ -145,7 +145,7 @@ def _inspect_foreign_keys(conn: sqlite3.Connection) -> dict:
             "WHERE type = 'trigger' AND tbl_name = ? COLLATE NOCASE",
             [table, table],
         )
-        for (trigger_name,) in triggers:
+        for trigger_name, in triggers:
             unsafe_reasons.append(
                 f"affected table {table!r} has trigger {trigger_name!r}; "
                 "DELETE trigger safety cannot be proven"
@@ -498,7 +498,8 @@ def startup_progress_diagnostics(
         progress_age = phase_elapsed
         progress_state = (
             "quiet"
-            if progress_age is not None and progress_age > _PROGRESS_QUIET_AFTER_SECONDS
+            if progress_age is not None
+            and progress_age > _PROGRESS_QUIET_AFTER_SECONDS
             else "none_yet"
         )
     elif progress_age is None:
@@ -583,12 +584,10 @@ def mark_startup_status_timeout(
     previous = read_startup_status(db_path) or {}
     phase = previous.get("phase", "unknown")
     elapsed = previous.get("elapsed_seconds")
-    elapsed = (
-        float(elapsed) if isinstance(elapsed, int | float) else float(timeout_seconds)
-    )
+    elapsed = float(elapsed) if isinstance(elapsed, int | float) else float(timeout_seconds)
     elapsed = max(elapsed, float(timeout_seconds))
     if read_bytes is None:
-    read_bytes = previous.get("read_bytes")
+        read_bytes = previous.get("read_bytes")
     progress_callbacks = previous.get("progress_callbacks")
     phase_started_at = previous.get("phase_started_at")
     last_progress_at = previous.get("last_progress_at")
@@ -851,9 +850,7 @@ def _prune_recovery_backups(recovery_dir: Path, max_keep: int = 10) -> None:
         backups = [
             path
             for path in recovery_dir.glob("*.sqlite3")
-            if path.is_file()
-            and not path.is_symlink()
-            and not path.name.startswith(".")
+            if path.is_file() and not path.is_symlink() and not path.name.startswith(".")
         ]
         if len(backups) <= max_keep:
             return
@@ -917,7 +914,9 @@ def _create_verified_backup(db_path: str, fingerprint: str) -> Path:
     with suppress(FileExistsError):
         recovery_dir.mkdir(mode=0o700)
     directory_flags = (
-        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
     )
     try:
         recovery_descriptor = os.open(recovery_dir, directory_flags)
@@ -940,7 +939,10 @@ def _create_verified_backup(db_path: str, fingerprint: str) -> Path:
         staging_name = f".{database_path.stem}-{secrets.token_hex(16)}.sqlite3.tmp"
         staging_descriptor = os.open(
             staging_name,
-            os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDWR
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
             0o600,
             dir_fd=recovery_descriptor,
         )
@@ -1298,7 +1300,7 @@ def _describe_affected(conn: sqlite3.Connection) -> dict:
             ).fetchone()[0]
             columns = {
                 name.casefold()
-                for (name,) in conn.execute(
+                for name, in conn.execute(
                     "SELECT name FROM pragma_table_xinfo(?, 'main')",
                     [table],
                 )
@@ -1511,12 +1513,13 @@ def _check_foreign_keys(conn: sqlite3.Connection, db_path: str) -> None:
         )
         return
 
-    only_album_artist = {group["table"] for group in incident["groups"]} == {
-        _ALBUM_ARTIST_TABLE
-    }
-    auto_repair_enabled = os.environ.get(
-        "FLOPPY_SQLITE_AUTO_REPAIR", "true"
-    ).strip().lower() not in {"0", "false", "no", "off"}
+    only_album_artist = {
+        group["table"] for group in incident["groups"]
+    } == {_ALBUM_ARTIST_TABLE}
+    auto_repair_enabled = (
+        os.environ.get("FLOPPY_SQLITE_AUTO_REPAIR", "true").strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
     should_quarantine = (
         action == "quarantine"
         or (auto_repair_enabled and incident["can_quarantine"])
@@ -1541,7 +1544,9 @@ def _check_foreign_keys(conn: sqlite3.Connection, db_path: str) -> None:
             deleted = _delete_orphaned_rows(conn)
             remaining = _inspect_foreign_keys(conn)
             if remaining["total_conflicts"]:
-                message = f"{remaining['total_conflicts']} conflict(s) remain after quarantine"
+                message = (
+                    f"{remaining['total_conflicts']} conflict(s) remain after quarantine"
+                )
                 raise sqlite3.IntegrityError(message)
             if only_album_artist and action != "quarantine" and not auto_repair_enabled:
                 resolution = "automatic-album-artist"

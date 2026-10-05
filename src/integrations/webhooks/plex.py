@@ -131,11 +131,7 @@ class PlexWebhookProcessor(BaseWebhookProcessor):
             payload=payload,
         )
         self._active_match_reference = reference
-        if (
-            reference
-            and reference.review_status
-            == external_references.ExternalReferenceReviewStatus.IGNORED.value
-        ):
+        if reference and reference.review_status == external_references.ExternalReferenceReviewStatus.IGNORED.value:
             return None
         target = external_references.reference_target(reference)
         if media_type == MediaTypes.MUSIC.value:
@@ -219,13 +215,13 @@ class PlexWebhookProcessor(BaseWebhookProcessor):
 
         # Plex omits viewOffset at position 0, so a missing offset is a known
         # zero (a skim), not an unknown position.
-            view_offset_ms = (payload.get("Metadata") or {}).get("viewOffset") or 0
+        view_offset_ms = (payload.get("Metadata") or {}).get("viewOffset") or 0
         if not self._should_record(
             event_type,
             played=self._is_played(payload),
             position_seconds=view_offset_ms / 1000,
         ):
-                return None
+            return None
 
         if not any(
             ids.get(key) for key in ("tmdb_id", "imdb_id", "tvdb_id", "anidb_id")
@@ -309,12 +305,10 @@ class PlexWebhookProcessor(BaseWebhookProcessor):
                 episode_number = target.episode_number
             elif target and target.media_type == MediaTypes.TV.value:
                 media_id = str(target.media_id)
-                season_number, episode_number = (
-                    external_references.map_episode_coordinates(
-                        reference,
-                        season_number,
-                        episode_number,
-                    )
+                season_number, episode_number = external_references.map_episode_coordinates(
+                    reference,
+                    season_number,
+                    episode_number,
                 )
             resolve_media_id = event_type in (
                 "media.play",
@@ -470,13 +464,13 @@ class PlexWebhookProcessor(BaseWebhookProcessor):
                     self._extract_series_year(payload),
                 )
             else:
-            from app.providers import tmdb
+                from app.providers import tmdb
 
-            search_results = tmdb.search(
-                media_type,
-                search_title,
-                page=1,
-            )
+                search_results = tmdb.search(
+                    media_type,
+                    search_title,
+                    page=1,
+                )
                 original_date = metadata.get("originallyAvailableAt") or metadata.get(
                     "year",
                 )
@@ -586,7 +580,8 @@ class PlexWebhookProcessor(BaseWebhookProcessor):
                 find_results = app.providers.tmdb.find(external_id, source)
             except Exception as exc:
                 logger.warning(
-                    "TMDB find failed while resolving Plex season rating source=%s: %s",
+                    "TMDB find failed while resolving Plex season rating "
+                    "source=%s: %s",
                     source,
                     exception_summary(exc),
                 )
@@ -727,7 +722,9 @@ class PlexWebhookProcessor(BaseWebhookProcessor):
                 has_rating_id = (
                     bool(ids.get("tmdb_id"))
                     if media_type in (MediaTypes.TV.value, MediaTypes.SEASON.value)
-                    else any(ids.get(key) for key in ("tmdb_id", "imdb_id", "tvdb_id"))
+                    else any(
+                        ids.get(key) for key in ("tmdb_id", "imdb_id", "tvdb_id")
+                    )
                 )
                 if not has_rating_id:
                     logger.warning(
@@ -1190,12 +1187,10 @@ class PlexWebhookProcessor(BaseWebhookProcessor):
                 season_number = target.season_number
                 episode_number = target.episode_number
             else:
-                season_number, episode_number = (
-                    external_references.map_episode_coordinates(
-                        reference,
-                        season_number,
-                        episode_number,
-                    )
+                season_number, episode_number = external_references.map_episode_coordinates(
+                    reference,
+                    season_number,
+                    episode_number,
                 )
             return self._process_tv(
                 payload,
@@ -1228,9 +1223,7 @@ class PlexWebhookProcessor(BaseWebhookProcessor):
             episode_identity = external_references.plex_identity(metadata)
             show_identity = external_references.plex_identity(metadata, show=True)
             if episode_identity:
-                identities.append(
-                    (episode_identity, MediaTypes.EPISODE.value, matched_item)
-                )
+                identities.append((episode_identity, MediaTypes.EPISODE.value, matched_item))
             if show_identity:
                 show_item = matched_item
                 if matched_item is not None:

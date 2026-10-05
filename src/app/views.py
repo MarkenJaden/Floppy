@@ -313,7 +313,6 @@ from app.score_views import (
 from app.search_views import (
     _mark_grouped_anime_route,
     media_search,
-    media_search_group,
     search_suggestions,
 )
 from app.season_details_views import season_details
@@ -747,11 +746,11 @@ def trakt_series_graph_fragment(request, source, media_id):
     poll_for_graph = (
         attempt < TRAKT_SERIES_GRAPH_MAX_POLLS
         and Item.objects.filter(
-        media_id=str(media_id),
-        source=source,
-        media_type=MediaTypes.EPISODE.value,
-        season_number__gt=0,
-        trakt_rating__isnull=True,
+            media_id=str(media_id),
+            source=source,
+            media_type=MediaTypes.EPISODE.value,
+            season_number__gt=0,
+            trakt_rating__isnull=True,
         )
         .exclude(release_datetime__gt=timezone.now())
         .exists()
@@ -1430,14 +1429,14 @@ def history_modal(
             # Pocket Casts sync writes a record for every partial listen; only
             # records with an end date describe a listen.
             history = history.filter(end_date__isnull=False)
-            timeline_entries.extend(
-                history_processor.process_history_entries(
-                    history,
-                    media_type,
-                    media_entry_number,
-                    request.user,
-                ),
-            )
+        timeline_entries.extend(
+            history_processor.process_history_entries(
+                history,
+                media_type,
+                media_entry_number,
+                request.user,
+            ),
+        )
     return render(
         request,
         "app/components/fill_history.html",
@@ -1931,14 +1930,14 @@ def cache_status(request):
         built_at = entry.get("built_at") if entry else None
         recently_built = bool(
             built_at and timezone.now() - built_at < timedelta(seconds=60)
-            )
-            return JsonResponse(
-                {
+        )
+        return JsonResponse(
+            {
                 "exists": entry is not None,
-                    "built_at": built_at.isoformat() if built_at else None,
+                "built_at": built_at.isoformat() if built_at else None,
                 "is_stale": bool(entry) and is_stale,
                 "is_refreshing": is_stale,
-                    "recently_built": recently_built,
+                "recently_built": recently_built,
                 "any_range_refreshing": sync_running,
                 "refresh_scheduled": False,
             }
@@ -2227,7 +2226,6 @@ __all__ = [
     "media_rewatch",
     "media_save",
     "media_search",
-    "media_search_group",
     "metadata_resolution",
     "metadata_utils",
     "migrate_grouped_anime",

@@ -135,30 +135,19 @@ class TV(Media):
     """Model for TV shows."""
 
     active_episode_order = models.ForeignKey(
-        "app.EpisodeOrder",
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
+        "app.EpisodeOrder", null=True, blank=True, on_delete=models.PROTECT,
         related_name="trackers",
     )
 
     @property
     def tracking_media_id(self):
         """Return the identity of the selected episode catalogue."""
-        return (
-            self.active_episode_order.media_id
-            if self.active_episode_order_id
-            else self.item.media_id
-        )
+        return self.active_episode_order.media_id if self.active_episode_order_id else self.item.media_id
 
     @property
     def tracking_source(self):
         """Return the provider of the selected episode catalogue."""
-        return (
-            self.active_episode_order.provider
-            if self.active_episode_order_id
-            else self.item.source
-        )
+        return self.active_episode_order.provider if self.active_episode_order_id else self.item.source
 
     tracker = FieldTracker()
 
@@ -302,9 +291,7 @@ class TV(Media):
             no_seasons_msg = "This show has no seasons to rewatch."
             raise RewatchAlreadyCompleteError(no_seasons_msg)
 
-        seasons = [
-            season for season in all_seasons if season.rewatch_started_at is None
-        ]
+        seasons = [season for season in all_seasons if season.rewatch_started_at is None]
         if not seasons:
             already_open_msg = "Every season is already being rewatched."
             raise RewatchAlreadyCompleteError(already_open_msg)
@@ -365,7 +352,7 @@ class TV(Media):
             # returning series stays in progress after its rewatch ends.
             self._handle_completed_season(
                 max(season.item.season_number for season in seasons),
-        )
+            )
             return
         if self.status != Status.IN_PROGRESS.value:
             self.status = Status.IN_PROGRESS.value
@@ -662,8 +649,8 @@ class TV(Media):
                 )
 
         if not prepare_only:
-        bulk_create_with_history(seasons_to_create, Season)
-        bulk_update_with_history(seasons_to_update, Season, ["status"])
+            bulk_create_with_history(seasons_to_create, Season)
+            bulk_update_with_history(seasons_to_update, Season, ["status"])
 
         for season_instance in seasons_to_create + seasons_to_update:
             season_metadata = tv_with_seasons_metadata[
@@ -965,13 +952,13 @@ class TV(Media):
                 return
 
             if self.status != Status.COMPLETED.value:
-            self.status = Status.COMPLETED.value
-            bulk_update_with_history(
-                [self],
-                TV,
-                fields=["status"],
+                self.status = Status.COMPLETED.value
+                bulk_update_with_history(
+                    [self],
+                    TV,
+                    fields=["status"],
                     default_change_reason="All seasons watched",
-            )
+                )
 
 
 class ActiveSeasonManager(MediaManager):
@@ -1742,8 +1729,8 @@ class Season(Media):
             became_completed
             or plays_added
             or not tv.seasons.filter(item__season_number__gt=0)
-                    .exclude(status=Status.COMPLETED.value)
-                    .exists()
+            .exclude(status=Status.COMPLETED.value)
+            .exists()
         ):
             if tv.status == Status.PLANNING.value:
                 # Logged plays mean the show has started, whether or not
@@ -1763,9 +1750,7 @@ class Season(Media):
     def get_tv(self):
         """Get related TV instance for a season and create it if it doesn't exist."""
         if self.item.episode_order_id:
-            return TV.objects.get(
-                user=self.user, item_id=self.item.episode_order.show_id
-            )
+            return TV.objects.get(user=self.user, item_id=self.item.episode_order.show_id)
         # Scope to the season's own bucket (anime vs. non-anime) so a season
         # is never silently attached to a TV row from the show's other
         # identity when both exist — see #623.
@@ -1878,9 +1863,9 @@ class Season(Media):
         plays = Episode.objects.filter(related_season=self) if self.pk else Episode.objects.none()
         started_on = self.pass_started_on
         if started_on is None:
-        latest_watched_ep_num = plays.aggregate(
-            latest_watched_ep_num=Max("item__episode_number"),
-        )["latest_watched_ep_num"]
+            latest_watched_ep_num = plays.aggregate(
+                latest_watched_ep_num=Max("item__episode_number"),
+            )["latest_watched_ep_num"]
         else:
             # Narrow in SQL, then apply `play_counts_for_pass` so the plays
             # treated as watched here are exactly the ones that count toward
@@ -1993,8 +1978,9 @@ class Season(Media):
         tvdb_episode_images = {}
         normalized_episode_number = int(episode_number)
 
-        if isinstance(season_metadata, dict) and isinstance(
-            season_metadata.get("episodes"), list
+        if (
+            isinstance(season_metadata, dict)
+            and isinstance(season_metadata.get("episodes"), list)
         ):
             from app.services.episode_coordinates import (
                 InvalidEpisodeCoordinateError,
@@ -2117,23 +2103,23 @@ class Season(Media):
 
         item, created = existing_item, False
         if item is None:
-        item, created = Item.objects.get_or_create(
-            media_id=self.item.media_id,
-            source=self.item.source,
-            media_type=MediaTypes.EPISODE.value,
-            library_media_type=episode_bucket,
-            season_number=self.item.season_number,
-            episode_number=normalized_episode_number,
-            defaults={
-                **Item.title_fields_from_episode_metadata(
-                    matched_episode,
-                    fallback_title=self.item.title,
-                ),
-                "image": image,
-                "runtime_minutes": runtime_minutes,
-                "release_datetime": release_datetime,
-            },
-        )
+            item, created = Item.objects.get_or_create(
+                media_id=self.item.media_id,
+                source=self.item.source,
+                media_type=MediaTypes.EPISODE.value,
+                library_media_type=episode_bucket,
+                season_number=self.item.season_number,
+                episode_number=normalized_episode_number,
+                defaults={
+                    **Item.title_fields_from_episode_metadata(
+                        matched_episode,
+                        fallback_title=self.item.title,
+                    ),
+                    "image": image,
+                    "runtime_minutes": runtime_minutes,
+                    "release_datetime": release_datetime,
+                },
+            )
 
         # Update fields if not set and we have them now
         updated = False
@@ -2266,8 +2252,7 @@ class Episode(models.Model):
             models.UniqueConstraint(
                 fields=["related_season", "item", "external_id"],
                 name="app_episode_unique_episode_external_id",
-                condition=models.Q(external_id__isnull=False)
-                & ~models.Q(
+                condition=models.Q(external_id__isnull=False) & ~models.Q(
                     external_id="",
                 ),
             ),

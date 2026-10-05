@@ -739,13 +739,13 @@ def fetch_release_year(request):
             episode_number = item.episode_number
 
         with services.interactive_request_scope():
-        metadata = services.get_media_metadata(
-            item.media_type,
-            item.media_id,
-            item.source,
-            season_numbers=season_numbers,
-            episode_number=episode_number,
-        )
+            metadata = services.get_media_metadata(
+                item.media_type,
+                item.media_id,
+                item.source,
+                season_numbers=season_numbers,
+                episode_number=episode_number,
+            )
         if metadata:
             release_datetime = helpers.extract_release_datetime(metadata)
             if release_datetime:
