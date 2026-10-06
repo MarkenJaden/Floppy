@@ -163,6 +163,14 @@ class ListCollaborationAndMALTabsTests(TestCase):
         titles_bottom = [item.title for item in resp_bottom.context["items"]]
         self.assertEqual(titles_bottom, ["Movie Beta", "Movie Gamma", "Movie Alpha"])
 
+        # With bottom placement and status sort desc: completed at bottom
+        resp_status_bottom = self.client.get(
+            detail_url,
+            {"sort": "status", "direction": "desc", "completed_placement": "bottom"},
+        )
+        titles_status_bottom = [item.title for item in resp_status_bottom.context["items"]]
+        self.assertEqual(titles_status_bottom[-1], "Movie Alpha")
+
     def test_shared_list_presentation_synchronization_for_all_collaborators(self):
         # Owner customizes list presentation
         self.client.force_login(self.owner)

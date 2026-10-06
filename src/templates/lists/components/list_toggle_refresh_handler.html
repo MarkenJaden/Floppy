@@ -49,6 +49,7 @@
         && requestPath
         && (
           requestPath.endsWith('/list_item_toggle') ||
+          requestPath.includes('toggle_watched') ||
           requestPath.includes('media_save') ||
           requestPath.includes('episode_save') ||
           requestPath.includes('episode_drop') ||

@@ -13,9 +13,3 @@
   {% endwith %}
 {% endif %}
 
-{% if completion_percent is not None %}
-  {% include "lists/components/list_completion_stats.html" with oob=True completion_percent=completion_percent completed_count=completed_count items_count=items_count %}
-  {% if status_counts %}
-    {% include "lists/components/list_status_tabs.html" with oob=True custom_list=custom_list status_counts=status_counts current_status_tab=current_status_tab completed_placement=custom_list.completed_placement %}
-  {% endif %}
-{% endif %}

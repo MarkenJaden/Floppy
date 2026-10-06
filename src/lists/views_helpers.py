@@ -5,6 +5,7 @@ Nothing in this module handles HTTP requests directly — all symbols are
 pure helpers called by views in views.py (and its submodules).
 """
 
+import contextlib
 import logging
 
 from django.apps import apps
@@ -124,7 +125,7 @@ def _get_completed_item_ids(user, item_ids):
     completed = set()
     for media_type in MediaTypes.values:
         if media_type == MediaTypes.EPISODE.value:
-            continue  # Episode has no status/user field
+            continue  # Episode has no status/user field directly
         try:
             model = apps.get_model("app", media_type)
         except LookupError:
@@ -133,6 +134,17 @@ def _get_completed_item_ids(user, item_ids):
             model.objects.filter(
                 item_id__in=item_ids,
                 user=user,
+                status="Completed",
+            )
+            .values_list("item_id", flat=True)
+            .distinct()
+        )
+    with contextlib.suppress(Exception):
+        from app.models import Episode
+        completed.update(
+            Episode.objects.filter(
+                item_id__in=item_ids,
+                related_season__user=user,
                 status="Completed",
             )
             .values_list("item_id", flat=True)
@@ -158,6 +170,13 @@ def get_item_statuses_for_user(user, item_ids):
             .values_list("item_id", "status")
         )
         statuses.update({item_id: status for item_id, status in rows if status})
+    with contextlib.suppress(Exception):
+        from app.models import Episode
+        ep_rows = (
+            Episode.objects.filter(item_id__in=item_ids, related_season__user=user)
+            .values_list("item_id", "status")
+        )
+        statuses.update({item_id: status for item_id, status in ep_rows if status})
     return statuses
 
 
@@ -751,7 +770,6 @@ def paginate_list_items(
 
     if (
         completed_placement == "bottom"
-        and sort_by != ListDetailSortChoices.STATUS
         and completed_ids
         and len(completed_ids) < len(candidate_ids)
     ):

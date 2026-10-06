@@ -85,4 +85,7 @@
   {% if not is_pagination and completion_percent is not None %}
     {% include "lists/components/list_completion_stats.html" with oob=True %}
   {% endif %}
+  {% if not is_pagination and status_counts %}
+    {% include "lists/components/list_status_tabs.html" with oob=True custom_list=custom_list status_counts=status_counts current_status_tab=current_status_tab completed_placement=completed_placement %}
+  {% endif %}
 {% endif %}
