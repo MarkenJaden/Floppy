@@ -34,6 +34,13 @@ SURFACES = {
     "home": CardSurface(show_next_event_chip=True, show_next_event_subtitle=True),
     # A list can hold single episodes; S01E02 says which one.
     "list": CardSurface(show_episode_identity=True),
+    # A tile on a tier board: the board owns clicks and drags, so no hover
+    # actions, and no status chip or release year to load for a small poster.
+    "tier": CardSurface(
+        show_status_chip=False,
+        show_release_year_placeholder=False,
+        hover_action_mode="none",
+    ),
     # Provider results are not saved items, so there is no release year to load.
     "search": CardSurface(show_release_year_placeholder=False),
     # Picking an item inside a modal: a click previews it, no hover actions.
@@ -115,7 +122,7 @@ def card_context(page_context, surface, values):
             "app.card_surfaces instead of passing ad-hoc flags."
         )
         raise TypeError(msg)
-    return {
+    rendered_context = {
         **page_context,
         **dict.fromkeys(CARD_VALUES),
         **asdict(SURFACES[surface]),
@@ -124,4 +131,42 @@ def card_context(page_context, surface, values):
         # own item in its related grid) must not share their modal targets.
         "card_uid": uuid4().hex[:8],
         **values,
+    }
+    rendered_context.update(_card_render_context(rendered_context))
+    return rendered_context
+
+
+def _card_render_context(rendered_context):
+    """Attach the subtitle profile for this card."""
+    from users.card_metadata import (
+        DISPLAY_HOVER,
+        card_lines,
+        progress_bar_display,
+        resolve_profile,
+        show_progress_field,
+        subtitle_display,
+        title_options,
+        uses_line_renderer,
+    )
+
+    user = rendered_context.get("user")
+    item = rendered_context.get("item")
+    media = rendered_context.get("media")
+    media_type = rendered_context.get("card_media_type") or rendered_context.get(
+        "resolved_media_type"
+    )
+    if not media_type and item is not None:
+        media_type = getattr(item, "media_type", None)
+    use_lines = uses_line_renderer(user, media_type)
+    # Per-line dormant classes own visibility once the line renderer is on.
+    # A card-level always class would reveal the hover lines too.
+    display = DISPLAY_HOVER if use_lines else subtitle_display(user, media_type)
+    profile = resolve_profile(user, media_type)
+    return {
+        "card_display": display,
+        "card_show_progress": show_progress_field(user, media_type),
+        "card_progress_display": progress_bar_display(profile) or "",
+        "card_use_lines": use_lines,
+        "card_line_list": card_lines(user, media_type, item, media),
+        "card_title": title_options(profile),
     }

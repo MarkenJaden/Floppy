@@ -5,6 +5,7 @@ from dataclasses import replace
 from django.contrib import messages
 from django.contrib.auth.decorators import login_not_required
 from django.http import Http404, StreamingHttpResponse
+from django.middleware.csrf import get_token
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.text import slugify
@@ -32,6 +33,7 @@ from lists import smart_rules
 from lists import tasks as list_tasks
 from lists.forms import CustomListForm
 from lists.models import CustomList
+from lists.tiers import MAX_TIERS
 from lists.views_helpers import (
     _adapt_list_items_for_table,
     _attach_kometa_episode_urls,
@@ -42,12 +44,20 @@ from lists.views_helpers import (
     _get_completed_item_ids,
     _resolve_list_sort_direction,
     _resolve_list_table_media_type,
+    build_tier_columns,
     paginate_list_items,
 )
 from lists.views_smart_list import _smart_list_detail_response
-from users.models import ListDetailSortChoices, MediaStatusChoices
+from users.models import (
+    ListDetailLayoutChoices,
+    ListDetailSortChoices,
+    MediaStatusChoices,
+)
 
 logger = logging.getLogger(__name__)
+
+# A tier board shows every item on one page; past this it says so.
+TIER_BOARD_LIMIT = 300
 
 
 @login_not_required
@@ -201,7 +211,7 @@ def list_detail(request, list_reference):
         )
     else:
         layout = request.GET.get("layout", "grid")
-    if layout not in {"grid", "table"}:
+    if layout not in ListDetailLayoutChoices.values:
         layout = "grid"
     valid_media_types = set(MediaTypes.values)
     selected_media_types = [
@@ -219,6 +229,7 @@ def list_detail(request, list_reference):
         "search_query": request.GET.get("q", ""),
     }
 
+    is_tiers = layout == ListDetailLayoutChoices.TIERS
     # Build and filter base queryset
     items = custom_list.items.all()
     total_items_count = items.count()
@@ -259,14 +270,16 @@ def list_detail(request, list_reference):
         status_match=STATUS_MATCH_ANY,
     )
     items_page, filtered_items_count = paginate_list_items(
-                custom_list=custom_list,
+        custom_list=custom_list,
         media_user=media_user,
         candidates=items.values("pk"),
         filters=list_filters,
-        sort_by=params["sort_by"],
-        direction=params["direction"],
-        page=params["page"],
-            )
+        # The Tiers view lists every tier on one board, in tier order.
+        sort_by=ListDetailSortChoices.TIER if is_tiers else params["sort_by"],
+        direction="asc" if is_tiers else params["direction"],
+        page=1 if is_tiers else params["page"],
+        page_size=TIER_BOARD_LIMIT if is_tiers else 16,
+    )
     collection_platforms_by_item_id = {}
 
     _attach_kometa_episode_urls(items_page)
@@ -376,6 +389,29 @@ def list_detail(request, list_reference):
         "list_url_template": _build_list_url_template(request),
     }
 
+    if is_tiers:
+        tier_columns, tier_unranked = build_tier_columns(
+            custom_list,
+            items_page.object_list,
+        )
+        context.update(
+            {
+                "tier_columns": tier_columns,
+                "tier_unranked": tier_unranked,
+                "tier_limit": TIER_BOARD_LIMIT,
+                "tier_config": {
+                    "tiers": [column["tier"] for column in tier_columns],
+                    "canEdit": can_edit,
+                    "csrfToken": get_token(request) if can_edit else "",
+                    "maxTiers": MAX_TIERS,
+                    "moveUrl": reverse("list_tier_move", args=[custom_list.id]),
+                    "saveUrl": reverse("list_tier_save", args=[custom_list.id]),
+                },
+                "tier_board_truncated": filtered_items_count
+                > len(items_page.object_list),
+            },
+        )
+
     if layout == "table":
         context.update(
             {
@@ -429,6 +465,8 @@ def list_detail(request, list_reference):
             template_name = "app/components/table_items.html"
         else:
             template_name = "lists/components/list_table.html"
+    elif is_tiers:
+        template_name = "lists/components/tier_board.html"
     else:
         template_name = "lists/components/media_grid.html"
 

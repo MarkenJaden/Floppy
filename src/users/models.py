@@ -52,6 +52,7 @@ MULTI_STATUS_PREFERENCE_FIELDS = {
     "comic_status",
     "music_status",
     "podcast_status",
+    "video_status",
     "list_detail_status",
 }
 # Score-scaling constants: a user's display scale is either 1-5 or the
@@ -166,6 +167,14 @@ class LayoutChoices(models.TextChoices):
     TABLE = "table", _("Table")
 
 
+class ListDetailLayoutChoices(models.TextChoices):
+    """Choices for the list page layout: the media list layouts plus Tiers."""
+
+    GRID = "grid", _("Grid")
+    TABLE = "table", _("Table")
+    TIERS = "tiers", _("Tiers")
+
+
 class CalendarLayoutChoices(models.TextChoices):
     """Choices for calendar layout options."""
 
@@ -197,6 +206,7 @@ class ListDetailSortChoices(models.TextChoices):
     START_DATE = "start_date", _("Start Date")
     END_DATE = "end_date", _("End Date")
     PLATFORM = "platform", _("Platform")
+    TIER = "tier", _("Tier")
 
 
 class DateFormatChoices(models.TextChoices):
@@ -411,13 +421,6 @@ class QuickSeasonUpdateChoices(models.TextChoices):
     SEASON_UPDATE = "season_update", _("Quick Season Update buttons only")
     NEXT_EPISODE = "next_episode", _("Next Episode button only")
     BOTH = "both", _("Both")
-
-
-class MediaCardSubtitleDisplayChoices(models.TextChoices):
-    """Choices for media card subtitle visibility."""
-
-    HOVER = "hover", _("On hover")
-    ALWAYS = "always", _("Always visible")
 
 
 class TitleDisplayPreferenceChoices(models.TextChoices):
@@ -794,16 +797,33 @@ class User(AbstractUser):
         choices=MediaStatusChoices,
     )
 
+    # Video preferences
+    video_enabled = models.BooleanField(default=True)
+    video_layout = models.CharField(
+        max_length=20,
+        default=LayoutChoices.GRID,
+        choices=LayoutChoices.choices,
+    )
+    video_direction = models.CharField(
+        max_length=4,
+        default=DirectionChoices.DESC,
+        choices=DirectionChoices.choices,
+    )
+    video_sort = models.CharField(
+        max_length=32,
+        default=MediaSortChoices.TITLE,
+        choices=MediaSortChoices.choices,
+    )
+    video_status = models.CharField(
+        max_length=128,
+        default=MediaStatusChoices.ALL,
+        choices=MediaStatusChoices,
+    )
+
     # UI preferences
     clickable_media_cards = models.BooleanField(
         default=False,
         help_text="Hide hover overlay on touch devices",
-    )
-    media_card_subtitle_display = models.CharField(
-        max_length=20,
-        default=MediaCardSubtitleDisplayChoices.HOVER,
-        choices=MediaCardSubtitleDisplayChoices.choices,
-        help_text="Control when media card subtitles are visible",
     )
     title_display_preference = models.CharField(
         max_length=20,
@@ -827,10 +847,6 @@ class User(AbstractUser):
     )
 
     # Progress visibility preferences
-    progress_bar = models.BooleanField(
-        default=True,
-        help_text="Show progress bar",
-    )
     hide_completed_recommendations = models.BooleanField(
         default=False,
         help_text="Hide completed media in recommendations",
@@ -842,10 +858,6 @@ class User(AbstractUser):
     show_discover = models.BooleanField(
         default=True,
         help_text="Show the Discover page and keep its caches warm",
-    )
-    hide_zero_rating = models.BooleanField(
-        default=False,
-        help_text="Hide zero ratings from media cards",
     )
     obfuscate_episodes = models.BooleanField(
         default=False,
@@ -984,8 +996,8 @@ class User(AbstractUser):
     )
     list_detail_layout = models.CharField(
         max_length=20,
-        default=LayoutChoices.GRID,
-        choices=LayoutChoices,
+        default=ListDetailLayoutChoices.GRID,
+        choices=ListDetailLayoutChoices,
     )
 
     # Notification settings
@@ -1175,6 +1187,12 @@ class User(AbstractUser):
         default=dict,
         blank=True,
         help_text="Visible and ordered sections for each detail page family",
+    )
+
+    card_metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Per-media-type subtitle fields shown under a card title",
     )
 
     ui_language = models.CharField(
@@ -1601,12 +1619,6 @@ class User(AbstractUser):
                 condition=models.Q(duration_format__in=DurationFormatChoices.values),
             ),
             models.CheckConstraint(
-                name="media_card_subtitle_display_valid",
-                condition=models.Q(
-                    media_card_subtitle_display__in=MediaCardSubtitleDisplayChoices.values
-                ),
-            ),
-            models.CheckConstraint(
                 name="title_display_preference_valid",
                 condition=models.Q(
                     title_display_preference__in=TitleDisplayPreferenceChoices.values
@@ -1642,7 +1654,7 @@ class User(AbstractUser):
             ),
             models.CheckConstraint(
                 name="list_detail_layout_valid",
-                condition=models.Q(list_detail_layout__in=LayoutChoices.values),
+                condition=models.Q(list_detail_layout__in=ListDetailLayoutChoices.values),
             ),
             models.CheckConstraint(
                 name="music_layout_valid",
@@ -1667,6 +1679,18 @@ class User(AbstractUser):
             models.CheckConstraint(
                 name="podcast_direction_valid",
                 condition=models.Q(podcast_direction__in=DirectionChoices.values),
+            ),
+            models.CheckConstraint(
+                name="video_layout_valid",
+                condition=models.Q(video_layout__in=LayoutChoices.values),
+            ),
+            models.CheckConstraint(
+                name="video_sort_valid",
+                condition=models.Q(video_sort__in=MediaSortChoices.values),
+            ),
+            models.CheckConstraint(
+                name="video_direction_valid",
+                condition=models.Q(video_direction__in=DirectionChoices.values),
             ),
             models.CheckConstraint(
                 name="quick_watch_date_valid",
