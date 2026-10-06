@@ -22,10 +22,12 @@ from django.db.models import Q
 from django.http import Http404, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.translation import gettext, ngettext
 from django.views.decorators.http import require_GET, require_POST
 
-from app import helpers
+from app import cache_utils, helpers
+from app.bulk_actions import _media_model_for_item
 from app.columns import sanitize_column_prefs
 from app.db_retry import is_contention_error, is_lock_error
 from app.discover import tab_cache as discover_tab_cache
@@ -45,6 +47,10 @@ from integrations.upload_staging import (
 )
 from lists import smart_rules
 from lists import tasks as list_tasks
+from lists.collaborator_sync import (
+    sync_media_to_list_collaborators,
+    sync_media_uncompleted_to_list_collaborators,
+)
 from lists.forms import CustomListForm
 from lists.models import (
     CustomList,
@@ -56,6 +62,7 @@ from lists.views_helpers import (
     _build_list_url_template,
     _list_item_title_fields_from_metadata,
     _maybe_backfill_episode_title,
+    get_list_status_counts,
 )
 from users.models import ListDetailSortChoices, MediaSortChoices
 
@@ -1030,3 +1037,120 @@ def collection_add_to_list_submit(request):
         }
     )
     return response
+
+
+@login_required
+@require_POST
+def toggle_list_item_watched(request, list_id, item_id):
+    """Toggle completion status for an item in a list and sync across list collaborators."""
+    custom_list = get_object_or_404(
+        CustomList.objects.select_related("owner").prefetch_related("collaborators"),
+        id=list_id,
+    )
+    if not custom_list.user_can_edit(request.user):
+        return HttpResponse(status=403)
+
+    item = get_object_or_404(Item, id=item_id)
+    instance = None
+    is_completed = False
+
+    if item.media_type == MediaTypes.EPISODE.value:
+        from app import fork_services_episode
+        from app.models import Episode
+
+        library_media_type = (
+            item.library_media_type
+            if getattr(item, "library_media_type", "")
+            not in ("", MediaTypes.EPISODE.value, MediaTypes.SEASON.value)
+            else ""
+        )
+        season = fork_services_episode.resolve_or_create_season(
+            user=request.user,
+            media_id=item.media_id,
+            source=item.source,
+            season_number=item.season_number,
+            library_media_type=library_media_type,
+        )
+        existing_watch = Episode.objects.filter(
+            related_season=season,
+            item=item,
+            status=Status.COMPLETED.value,
+        ).first()
+
+        if existing_watch:
+            existing_watch.delete()
+            is_completed = False
+            instance = None
+        else:
+            with contextlib.suppress(fork_services_episode.EpisodeWatchConflictError):
+                instance = fork_services_episode.create_episode_watch(
+                    season,
+                    item,
+                    end_date=timezone.now(),
+                    status=Status.COMPLETED.value,
+                    score=None,
+                    notes="",
+                )
+            sync_media_to_list_collaborators(instance, request.user, custom_list=custom_list)
+            is_completed = True
+    else:
+        model = _media_model_for_item(item)
+        if model is None:
+            return HttpResponse(status=400)
+
+        with transaction.atomic():
+            instance = model.objects.filter(user=request.user, item=item).first()
+            if instance is None:
+                instance = model(item=item, user=request.user)
+
+            was_completed = (instance.pk is not None and instance.status == Status.COMPLETED.value)
+            if was_completed:
+                instance.status = Status.PLANNING.value
+                if hasattr(instance, "end_date"):
+                    instance.end_date = None
+                instance.save()
+                sync_media_uncompleted_to_list_collaborators(instance, request.user, custom_list=custom_list)
+                is_completed = False
+            else:
+                instance.status = Status.COMPLETED.value
+                if hasattr(instance, "end_date") and not instance.end_date:
+                    instance.end_date = timezone.now()
+                if hasattr(instance, "start_date") and not instance.start_date:
+                    instance.start_date = timezone.now()
+                instance.save()
+                sync_media_to_list_collaborators(instance, request.user, custom_list=custom_list)
+                is_completed = True
+
+    cache_utils.clear_time_left_cache_for_user(request.user.id)
+    cache_utils.clear_home_row_cache_for_user(request.user.id)
+    cache_utils.clear_media_list_cache_for_user(request.user.id)
+
+    # Recalculate stats for custom_list
+    all_item_ids = list(custom_list.items.values_list("id", flat=True))
+    total_items_count = len(all_item_ids)
+    status_counts = get_list_status_counts(request.user, all_item_ids)
+    completed_count = status_counts["completed"]
+    completion_percent = round(completed_count / total_items_count * 100) if total_items_count > 0 else 0
+
+    is_table = request.POST.get("is_table") == "1"
+    is_overlay = request.POST.get("is_overlay") == "1"
+
+    return render(
+        request,
+        "lists/components/list_item_watched_toggle.html",
+        {
+            "custom_list": custom_list,
+            "item": item,
+            "media": instance,
+            "is_completed": is_completed,
+            "is_table": is_table,
+            "is_overlay": is_overlay,
+            "can_edit": True,
+            "completion_percent": completion_percent,
+            "completed_count": completed_count,
+            "items_count": total_items_count,
+            "status_counts": status_counts,
+            "current_status_tab": request.POST.get("status_tab") or custom_list.status_tab,
+        },
+    )
+

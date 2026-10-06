@@ -6,10 +6,16 @@ from django.core.cache import cache
 from django.db import models, transaction
 from django.db.models import Count, F, Max, OuterRef, Prefetch, Q, Subquery
 from django.urls import reverse
+from django.utils.translation import gettext_lazy as _
 
 from app.models import Item, MediaTypes, Sources
 from app.providers import credentials, services
 from lists import smart_rules
+from users.models import (
+    DirectionChoices,
+    ListDetailLayoutChoices,
+    ListDetailSortChoices,
+)
 
 # IGDB artwork_type values used to classify fetched artwork images.
 # Verified by sampling artwork_type + image dimensions across titles already
@@ -185,6 +191,49 @@ class CustomList(models.Model):
         blank=True,
         default=list,
         help_text="Tier names and colours for the Tiers view; empty uses the defaults.",
+    )
+    default_layout = models.CharField(
+        max_length=20,
+        blank=True,
+        default="",
+        choices=ListDetailLayoutChoices.choices,
+        help_text="Default layout for this list.",
+    )
+    default_sort = models.CharField(
+        max_length=20,
+        blank=True,
+        default="",
+        choices=ListDetailSortChoices.choices,
+        help_text="Default sort order for this list.",
+    )
+    default_sort_direction = models.CharField(
+        max_length=4,
+        blank=True,
+        default="",
+        choices=DirectionChoices.choices,
+        help_text="Default sort direction for this list.",
+    )
+    completed_placement = models.CharField(
+        max_length=10,
+        default="normal",
+        choices=[
+            ("normal", _("Normal")),
+            ("bottom", _("At bottom")),
+        ],
+        help_text="Where completed items appear in list order.",
+    )
+    status_tab = models.CharField(
+        max_length=20,
+        default="all",
+        choices=[
+            ("all", _("All")),
+            ("in_progress", _("In Progress")),
+            ("planning", _("Plan to Watch")),
+            ("completed", _("Completed")),
+            ("paused", _("On-Hold")),
+            ("dropped", _("Dropped")),
+        ],
+        help_text="Default status tab for this list.",
     )
 
     objects = CustomListManager()

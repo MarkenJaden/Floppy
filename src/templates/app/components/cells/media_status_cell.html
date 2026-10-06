@@ -17,3 +17,8 @@
 {% else %}
   <span class="text-[var(--color-text-muted)]">-</span>
 {% endif %}
+{% if custom_list and can_edit and not public_view %}
+  <div class="mt-1 flex justify-center" @click.stop>
+    {% include "lists/components/list_item_watched_toggle.html" with item=media.item|default:media media=media custom_list=custom_list is_table=True %}
+  </div>
+{% endif %}

@@ -36,7 +36,12 @@ from app.templatetags.app_tags import (
     music_album_url,
     music_artist_url,
 )
-from users.models import ALL_SEARCH_TYPE, VALID_SEARCH_TYPES, MediaStatusChoices
+from users.models import (
+    ALL_SEARCH_TYPE,
+    MOVIES_TV_ANIME_SEARCH_TYPE,
+    VALID_SEARCH_TYPES,
+    MediaStatusChoices,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +53,23 @@ MIN_SUGGESTION_QUERY_LENGTH = 2
 LOCAL_GROUP_LIMIT = 12
 ALL_SUGGESTIONS_PER_TYPE = 3
 
+MOVIES_TV_ANIME_PRIORITY_ORDER = [
+    (MediaTypes.MOVIE.value, "load"),
+    (MediaTypes.TV.value, "load"),
+    (MediaTypes.ANIME.value, "load"),
+]
+
 SEARCH_ALL_PRIORITY_ORDER = [
     (MediaTypes.MOVIE.value, "load"),
     (MediaTypes.TV.value, "load"),
+    (MediaTypes.ANIME.value, "load"),
+    (MediaTypes.GAME.value, "load"),
+    (MediaTypes.BOOK.value, "load"),
+    (MediaTypes.MANGA.value, "load"),
+    (MediaTypes.COMIC.value, "load"),
+    (MediaTypes.BOARDGAME.value, "load"),
+    (MediaTypes.PODCAST.value, "load"),
+    (MediaTypes.MUSIC.value, "load"),
 ]
 
 
@@ -328,7 +347,7 @@ def _local_media_results(user, media_type, query, limit, *, annotate_progress=Tr
     return results, total
 
 
-def _local_library_groups(user, query, limit):
+def _local_library_groups(user, query, limit, allowed_media_types=None):
     """Return one result group per enabled media type the user has a match in.
 
     Library-only (no provider calls), so a global search stays cheap (#1160).
@@ -336,6 +355,8 @@ def _local_library_groups(user, query, limit):
     groups = []
     for media_type in user.get_enabled_media_types():
         if media_type == MediaTypes.SEASON.value:
+            continue
+        if allowed_media_types is not None and media_type not in allowed_media_types:
             continue
         group = {
             "media_type": media_type,
@@ -484,12 +505,23 @@ def media_search(request):
     elif requested_media_type in VALID_SEARCH_TYPES:
         media_type = requested_media_type
     else:
-        media_type = MediaTypes.TV.value
+        media_type = MOVIES_TV_ANIME_SEARCH_TYPE
     query = request.GET["q"]
     page = int(request.GET.get("page", 1))
     layout = request.GET.get("layout", "grid")
 
-    if media_type == ALL_SEARCH_TYPE:
+    if media_type in (ALL_SEARCH_TYPE, MOVIES_TV_ANIME_SEARCH_TYPE):
+        if media_type == MOVIES_TV_ANIME_SEARCH_TYPE:
+            allowed_types = {
+                MediaTypes.MOVIE.value,
+                MediaTypes.TV.value,
+                MediaTypes.ANIME.value,
+            }
+            priority_order = MOVIES_TV_ANIME_PRIORITY_ORDER
+        else:
+            allowed_types = None
+            priority_order = SEARCH_ALL_PRIORITY_ORDER
+
         local_groups = []
         if request.user.is_authenticated and query:
             try:
@@ -497,6 +529,7 @@ def media_search(request):
                     request.user,
                     query,
                     LOCAL_GROUP_LIMIT,
+                    allowed_media_types=allowed_types,
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 logger.debug("Local search failed: %s", exception_summary(exc))
@@ -506,7 +539,7 @@ def media_search(request):
             enabled_types = (
                 request.user.get_enabled_media_types()
                 if request.user.is_authenticated
-                else [MediaTypes.MOVIE.value, MediaTypes.TV.value]
+                else [MediaTypes.MOVIE.value, MediaTypes.TV.value, MediaTypes.ANIME.value]
             )
             prioritized_categories = [
                 {
@@ -514,8 +547,8 @@ def media_search(request):
                     "display": media_type_readable_plural(mt),
                     "trigger": trigger,
                 }
-                for mt, trigger in SEARCH_ALL_PRIORITY_ORDER
-                if mt in enabled_types
+                for mt, trigger in priority_order
+                if mt in enabled_types and (allowed_types is None or mt in allowed_types)
             ]
 
         return render(
@@ -689,6 +722,33 @@ def _all_saved_suggestions(user, query, limit):
     return suggestions[:limit]
 
 
+def _movies_tv_anime_saved_suggestions(user, query, limit):
+    """Return suggestions across Movies, TV Shows, and Anime, each labelled with its type."""
+    suggestions = []
+    target_types = [
+        MediaTypes.MOVIE.value,
+        MediaTypes.TV.value,
+        MediaTypes.ANIME.value,
+    ]
+    enabled = set(user.get_enabled_media_types())
+    for media_type in target_types:
+        if media_type not in enabled:
+            continue
+        label = media_type_readable(media_type)
+        for suggestion in get_saved_suggestions(
+            user,
+            media_type,
+            query,
+            limit=ALL_SUGGESTIONS_PER_TYPE,
+        ):
+            subtitle = suggestion["subtitle"]
+            suggestion["subtitle"] = f"{label} · {subtitle}" if subtitle else label
+            suggestions.append(suggestion)
+        if len(suggestions) >= limit:
+            break
+    return suggestions[:limit]
+
+
 def get_saved_suggestions(user, media_type, query, limit=8):
     """Return compact autocomplete suggestions from the user's saved library.
 
@@ -698,6 +758,8 @@ def get_saved_suggestions(user, media_type, query, limit=8):
     """
     if media_type == ALL_SEARCH_TYPE:
         return _all_saved_suggestions(user, query, limit)
+    if media_type == MOVIES_TV_ANIME_SEARCH_TYPE:
+        return _movies_tv_anime_saved_suggestions(user, query, limit)
 
     suggestions = []
 
@@ -814,7 +876,7 @@ def search_suggestions(request):
     if (
         not request.user.is_authenticated
         or len(query) < MIN_SUGGESTION_QUERY_LENGTH
-        or media_type not in {*MediaTypes.values, ALL_SEARCH_TYPE}
+        or media_type not in {*MediaTypes.values, ALL_SEARCH_TYPE, MOVIES_TV_ANIME_SEARCH_TYPE}
     ):
         return render(request, "app/components/search_suggestions.html")
 

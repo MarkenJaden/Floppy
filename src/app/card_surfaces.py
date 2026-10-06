@@ -106,6 +106,8 @@ PAGE_VALUES = frozenset(
         "discover_show_more",
         "discover_row_key",
         "discover_debug",
+        "custom_list",
+        "can_edit",
     },
 )
 

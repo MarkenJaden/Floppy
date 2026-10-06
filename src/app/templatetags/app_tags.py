@@ -24,7 +24,12 @@ from app.providers import tmdb
 from app.services import metadata_resolution
 from app.stats_music import COUNTRY_NAME_MAP
 from users.media_type_chips import media_type_chip_preferences
-from users.models import ALL_SEARCH_TYPE, HISTORY_VIEW_TYPE, TimeFormatChoices
+from users.models import (
+    ALL_SEARCH_TYPE,
+    HISTORY_VIEW_TYPE,
+    MOVIES_TV_ANIME_SEARCH_TYPE,
+    TimeFormatChoices,
+)
 from users.templatetags.user_tags import user_date_format, user_time_format
 
 register = template.Library()
@@ -615,6 +620,8 @@ def media_type_readable_plural(media_type):
     """Return the readable media type in plural form."""
     if media_type == ALL_SEARCH_TYPE:
         return _("All")
+    if media_type == MOVIES_TV_ANIME_SEARCH_TYPE:
+        return _("Movies, TV & Anime")
     # English suffixes do not produce correct plurals in other languages.
     return {
         MediaTypes.TV: _("TV Shows"),
@@ -1125,8 +1132,16 @@ def get_search_media_types(user):
             if media_type != MediaTypes.SEASON.value
         ]
     if user and user.is_authenticated:
-        # Library-wide search across every enabled type (#1160).
+        # Combined search across all enabled types as second option.
         search_types.insert(0, {"display": _("All"), "value": ALL_SEARCH_TYPE})
+        # Combined Movies, TV & Anime search as default first option.
+        search_types.insert(
+            0,
+            {
+                "display": _("Movies, TV & Anime"),
+                "value": MOVIES_TV_ANIME_SEARCH_TYPE,
+            },
+        )
     return search_types
 
 

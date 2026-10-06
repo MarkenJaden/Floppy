@@ -1,0 +1,19 @@
+{% load i18n %}
+<button type="button"
+        id="toggle-watched-{% if is_table %}table-{% elif is_overlay %}overlay-{% endif %}{{ item.id }}"
+        class="inline-flex items-center justify-center transition-all duration-200 cursor-pointer shadow-md {% if is_table %}px-2 py-1 text-xs rounded-md gap-1.5 font-medium {% if is_done %}bg-emerald-600/30 text-emerald-300 border border-emerald-500/50 hover:bg-emerald-600/50{% else %}bg-[var(--color-surface-strong)] text-[var(--color-text-secondary)] border border-gray-700 hover:text-white hover:bg-emerald-600 hover:border-emerald-500{% endif %}{% elif is_overlay %}p-2.5 rounded-full hover:scale-110 transition-all duration-200 {% if is_done %}bg-emerald-600 text-white hover:bg-emerald-500 hover:shadow-[0_0_15px_rgba(16,185,129,0.5)]{% else %}bg-slate-700 text-white hover:bg-emerald-600 hover:shadow-[0_0_15px_rgba(16,185,129,0.5)]{% endif %}{% else %}w-8 h-8 rounded-full {% if is_done %}bg-emerald-600 hover:bg-emerald-500 text-white ring-2 ring-emerald-400/50 shadow-lg{% else %}bg-black/60 hover:bg-emerald-600 text-white/80 hover:text-white border border-white/20 hover:border-emerald-500 backdrop-blur-sm shadow-md{% endif %}{% endif %}"
+        title="{% if is_done %}{% translate "Als ungesehen markieren" %}{% else %}{% translate "Abhaken (Gesehen)" %}{% endif %}"
+        aria-label="{% if is_done %}{% translate "Als ungesehen markieren" %}{% else %}{% translate "Abhaken (Gesehen)" %}{% endif %}"
+        hx-post="{% url 'toggle_list_item_watched' custom_list.id item.id %}"
+        hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+        hx-vals='{"is_table": "{% if is_table %}1{% else %}0{% endif %}", "is_overlay": "{% if is_overlay %}1{% else %}0{% endif %}"}'
+        hx-target="#toggle-watched-{% if is_table %}table-{% elif is_overlay %}overlay-{% endif %}{{ item.id }}"
+        hx-swap="outerHTML"
+        @click.stop>
+  <svg xmlns="http://www.w3.org/2000/svg" class="{% if is_table %}w-3.5 h-3.5{% elif is_overlay %}w-4 h-4{% else %}w-4 h-4{% endif %}" viewBox="0 0 20 20" fill="currentColor">
+    <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+  </svg>
+  {% if is_table %}
+    <span>{% if is_done %}{% translate "Gesehen" %}{% else %}{% translate "Abhaken" %}{% endif %}</span>
+  {% endif %}
+</button>

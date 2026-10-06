@@ -1,0 +1,112 @@
+{% load i18n %}
+<div id="list-status-tabs" class="mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-gray-700/60 pb-3" {% if oob %}hx-swap-oob="outerHTML"{% endif %}>
+  <div class="flex flex-wrap items-center gap-1.5 sm:gap-2">
+    <button type="button"
+            hx-get="{% url 'list_detail' custom_list.public_reference %}?status_tab=all"
+            hx-target="#items-view"
+            hx-include="#filter-form"
+            hx-indicator="#loading-indicator"
+            @click="statusTab = 'all'"
+            :class="statusTab === 'all' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]'"
+            class="px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all duration-150 cursor-pointer flex items-center gap-1.5 {% if current_status_tab == 'all' or not current_status_tab %}bg-indigo-600 text-white shadow-sm{% else %}bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]{% endif %}">
+      <span>{% translate "Alle" %}</span>
+      <span class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold {% if current_status_tab == 'all' or not current_status_tab %}bg-indigo-800 text-white{% else %}bg-[var(--color-surface-strong)] text-[var(--color-text-muted)]{% endif %}"
+            :class="statusTab === 'all' ? 'bg-indigo-800 text-white' : 'bg-[var(--color-surface-strong)] text-[var(--color-text-muted)]'">
+        {{ status_counts.all|default:items_count|default:0 }}
+      </span>
+    </button>
+
+    <button type="button"
+            hx-get="{% url 'list_detail' custom_list.public_reference %}?status_tab=in_progress"
+            hx-target="#items-view"
+            hx-include="#filter-form"
+            hx-indicator="#loading-indicator"
+            @click="statusTab = 'in_progress'"
+            :class="statusTab === 'in_progress' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]'"
+            class="px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all duration-150 cursor-pointer flex items-center gap-1.5 {% if current_status_tab == 'in_progress' %}bg-indigo-600 text-white shadow-sm{% else %}bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]{% endif %}">
+      <span>{% translate "Wird geschaut" %}</span>
+      <span class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold {% if current_status_tab == 'in_progress' %}bg-indigo-800 text-white{% else %}bg-[var(--color-surface-strong)] text-[var(--color-text-muted)]{% endif %}"
+            :class="statusTab === 'in_progress' ? 'bg-indigo-800 text-white' : 'bg-[var(--color-surface-strong)] text-[var(--color-text-muted)]'">
+        {{ status_counts.in_progress|default:0 }}
+      </span>
+    </button>
+
+    <button type="button"
+            hx-get="{% url 'list_detail' custom_list.public_reference %}?status_tab=planning"
+            hx-target="#items-view"
+            hx-include="#filter-form"
+            hx-indicator="#loading-indicator"
+            @click="statusTab = 'planning'"
+            :class="statusTab === 'planning' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]'"
+            class="px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all duration-150 cursor-pointer flex items-center gap-1.5 {% if current_status_tab == 'planning' %}bg-indigo-600 text-white shadow-sm{% else %}bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]{% endif %}">
+      <span>{% translate "Noch nicht begonnen" %}</span>
+      <span class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold {% if current_status_tab == 'planning' %}bg-indigo-800 text-white{% else %}bg-[var(--color-surface-strong)] text-[var(--color-text-muted)]{% endif %}"
+            :class="statusTab === 'planning' ? 'bg-indigo-800 text-white' : 'bg-[var(--color-surface-strong)] text-[var(--color-text-muted)]'">
+        {{ status_counts.planning|default:0 }}
+      </span>
+    </button>
+
+    <button type="button"
+            hx-get="{% url 'list_detail' custom_list.public_reference %}?status_tab=completed"
+            hx-target="#items-view"
+            hx-include="#filter-form"
+            hx-indicator="#loading-indicator"
+            @click="statusTab = 'completed'"
+            :class="statusTab === 'completed' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]'"
+            class="px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all duration-150 cursor-pointer flex items-center gap-1.5 {% if current_status_tab == 'completed' %}bg-indigo-600 text-white shadow-sm{% else %}bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]{% endif %}">
+      <span>{% translate "Abgeschlossen" %}</span>
+      <span class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold {% if current_status_tab == 'completed' %}bg-indigo-800 text-white{% else %}bg-[var(--color-surface-strong)] text-[var(--color-text-muted)]{% endif %}"
+            :class="statusTab === 'completed' ? 'bg-indigo-800 text-white' : 'bg-[var(--color-surface-strong)] text-[var(--color-text-muted)]'">
+        {{ status_counts.completed|default:0 }}
+      </span>
+    </button>
+
+    <button type="button"
+            hx-get="{% url 'list_detail' custom_list.public_reference %}?status_tab=paused"
+            hx-target="#items-view"
+            hx-include="#filter-form"
+            hx-indicator="#loading-indicator"
+            @click="statusTab = 'paused'"
+            :class="statusTab === 'paused' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]'"
+            class="px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all duration-150 cursor-pointer flex items-center gap-1.5 {% if current_status_tab == 'paused' %}bg-indigo-600 text-white shadow-sm{% else %}bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]{% endif %}">
+      <span>{% translate "Pausiert" %}</span>
+      <span class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold {% if current_status_tab == 'paused' %}bg-indigo-800 text-white{% else %}bg-[var(--color-surface-strong)] text-[var(--color-text-muted)]{% endif %}"
+            :class="statusTab === 'paused' ? 'bg-indigo-800 text-white' : 'bg-[var(--color-surface-strong)] text-[var(--color-text-muted)]'">
+        {{ status_counts.paused|default:0 }}
+      </span>
+    </button>
+
+    <button type="button"
+            hx-get="{% url 'list_detail' custom_list.public_reference %}?status_tab=dropped"
+            hx-target="#items-view"
+            hx-include="#filter-form"
+            hx-indicator="#loading-indicator"
+            @click="statusTab = 'dropped'"
+            :class="statusTab === 'dropped' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]'"
+            class="px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all duration-150 cursor-pointer flex items-center gap-1.5 {% if current_status_tab == 'dropped' %}bg-indigo-600 text-white shadow-sm{% else %}bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]{% endif %}">
+      <span>{% translate "Abgebrochen" %}</span>
+      <span class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold {% if current_status_tab == 'dropped' %}bg-indigo-800 text-white{% else %}bg-[var(--color-surface-strong)] text-[var(--color-text-muted)]{% endif %}"
+            :class="statusTab === 'dropped' ? 'bg-indigo-800 text-white' : 'bg-[var(--color-surface-strong)] text-[var(--color-text-muted)]'">
+        {{ status_counts.dropped|default:0 }}
+      </span>
+    </button>
+  </div>
+
+  <div class="flex items-center gap-2">
+    <button type="button"
+            hx-get="{% url 'list_detail' custom_list.public_reference %}?completed_placement={% if completed_placement == 'bottom' %}normal{% else %}bottom{% endif %}"
+            hx-target="#items-view"
+            hx-include="#filter-form"
+            hx-indicator="#loading-indicator"
+            @click="completedPlacement = (completedPlacement === 'bottom' ? 'normal' : 'bottom')"
+            :class="completedPlacement === 'bottom' ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300 hover:bg-indigo-600/30' : 'bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]'"
+            class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium border border-gray-700 transition-colors cursor-pointer {% if completed_placement == 'bottom' %}bg-indigo-600/20 border-indigo-500/50 text-indigo-300 hover:bg-indigo-600/30{% else %}bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]{% endif %}"
+            title="{% if completed_placement == 'bottom' %}{% translate "Abgeschlossene stehen unten (klicken für normale Sortierung)" %}{% else %}{% translate "Normale Sortierung (klicken für Abgeschlossene unten)" %}{% endif %}">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
+      </svg>
+      <span>{% translate "Abgeschlossene unten" %}</span>
+      <span class="text-indigo-400 font-bold" x-show="completedPlacement === 'bottom'" {% if completed_placement != 'bottom' %}style="display: none;"{% endif %}>✓</span>
+    </button>
+  </div>
+</div>

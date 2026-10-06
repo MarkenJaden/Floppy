@@ -56,7 +56,7 @@ def get_collaborators_for_item(item, source_user):
     return collaborators
 
 
-def sync_media_to_list_collaborators(media, source_user):
+def sync_media_to_list_collaborators(media, source_user, custom_list=None):
     """Automatically sync completion to collaborators on shared lists containing this item."""
     if not media or not hasattr(media, "item") or not media.item:
         return
@@ -66,6 +66,12 @@ def sync_media_to_list_collaborators(media, source_user):
         return
 
     collaborators = get_collaborators_for_item(media.item, source_user)
+    if custom_list:
+        members = set(custom_list.collaborators.all())
+        members.add(custom_list.owner)
+        members.discard(source_user)
+        collaborators.update(members)
+
     if not collaborators:
         return
 
@@ -86,6 +92,54 @@ def sync_media_to_list_collaborators(media, source_user):
         except Exception:
             logger.exception(
                 "Failed to sync media completion to collaborator user_id=%s for item_id=%s",
+                collab_user.id,
+                media.item_id,
+            )
+
+
+def sync_media_uncompleted_to_list_collaborators(media, source_user, custom_list=None):
+    """Automatically sync uncompleting (e.g. Planning/unwatched) to collaborators on shared lists."""
+    if not media or not hasattr(media, "item") or not media.item:
+        return
+
+    collaborators = get_collaborators_for_item(media.item, source_user)
+    if custom_list:
+        members = set(custom_list.collaborators.all())
+        members.add(custom_list.owner)
+        members.discard(source_user)
+        collaborators.update(members)
+
+    if not collaborators:
+        return
+
+    model_class = media.__class__
+
+    for collab_user in collaborators:
+        try:
+            if isinstance(media, TV):
+                collab_tv = TV.objects.filter(user=collab_user, item=media.item).first()
+                if collab_tv and collab_tv.status == Status.COMPLETED.value:
+                    collab_tv.status = Status.PLANNING.value
+                    collab_tv.save()
+            elif isinstance(media, Season):
+                collab_season = Season.objects.filter(user=collab_user, item=media.item).first()
+                if collab_season and collab_season.status == Status.COMPLETED.value:
+                    collab_season.status = Status.PLANNING.value
+                    collab_season.save()
+            else:
+                collab_media = model_class.objects.filter(user=collab_user, item=media.item).first()
+                if collab_media and collab_media.status == Status.COMPLETED.value:
+                    collab_media.status = Status.PLANNING.value
+                    if hasattr(collab_media, "end_date"):
+                        collab_media.end_date = None
+                    collab_media.save()
+
+            cache_utils.clear_time_left_cache_for_user(collab_user.id)
+            cache_utils.clear_home_row_cache_for_user(collab_user.id)
+            cache_utils.clear_media_list_cache_for_user(collab_user.id)
+        except Exception:
+            logger.exception(
+                "Failed to sync media uncompletion to collaborator user_id=%s for item_id=%s",
                 collab_user.id,
                 media.item_id,
             )

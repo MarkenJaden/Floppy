@@ -23,7 +23,7 @@ from app.library_query.adapters import filter_values_from_media_list_filters
 from app.library_query.spec import STATUS_MATCH_ANY
 from app.media_list_filters import parse_media_list_filters
 from app.media_list_views import MEDIA_LIST_NO_STATUS, MEDIA_LIST_NO_STATUS_LABEL
-from app.models import MediaTypes
+from app.models import MediaTypes, Status
 from app.providers import (
     services,  # noqa: F401 — kept so legacy test patches on lists.views.services still work
 )
@@ -41,10 +41,11 @@ from lists.views_helpers import (
     _build_list_count_trigger,
     _build_list_url_template,
     _build_media_type_breakdown,
-    _get_completed_item_ids,
     _resolve_list_sort_direction,
     _resolve_list_table_media_type,
     build_tier_columns,
+    get_item_statuses_for_user,
+    get_list_status_counts,
     paginate_list_items,
 )
 from lists.views_smart_list import _smart_list_detail_response
@@ -147,27 +148,95 @@ def list_detail(request, list_reference):
         )
 
     # Get and process request parameters
+    # Get and process request parameters
     # Handle anonymous users by using default values
     valid_sorts = [choice[0] for choice in ListDetailSortChoices.choices]
     valid_statuses = [choice[0] for choice in MediaStatusChoices.choices]
+    valid_layouts = list(ListDetailLayoutChoices.values)
+    valid_placements = ["bottom", "normal"]
+    valid_status_tabs = ["all", "in_progress", "planning", "completed", "paused", "dropped"]
+
+    req_sort = request.GET.get("sort")
+    req_direction = request.GET.get("direction")
+    req_layout = request.GET.get("layout")
+    req_placement = request.GET.get("completed_placement")
+    req_status_tab = request.GET.get("status_tab")
 
     if request.user.is_authenticated:
-        sort_by = request.user.update_preference(
-            "list_detail_sort",
-            request.GET.get("sort"),
-        )
-        if sort_by not in valid_sorts:
-            sort_by = "date_added"
+        if req_sort and req_sort in valid_sorts:
+            request.user.update_preference("list_detail_sort", req_sort)
+        if req_layout and req_layout in valid_layouts:
+            request.user.update_preference("list_detail_layout", req_layout)
+        saved_layout = request.user.list_detail_layout
+        saved_sort = request.user.list_detail_sort
     else:
-        # Default sort for anonymous users
-        sort_by = request.GET.get("sort", "date_added")
-        # Validate sort choice
-        if sort_by not in valid_sorts:
-            sort_by = "date_added"
+        saved_layout = None
+        saved_sort = None
+
+    sort_by = (
+        req_sort
+        if (req_sort and req_sort in valid_sorts)
+        else (
+            custom_list.default_sort
+            if (custom_list.default_sort and custom_list.default_sort in valid_sorts)
+            else (saved_sort if (saved_sort and saved_sort in valid_sorts) else "date_added")
+        )
+    )
+
     direction = _resolve_list_sort_direction(
         sort_by,
-        request.GET.get("direction"),
+        req_direction
+        or (custom_list.default_sort_direction if custom_list.default_sort_direction in {"asc", "desc"} else None)
+        or None,
     )
+
+    layout = (
+        req_layout
+        if (req_layout and req_layout in valid_layouts)
+        else (
+            custom_list.default_layout
+            if (custom_list.default_layout and custom_list.default_layout in valid_layouts)
+            else (saved_layout if (saved_layout and saved_layout in valid_layouts) else "grid")
+        )
+    )
+
+    completed_placement = (
+        req_placement
+        if (req_placement and req_placement in valid_placements)
+        else (custom_list.completed_placement or "normal")
+    )
+    if completed_placement not in valid_placements:
+        completed_placement = "normal"
+
+    status_tab = (
+        req_status_tab
+        if (req_status_tab and req_status_tab in valid_status_tabs)
+        else (custom_list.status_tab or "all")
+    )
+    if status_tab not in valid_status_tabs:
+        status_tab = "all"
+
+    # Save settings to custom_list so all collaborators see the exact same view!
+    if can_edit:
+        list_update_fields = []
+        if req_sort and req_sort in valid_sorts and custom_list.default_sort != sort_by:
+            custom_list.default_sort = sort_by
+            list_update_fields.append("default_sort")
+        if req_direction and req_direction in {"asc", "desc"} and custom_list.default_sort_direction != direction:
+            custom_list.default_sort_direction = direction
+            list_update_fields.append("default_sort_direction")
+        if req_layout and req_layout in valid_layouts and custom_list.default_layout != layout:
+            custom_list.default_layout = layout
+            list_update_fields.append("default_layout")
+        if req_placement and req_placement in valid_placements and custom_list.completed_placement != completed_placement:
+            custom_list.completed_placement = completed_placement
+            list_update_fields.append("completed_placement")
+        if req_status_tab and req_status_tab in valid_status_tabs and custom_list.status_tab != status_tab:
+            custom_list.status_tab = status_tab
+            list_update_fields.append("status_tab")
+
+        if list_update_fields:
+            custom_list.save(update_fields=list_update_fields)
 
     raw_status_filter = request.GET.getlist("status")
     valid_status_values = (set(valid_statuses) - {MediaStatusChoices.ALL}) | {
@@ -204,15 +273,7 @@ def list_detail(request, list_reference):
         legacy_media_type = request.GET.get("type", "all")
         if legacy_media_type and legacy_media_type != "all":
             selected_media_types = [legacy_media_type]
-    if request.user.is_authenticated:
-        layout = request.user.update_preference(
-            "list_detail_layout",
-            request.GET.get("layout"),
-        )
-    else:
-        layout = request.GET.get("layout", "grid")
-    if layout not in ListDetailLayoutChoices.values:
-        layout = "grid"
+
     valid_media_types = set(MediaTypes.values)
     selected_media_types = [
         media_type
@@ -235,14 +296,41 @@ def list_detail(request, list_reference):
     total_items_count = items.count()
     media_type_breakdown = _build_media_type_breakdown(custom_list)
 
-    # Compute completion percentage (titles completed / total titles)
-    completion_percent = None
-    completed_count = 0
-    if total_items_count > 0 and not is_public_view:
-        all_item_ids = set(custom_list.items.values_list("id", flat=True))
-        completed_ids = _get_completed_item_ids(request.user, all_item_ids)
-        completed_count = len(completed_ids)
-        completion_percent = round(completed_count / total_items_count * 100)
+    all_item_ids = list(custom_list.items.values_list("id", flat=True))
+    status_counts = (
+        get_list_status_counts(media_user, all_item_ids)
+        if not is_public_view
+        else {
+            "all": total_items_count,
+            "in_progress": 0,
+            "planning": total_items_count,
+            "completed": 0,
+            "paused": 0,
+            "dropped": 0,
+        }
+    )
+    completed_count = status_counts["completed"]
+    completion_percent = (
+        round(completed_count / total_items_count * 100)
+        if total_items_count > 0 and not is_public_view
+        else None
+    )
+
+    if status_tab != "all" and all_item_ids and not is_public_view:
+        item_statuses = get_item_statuses_for_user(media_user, all_item_ids)
+        if status_tab == "in_progress":
+            matching_ids = [i for i in all_item_ids if item_statuses.get(i) == Status.IN_PROGRESS.value]
+        elif status_tab == "completed":
+            matching_ids = [i for i in all_item_ids if item_statuses.get(i) == Status.COMPLETED.value]
+        elif status_tab == "paused":
+            matching_ids = [i for i in all_item_ids if item_statuses.get(i) == Status.PAUSED.value]
+        elif status_tab == "dropped":
+            matching_ids = [i for i in all_item_ids if item_statuses.get(i) == Status.DROPPED.value]
+        elif status_tab == "planning":
+            matching_ids = [i for i in all_item_ids if item_statuses.get(i) in (Status.PLANNING.value, None)]
+        else:
+            matching_ids = all_item_ids
+        items = items.filter(id__in=matching_ids)
 
     if params["media_types"]:
         items = items.filter(media_type__in=params["media_types"])
@@ -279,6 +367,7 @@ def list_detail(request, list_reference):
         direction="asc" if is_tiers else params["direction"],
         page=1 if is_tiers else params["page"],
         page_size=TIER_BOARD_LIMIT if is_tiers else 16,
+        completed_placement=completed_placement,
     )
     collection_platforms_by_item_id = {}
 
@@ -331,6 +420,9 @@ def list_detail(request, list_reference):
         "chip_sort": chip_sort,
         "current_statuses": params["status_filter"],
         "current_layout": layout,
+        "current_status_tab": status_tab,
+        "status_counts": status_counts,
+        "completed_placement": completed_placement,
         "sort_choices": sort_choices,
         "status_choices": [
             *MediaStatusChoices.choices[:1],

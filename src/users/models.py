@@ -27,13 +27,16 @@ PLAYBACK_WEBHOOK_SECRET_MAX_LENGTH = 128
 EXCLUDED_SEARCH_TYPES = [MediaTypes.SEASON.value, MediaTypes.EPISODE.value]
 HOME_ALL_MEDIA_TYPE = "all"
 
+# Combined search option for Movies, TV Shows, and Anime.
+MOVIES_TV_ANIME_SEARCH_TYPE = "movies_tv_anime"
+
 # Search-bar option that searches every enabled type in the user's own library
 # (tracked, collected or tagged items) instead of one provider (#1160).
 ALL_SEARCH_TYPE = "all"
 
 VALID_SEARCH_TYPES = [
     value for value in MediaTypes.values if value not in EXCLUDED_SEARCH_TYPES
-] + [ALL_SEARCH_TYPE]
+] + [MOVIES_TV_ANIME_SEARCH_TYPE, ALL_SEARCH_TYPE]
 
 VALID_HOME_SCREEN_MEDIA_TYPES = [
     HOME_ALL_MEDIA_TYPE,
@@ -507,9 +510,13 @@ class User(AbstractUser):
     objects = FloppyUserManager()
 
     last_search_type = models.CharField(
-        max_length=10,
-        default=MediaTypes.TV.value,
-        choices=[*MediaTypes.choices, (ALL_SEARCH_TYPE, "All")],
+        max_length=32,
+        default=MOVIES_TV_ANIME_SEARCH_TYPE,
+        choices=[
+            *MediaTypes.choices,
+            (MOVIES_TV_ANIME_SEARCH_TYPE, "Movies, TV & Anime"),
+            (ALL_SEARCH_TYPE, "All"),
+        ],
     )
 
     last_discover_type = models.CharField(

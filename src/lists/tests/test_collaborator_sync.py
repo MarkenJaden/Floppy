@@ -19,6 +19,7 @@ from lists.collaborator_sync import (
     get_collaborators_for_item,
     sync_episode_to_list_collaborators,
     sync_media_to_list_collaborators,
+    sync_media_uncompleted_to_list_collaborators,
 )
 from lists.models import CustomList, CustomListItem
 
@@ -316,3 +317,51 @@ class CollaboratorSyncTests(TestCase):
         ).first()
         self.assertIsNotNone(user2_movie)
         self.assertEqual(user2_movie.status, Status.COMPLETED.value)
+
+    def test_uncompleted_sync_reverts_collaborator_status(self):
+        # Both user1 and user2 have completed Inception
+        now = timezone.now()
+        media1 = Movie.objects.create(
+            user=self.user1,
+            item=self.movie_item,
+            status=Status.COMPLETED.value,
+            end_date=now,
+        )
+        media2 = Movie.objects.create(
+            user=self.user2,
+            item=self.movie_item,
+            status=Status.COMPLETED.value,
+            end_date=now,
+        )
+
+        # user1 uncompletes the movie
+        media1.status = Status.PLANNING.value
+        media1.end_date = None
+        media1.save()
+        sync_media_uncompleted_to_list_collaborators(
+            media1, self.user1, custom_list=self.shared_list
+        )
+
+        # user2 should now have the movie reverted to planning
+        media2.refresh_from_db()
+        self.assertEqual(media2.status, Status.PLANNING.value)
+        self.assertIsNone(media2.end_date)
+
+    def test_sync_media_with_explicit_custom_list(self):
+        # Syncing with an explicit custom_list
+        media1 = Movie.objects.create(
+            user=self.user1,
+            item=self.movie_item,
+            status=Status.COMPLETED.value,
+            end_date=timezone.now(),
+        )
+        sync_media_to_list_collaborators(
+            media1, self.user1, custom_list=self.shared_list
+        )
+
+        user2_movie = Movie.objects.filter(
+            user=self.user2, item=self.movie_item
+        ).first()
+        self.assertIsNotNone(user2_movie)
+        self.assertEqual(user2_movie.status, Status.COMPLETED.value)
+

@@ -23,7 +23,7 @@ from app import helpers
 from app.discover import tab_cache as discover_tab_cache
 from app.models import Item, MediaTypes
 from app.providers import services
-from app.search_views import SEARCH_ALL_PRIORITY_ORDER
+from app.search_views import MOVIES_TV_ANIME_PRIORITY_ORDER, SEARCH_ALL_PRIORITY_ORDER
 from lists.models import (
     CustomList,
     CustomListItem,
@@ -35,6 +35,7 @@ from lists.views_helpers import (
     _list_item_title_fields_from_metadata,
     _maybe_backfill_episode_title,
 )
+from users.models import MOVIES_TV_ANIME_SEARCH_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,10 @@ def add_list_item_page(request, list_id):
 
     initial_query = request.GET.get("q", "").strip()
     initial_media_type = request.GET.get("media_type") or "all"
-    if initial_media_type not in enabled_media_types and initial_media_type != "all":
+    if (
+        initial_media_type not in enabled_media_types
+        and initial_media_type != "all"
+    ):
         initial_media_type = "all"
 
     try:
@@ -235,11 +239,16 @@ def add_list_item_search(request, list_id):
         }
         return render(request, "lists/components/add_item_search_group.html", context)
 
-    # 2. Multi-category progressive search when media_type == "all"
-    if media_type == "all":
+    # 2. Multi-category progressive search when media_type in ("all", MOVIES_TV_ANIME_SEARCH_TYPE)
+    if media_type in ("all", MOVIES_TV_ANIME_SEARCH_TYPE):
+        order = (
+            MOVIES_TV_ANIME_PRIORITY_ORDER
+            if media_type == MOVIES_TV_ANIME_SEARCH_TYPE
+            else SEARCH_ALL_PRIORITY_ORDER
+        )
         prioritized_categories = [
             {"value": mt, "trigger": trigger}
-            for mt, trigger in SEARCH_ALL_PRIORITY_ORDER
+            for mt, trigger in order
             if mt in enabled_media_types
         ]
 

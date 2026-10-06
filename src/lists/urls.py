@@ -79,6 +79,11 @@ urlpatterns = [
         name="list_cover_image",
     ),
     path(
+        "list/<int:list_id>/items/<int:item_id>/toggle-watched",
+        views_list_actions.toggle_list_item_watched,
+        name="toggle_list_item_watched",
+    ),
+    path(
         "list/<int:list_id>/reorder",
         views_add_reorder.reorder_list_item,
         name="list_reorder_item",

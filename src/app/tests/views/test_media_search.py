@@ -659,11 +659,62 @@ class AllTypeSearchTests(TestCase):
         self.assertEqual(response.context["local_groups"], [])
         self.assertContains(response, "Nothing in your library matches")
 
-    def test_search_type_dropdown_offers_all_first(self):
+    def test_search_type_dropdown_offers_movies_tv_anime_first_and_all_second(self):
         search_types = get_search_media_types(self.user)
 
-        self.assertEqual(search_types[0], {"display": "All", "value": "all"})
+        self.assertEqual(
+            search_types[0],
+            {"display": "Movies, TV & Anime", "value": "movies_tv_anime"},
+        )
+        self.assertEqual(search_types[1], {"display": "All", "value": "all"})
         self.assertIn(MediaTypes.MOVIE.value, [t["value"] for t in search_types])
+
+    @patch("app.providers.services.search")
+    def test_movies_tv_anime_search_groups_movie_tv_anime_only(self, mock_search):
+        movie, collected_book, tagged_game = self._library()
+        anime = self._item(MediaTypes.ANIME.value, "Dune Anime", "4")
+        from app.models import Anime
+        Anime.objects.create(user=self.user, item=anime, status=Status.COMPLETED.value)
+
+        response = self.client.get(
+            reverse("search") + "?media_type=movies_tv_anime&q=dune"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        mock_search.assert_not_called()
+        groups = {
+            group["media_type"]: [r["item"] for r in group["results"]]
+            for group in response.context["local_groups"]
+        }
+        self.assertIn(MediaTypes.MOVIE.value, groups)
+        self.assertIn(MediaTypes.ANIME.value, groups)
+        self.assertNotIn(MediaTypes.BOOK.value, groups)
+        self.assertNotIn(MediaTypes.GAME.value, groups)
+
+    @patch("app.providers.services.search")
+    def test_movies_tv_anime_is_remembered_as_the_search_type(self, mock_search):
+        self.client.get(reverse("search") + "?media_type=movies_tv_anime&q=dune")
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.last_search_type, "movies_tv_anime")
+        mock_search.assert_not_called()
+
+    def test_movies_tv_anime_suggestions(self):
+        movie, collected_book, tagged_game = self._library()
+        anime = self._item(MediaTypes.ANIME.value, "Dune Anime", "4")
+        from app.models import Anime
+        Anime.objects.create(user=self.user, item=anime, status=Status.COMPLETED.value)
+
+        response = self.client.get(
+            reverse("search_suggestions") + "?media_type=movies_tv_anime&q=dune",
+        )
+
+        suggestions = response.context["suggestions"]
+        titles = [s["title"] for s in suggestions]
+        self.assertIn("Dune Movie", titles)
+        self.assertIn("Dune Anime", titles)
+        self.assertNotIn("Dune Novel", titles)
+        self.assertNotIn("Dune Game", titles)
 
     def test_suggestions_span_types_and_label_each_with_its_type(self):
         self._library()

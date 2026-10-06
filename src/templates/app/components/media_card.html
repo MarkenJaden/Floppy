@@ -44,6 +44,11 @@
                          @change="toggleItemSelected({{ item.id }})">
                 </div>
               {% endif %}
+              {% if custom_list and can_edit and not public_view and hover_action_mode != 'none' %}
+                <div class="absolute top-2 right-2 z-10" @click.stop>
+                  {% include "lists/components/list_item_watched_toggle.html" with item=item media=media custom_list=custom_list %}
+                </div>
+              {% endif %}
               <img alt="{% if use_podcast_show|default:False and podcast_show %}{{ podcast_show.title }}{% elif resolved_media_type == MediaTypes.SEASON.value %}{{ season_card_title_override|default:resolved_season_card_title }}{% else %}{{ resolved_item_title|default:title }}{% endif %}"
                    class="media-card-poster {% if hover_action_mode != 'discover' %}lazyload{% endif %} w-full {% if from_grid %}{% if resolved_media_type == 'podcast' or resolved_media_type == 'music' %}aspect-[1/1]{% else %}aspect-[2/3] aspect-2/3{% endif %}{% else %}h-48{% endif %} bg-[var(--color-surface-alt)] {% if image_override|default:item.image|default:IMG_NONE != IMG_NONE %}object-cover{% endif %}"
                    data-image-source="{{ image_source|default:'primary' }}"
@@ -270,6 +275,9 @@
                             @click="trackOpen = true">
                       {% include "app/icons/edit.svg" with classes="w-4 h-4" %}
                     </button>
+                  {% endif %}
+                  {% if custom_list and can_edit and not public_view %}
+                    {% include "lists/components/list_item_watched_toggle.html" with item=item media=media custom_list=custom_list is_overlay=True %}
                   {% endif %}
                   {# Lists Button #}
                   <button class="p-2.5 bg-emerald-600 text-white rounded-full hover:bg-emerald-500 hover:scale-110 hover:shadow-[0_0_15px_rgba(16,185,129,0.5)] transition-all duration-200 cursor-pointer"

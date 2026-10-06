@@ -303,6 +303,8 @@
     direction: '{{ current_direction|default:'desc' }}',
     layout: '{{ current_layout|default:'grid' }}',
     renderedLayout: '{{ current_layout|default:'grid' }}',
+    statusTab: '{{ current_status_tab|default:'all' }}',
+    completedPlacement: '{{ completed_placement|default:'bottom' }}',
     query: '{{ request.GET.q|default:''|escapejs }}',
     searchMode: false,
     statusLabels: {
@@ -336,6 +338,9 @@
     }
   }"
        x-init="
+         const ff = document.getElementById('filter-form');
+         if (ff && $refs.statusTabInput) ff.appendChild($refs.statusTabInput);
+         if (ff && $refs.completedPlacementInput) ff.appendChild($refs.completedPlacementInput);
          document.getElementById('items-view').addEventListener('htmx:afterSwap', () => {
            renderedLayout = layout;
            if (isOrderEditing) initListSortable(layout);
@@ -347,6 +352,8 @@
 
     <!-- Form to manage state -->
     {% include "app/components/filter_form.html" with filter_search_name="q" filter_search_var="query" filter_show_ranges=True filter_show_completed_date=True filter_platform_multi=False filter_show_media_types=True filter_data=list_filter_data %}
+    <input x-ref="statusTabInput" form="filter-form" type="hidden" name="status_tab" x-model="statusTab">
+    <input x-ref="completedPlacementInput" form="filter-form" type="hidden" name="completed_placement" x-model="completedPlacement">
     {% if can_edit %}
       <button id="bulk-action-refresh"
               type="button"
@@ -367,6 +374,8 @@
     {% if can_edit %}
       {% include "lists/components/list_form.html" %}
     {% endif %}
+
+    {% include "lists/components/list_status_tabs.html" with custom_list=custom_list current_status_tab=current_status_tab status_counts=status_counts completed_placement=completed_placement %}
 
     <div class="flex flex-col gap-3 md:flex-row md:gap-4 mb-8">
       <div class="relative grow min-w-0 md:hidden">

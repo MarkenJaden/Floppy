@@ -12,12 +12,12 @@
   <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-8 gap-y-4">
     <h2 class="text-2xl font-bold">{% translate "Search Results" %}</h2>
     <div class="flex items-center flex-wrap gap-x-4 gap-y-2">
-      {% if media_type != "all" %}
+      {% if media_type != "all" and media_type != "movies_tv_anime" %}
         <span class="text-sm text-[var(--color-text-muted)]">{% translate "Source:" %}</span>
       {% endif %}
       <div class="flex gap-x-2">
-        {% if media_type == "all" %}
-          {# Library-only search has no provider source to pick. #}
+        {% if media_type == "all" or media_type == "movies_tv_anime" %}
+          {# Composite library & multi-provider search has no single provider source to pick. #}
         {% elif source_options %}
           {% for source_option in source_options %}
             <a href="{% url 'search' %}?q={{ request.GET.q|urlencode }}&media_type={{ media_type }}&source={{ source_option.value }}&layout={{ layout }}"
@@ -45,7 +45,7 @@
     </div>
   </div>
 
-  {% if media_type == "all" %}
+  {% if media_type == "all" or media_type == "movies_tv_anime" %}
     {% if local_groups %}
       <div class="mb-8">
         <h3 class="text-xl font-semibold mb-6 text-[var(--color-text-secondary)]">{% translate "In Your Library" %}</h3>

@@ -141,6 +141,57 @@ def _get_completed_item_ids(user, item_ids):
     return completed
 
 
+def get_item_statuses_for_user(user, item_ids):
+    """Return {item_id: status_string} for the given item IDs and user."""
+    if not item_ids or not user or not getattr(user, "is_authenticated", False):
+        return {}
+    statuses = {}
+    for media_type in MediaTypes.values:
+        if media_type == MediaTypes.EPISODE.value:
+            continue
+        try:
+            model = apps.get_model("app", media_type)
+        except LookupError:
+            continue
+        rows = (
+            model.objects.filter(item_id__in=item_ids, user=user)
+            .values_list("item_id", "status")
+        )
+        statuses.update({item_id: status for item_id, status in rows if status})
+    return statuses
+
+
+def get_list_status_counts(user, all_item_ids):
+    """Return counts for MAL status categories: all, in_progress, planning, completed, paused, dropped."""
+    total = len(all_item_ids)
+    if not total:
+        return {
+            "all": 0,
+            "in_progress": 0,
+            "planning": 0,
+            "completed": 0,
+            "paused": 0,
+            "dropped": 0,
+        }
+    statuses = get_item_statuses_for_user(user, all_item_ids)
+    in_progress = sum(1 for s in statuses.values() if s == Status.IN_PROGRESS.value)
+    completed = sum(1 for s in statuses.values() if s == Status.COMPLETED.value)
+    paused = sum(1 for s in statuses.values() if s == Status.PAUSED.value)
+    dropped = sum(1 for s in statuses.values() if s == Status.DROPPED.value)
+    planning_tracked = sum(1 for s in statuses.values() if s == Status.PLANNING.value)
+    untracked = total - len(statuses)
+    planning = planning_tracked + untracked
+
+    return {
+        "all": total,
+        "in_progress": in_progress,
+        "planning": planning,
+        "completed": completed,
+        "paused": paused,
+        "dropped": dropped,
+    }
+
+
 def _get_item_last_watched_dates(user, item_ids):
     """Return the latest watched timestamp for each item ID for the current user."""
     if not item_ids:
@@ -664,6 +715,7 @@ def paginate_list_items(
     direction,
     page,
     page_size=16,
+    completed_placement="normal",
 ):
     """Order and paginate a list's items with the library-query engine.
 
@@ -683,22 +735,87 @@ def paginate_list_items(
     )
     if sort_by == ListDetailSortChoices.CUSTOM:
         direction = "asc"  # The list's own order has no direction.
-    query = LibraryQuery(
-        media_types=media_types,
-        filters=filters,
-        sort=SortSpec(key=LIST_SORT_KEYS.get(sort_by, "list_added"), direction=direction),
-        within=candidates,
-        sort_list_id=custom_list.id,
-        routing=ROUTING_MODEL,
-        dedupe_cross_provider=False,
-        provider_region=str(getattr(media_user, "watch_provider_region", "") or ""),
-        pinned_providers=tuple(getattr(media_user, "pinned_watch_providers", None) or ()),
+
+    if hasattr(candidates, "values_list"):
+        candidate_ids = list(candidates.values_list("pk", flat=True))
+    elif isinstance(candidates, (list, tuple, set)):
+        candidate_ids = list(candidates)
+    else:
+        candidate_ids = list(candidates)
+
+    completed_ids = (
+        _get_completed_item_ids(media_user, candidate_ids)
+        if candidate_ids and media_user and getattr(media_user, "is_authenticated", False)
+        else set()
     )
-    executor = LibraryQueryExecutor(media_user, query)
-    total = executor.count()
-    items_page = Paginator(range(total), page_size).get_page(page)
-    offset = (items_page.number - 1) * page_size
-    items = executor.page(offset, page_size, total=total).items
+
+    if (
+        completed_placement == "bottom"
+        and sort_by != ListDetailSortChoices.STATUS
+        and completed_ids
+        and len(completed_ids) < len(candidate_ids)
+    ):
+        uncompleted_candidates = [pk for pk in candidate_ids if pk not in completed_ids]
+        completed_candidates = [pk for pk in candidate_ids if pk in completed_ids]
+
+        query_uncompleted = LibraryQuery(
+            media_types=media_types,
+            filters=filters,
+            sort=SortSpec(key=LIST_SORT_KEYS.get(sort_by, "list_added"), direction=direction),
+            within=uncompleted_candidates,
+            sort_list_id=custom_list.id,
+            routing=ROUTING_MODEL,
+            dedupe_cross_provider=False,
+            provider_region=str(getattr(media_user, "watch_provider_region", "") or ""),
+            pinned_providers=tuple(getattr(media_user, "pinned_watch_providers", None) or ()),
+        )
+        query_completed = LibraryQuery(
+            media_types=media_types,
+            filters=filters,
+            sort=SortSpec(key=LIST_SORT_KEYS.get(sort_by, "list_added"), direction=direction),
+            within=completed_candidates,
+            sort_list_id=custom_list.id,
+            routing=ROUTING_MODEL,
+            dedupe_cross_provider=False,
+            provider_region=str(getattr(media_user, "watch_provider_region", "") or ""),
+            pinned_providers=tuple(getattr(media_user, "pinned_watch_providers", None) or ()),
+        )
+        executor_uncompleted = LibraryQueryExecutor(media_user, query_uncompleted)
+        executor_completed = LibraryQueryExecutor(media_user, query_completed)
+        total_uncompleted = executor_uncompleted.count()
+        total_completed = executor_completed.count()
+        total = total_uncompleted + total_completed
+
+        items_page = Paginator(range(total), page_size).get_page(page)
+        offset = (items_page.number - 1) * page_size
+
+        if offset < total_uncompleted:
+            take_uncompleted = min(page_size, total_uncompleted - offset)
+            items = list(executor_uncompleted.page(offset, take_uncompleted, total=total_uncompleted).items)
+            remaining = page_size - len(items)
+            if remaining > 0 and total_completed > 0:
+                items.extend(executor_completed.page(0, remaining, total=total_completed).items)
+        else:
+            completed_offset = offset - total_uncompleted
+            items = list(executor_completed.page(completed_offset, page_size, total=total_completed).items)
+    else:
+        query = LibraryQuery(
+            media_types=media_types,
+            filters=filters,
+            sort=SortSpec(key=LIST_SORT_KEYS.get(sort_by, "list_added"), direction=direction),
+            within=candidates,
+            sort_list_id=custom_list.id,
+            routing=ROUTING_MODEL,
+            dedupe_cross_provider=False,
+            provider_region=str(getattr(media_user, "watch_provider_region", "") or ""),
+            pinned_providers=tuple(getattr(media_user, "pinned_watch_providers", None) or ()),
+        )
+        executor = LibraryQueryExecutor(media_user, query)
+        total = executor.count()
+        items_page = Paginator(range(total), page_size).get_page(page)
+        offset = (items_page.number - 1) * page_size
+        items = executor.page(offset, page_size, total=total).items
+
     added = dict(
         CustomListItem.objects.filter(
             custom_list=custom_list,
