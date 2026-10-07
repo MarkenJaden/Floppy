@@ -66,7 +66,9 @@ class PersonalCredentialsInBackgroundJobsTests(TestCase):
             seen["api_key"] = credentials.get("lastfm", "api_key")
             return {}
 
-        with patch.object(_lastfm, "_import_lastfm_history_chunk", Mock(side_effect=chunk)):
+        with patch.object(
+            _lastfm, "_import_lastfm_history_chunk", Mock(side_effect=chunk)
+        ):
             _lastfm.import_lastfm_history(self.user.id)
 
         self.assertEqual(seen["api_key"], "personal-lastfm")
