@@ -259,20 +259,24 @@ def _get_stored_plex_account(user):
 
 def _get_import_data_user(user):
     """Load the Import Data page's account relations in a single query."""
-    return user._meta.model.objects.select_related(
-        "plex_account",
-        "audiobookshelf_account",
-        "kavita_account",
-        "komga_account",
-        "pocketcasts_account",
-        "lastfm_account",
-        "koito_account",
-    ).prefetch_related(
-        "radarr_instances",
-        "sonarr_instances",
-        "mylar_instances",
-        "kapowarr_instances",
-    ).get(pk=user.pk)
+    return (
+        user._meta.model.objects.select_related(
+            "plex_account",
+            "audiobookshelf_account",
+            "kavita_account",
+            "komga_account",
+            "pocketcasts_account",
+            "lastfm_account",
+            "koito_account",
+        )
+        .prefetch_related(
+            "radarr_instances",
+            "sonarr_instances",
+            "mylar_instances",
+            "kapowarr_instances",
+        )
+        .get(pk=user.pk)
+    )
 
 
 def _refresh_cached_plex_sections(
@@ -789,20 +793,13 @@ def home_screen(request):
             messages.error(request, str(exc))
         else:
             fields_to_update = []
-            show_media_type_headers = (
-                request.POST.get("show_media_type_headers") == "1"
-            )
-            if (
-                request.user.home_show_media_type_headers
-                != show_media_type_headers
-            ):
+            show_media_type_headers = request.POST.get("show_media_type_headers") == "1"
+            if request.user.home_show_media_type_headers != show_media_type_headers:
                 request.user.home_show_media_type_headers = show_media_type_headers
                 fields_to_update.append("home_show_media_type_headers")
 
             if request.POST.get("home_media_type_chips_present") is not None:
-                chips_enabled = (
-                    request.POST.get("home_media_type_chips_enabled") == "1"
-                )
+                chips_enabled = request.POST.get("home_media_type_chips_enabled") == "1"
                 chip_style = request.POST.get("home_media_type_chip_style")
                 submitted_colors = {
                     media_type: request.POST.get(
@@ -814,9 +811,7 @@ def home_screen(request):
                 chip_colors = normalize_media_type_chip_colors(
                     request.user.home_media_type_chip_colors
                 )
-                chip_colors.update(
-                    normalize_media_type_chip_colors(submitted_colors)
-                )
+                chip_colors.update(normalize_media_type_chip_colors(submitted_colors))
 
                 if request.user.home_media_type_chips_enabled != chips_enabled:
                     request.user.home_media_type_chips_enabled = chips_enabled
@@ -852,9 +847,7 @@ def home_screen(request):
         )
 
     context = {
-        "home_screen_sections_json": json.dumps(
-            sections, cls=DjangoJSONEncoder
-        ),
+        "home_screen_sections_json": json.dumps(sections, cls=DjangoJSONEncoder),
         "show_media_type_headers": request.user.home_show_media_type_headers,
         "media_type_chip_styles": (
             ("solid", "Solid"),
@@ -3575,7 +3568,9 @@ def update_jellyseerr_settings(request):
         seerr_user_id = user.seerr_user_id
     elif seerr_url:
         if not seerr_username:
-            messages.error(request, "A Seerr username is required to request from Seerr.")
+            messages.error(
+                request, "A Seerr username is required to request from Seerr."
+            )
             return redirect("integrations")
         try:
             api_key = raw_api_key or decrypt_or_raise(user.seerr_api_key)

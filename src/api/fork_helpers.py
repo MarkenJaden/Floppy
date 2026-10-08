@@ -60,7 +60,12 @@ FORK_EXTRA_SOURCES = {
 }
 
 _MODIFIABLE_FIELDS = {
-    "score", "status", "progress", "start_date", "end_date", "notes",
+    "score",
+    "status",
+    "progress",
+    "start_date",
+    "end_date",
+    "notes",
     "entry_source",
 }
 

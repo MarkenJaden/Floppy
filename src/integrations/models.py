@@ -1509,11 +1509,14 @@ class ImportRun(models.Model):
 
         verbose_name = "import run"
         verbose_name_plural = "import runs"
-        constraints = [models.UniqueConstraint(
-            fields=["user", "source"],
-            condition=models.Q(source="trakt", status="running") & ~models.Q(phase=""),
-            name="one_active_durable_import",
-        )]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "source"],
+                condition=models.Q(source="trakt", status="running")
+                & ~models.Q(phase=""),
+                name="one_active_durable_import",
+            )
+        ]
         indexes = [
             models.Index(fields=["user", "-started_at"]),
             models.Index(fields=["user", "status"]),
@@ -1527,7 +1530,9 @@ class ImportRun(models.Model):
 class PreparedImportEntry(models.Model):
     """Sealed, ordered persistence decisions; never contains provider credentials."""
 
-    run = models.ForeignKey(ImportRun, on_delete=models.CASCADE, related_name="prepared_entries")
+    run = models.ForeignKey(
+        ImportRun, on_delete=models.CASCADE, related_name="prepared_entries"
+    )
     ordinal = models.PositiveIntegerField()
     model_label = models.CharField(max_length=100)
     operation = models.CharField(max_length=16)
@@ -1538,7 +1543,11 @@ class PreparedImportEntry(models.Model):
     class Meta:
         """Ordered cursor lookup and input identity."""
 
-        constraints = [models.UniqueConstraint(fields=["run", "ordinal"], name="import_entry_run_ordinal")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["run", "ordinal"], name="import_entry_run_ordinal"
+            )
+        ]
         ordering = ["ordinal"]
 
     def __str__(self):
@@ -1549,7 +1558,9 @@ class PreparedImportEntry(models.Model):
 class ImportChunkReceipt(models.Model):
     """Media/history and this receipt commit together; publication is repeatable."""
 
-    run = models.ForeignKey(ImportRun, on_delete=models.CASCADE, related_name="chunk_receipts")
+    run = models.ForeignKey(
+        ImportRun, on_delete=models.CASCADE, related_name="chunk_receipts"
+    )
     phase = models.CharField(max_length=16, default="persist")
     start = models.PositiveIntegerField()
     end = models.PositiveIntegerField()
@@ -1563,7 +1574,11 @@ class ImportChunkReceipt(models.Model):
     class Meta:
         """Unique commit and bounded outbox lookup."""
 
-        constraints = [models.UniqueConstraint(fields=["run", "phase", "start"], name="import_chunk_run_start")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["run", "phase", "start"], name="import_chunk_run_start"
+            )
+        ]
         indexes = [models.Index(fields=["publication_pending", "run"])]
 
     def __str__(self):
@@ -1574,7 +1589,9 @@ class ImportChunkReceipt(models.Model):
 class ImportOverwriteTarget(models.Model):
     """Original row identities: a resumed delete never targets replacements."""
 
-    run = models.ForeignKey(ImportRun, on_delete=models.CASCADE, related_name="overwrite_targets")
+    run = models.ForeignKey(
+        ImportRun, on_delete=models.CASCADE, related_name="overwrite_targets"
+    )
     ordinal = models.PositiveIntegerField()
     model_label = models.CharField(max_length=100)
     original_pk = models.PositiveBigIntegerField()
@@ -1584,7 +1601,12 @@ class ImportOverwriteTarget(models.Model):
     class Meta:
         """Stable deletion identity and cursor."""
 
-        constraints = [models.UniqueConstraint(fields=["run", "model_label", "original_pk"], name="import_overwrite_original")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["run", "model_label", "original_pk"],
+                name="import_overwrite_original",
+            )
+        ]
         indexes = [models.Index(fields=["run", "deleted", "ordinal"])]
 
     def __str__(self):

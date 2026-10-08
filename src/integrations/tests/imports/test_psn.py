@@ -252,7 +252,6 @@ class ImportPSN(TestCase):
         self.assertEqual(game.progress, 10)
         self.assertEqual(game.status, Status.PAUSED.value)
 
-
     def sync(self, titles, mode="new", media_id="1"):
         """Run one importer pass against canned PSN titles."""
         with (

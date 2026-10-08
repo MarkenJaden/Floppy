@@ -151,7 +151,14 @@ def list_detail(request, list_reference):
     valid_statuses = [choice[0] for choice in MediaStatusChoices.choices]
     valid_layouts = list(ListDetailLayoutChoices.values)
     valid_placements = ["bottom", "normal"]
-    valid_status_tabs = ["all", "in_progress", "planning", "completed", "paused", "dropped"]
+    valid_status_tabs = [
+        "all",
+        "in_progress",
+        "planning",
+        "completed",
+        "paused",
+        "dropped",
+    ]
 
     req_sort = request.GET.get("sort")
     req_direction = request.GET.get("direction")
@@ -176,14 +183,22 @@ def list_detail(request, list_reference):
         else (
             custom_list.default_sort
             if (custom_list.default_sort and custom_list.default_sort in valid_sorts)
-            else (saved_sort if (saved_sort and saved_sort in valid_sorts) else "date_added")
+            else (
+                saved_sort
+                if (saved_sort and saved_sort in valid_sorts)
+                else "date_added"
+            )
         )
     )
 
     direction = _resolve_list_sort_direction(
         sort_by,
         req_direction
-        or (custom_list.default_sort_direction if custom_list.default_sort_direction in {"asc", "desc"} else None)
+        or (
+            custom_list.default_sort_direction
+            if custom_list.default_sort_direction in {"asc", "desc"}
+            else None
+        )
         or None,
     )
 
@@ -192,8 +207,15 @@ def list_detail(request, list_reference):
         if (req_layout and req_layout in valid_layouts)
         else (
             custom_list.default_layout
-            if (custom_list.default_layout and custom_list.default_layout in valid_layouts)
-            else (saved_layout if (saved_layout and saved_layout in valid_layouts) else "grid")
+            if (
+                custom_list.default_layout
+                and custom_list.default_layout in valid_layouts
+            )
+            else (
+                saved_layout
+                if (saved_layout and saved_layout in valid_layouts)
+                else "grid"
+            )
         )
     )
 
@@ -219,16 +241,32 @@ def list_detail(request, list_reference):
         if req_sort and req_sort in valid_sorts and custom_list.default_sort != sort_by:
             custom_list.default_sort = sort_by
             list_update_fields.append("default_sort")
-        if req_direction and req_direction in {"asc", "desc"} and custom_list.default_sort_direction != direction:
+        if (
+            req_direction
+            and req_direction in {"asc", "desc"}
+            and custom_list.default_sort_direction != direction
+        ):
             custom_list.default_sort_direction = direction
             list_update_fields.append("default_sort_direction")
-        if req_layout and req_layout in valid_layouts and custom_list.default_layout != layout:
+        if (
+            req_layout
+            and req_layout in valid_layouts
+            and custom_list.default_layout != layout
+        ):
             custom_list.default_layout = layout
             list_update_fields.append("default_layout")
-        if req_placement and req_placement in valid_placements and custom_list.completed_placement != completed_placement:
+        if (
+            req_placement
+            and req_placement in valid_placements
+            and custom_list.completed_placement != completed_placement
+        ):
             custom_list.completed_placement = completed_placement
             list_update_fields.append("completed_placement")
-        if req_status_tab and req_status_tab in valid_status_tabs and custom_list.status_tab != status_tab:
+        if (
+            req_status_tab
+            and req_status_tab in valid_status_tabs
+            and custom_list.status_tab != status_tab
+        ):
             custom_list.status_tab = status_tab
             list_update_fields.append("status_tab")
 
@@ -316,15 +354,31 @@ def list_detail(request, list_reference):
     if status_tab != "all" and all_item_ids and not is_public_view:
         item_statuses = get_item_statuses_for_user(media_user, all_item_ids)
         if status_tab == "in_progress":
-            matching_ids = [i for i in all_item_ids if item_statuses.get(i) == Status.IN_PROGRESS.value]
+            matching_ids = [
+                i
+                for i in all_item_ids
+                if item_statuses.get(i) == Status.IN_PROGRESS.value
+            ]
         elif status_tab == "completed":
-            matching_ids = [i for i in all_item_ids if item_statuses.get(i) == Status.COMPLETED.value]
+            matching_ids = [
+                i
+                for i in all_item_ids
+                if item_statuses.get(i) == Status.COMPLETED.value
+            ]
         elif status_tab == "paused":
-            matching_ids = [i for i in all_item_ids if item_statuses.get(i) == Status.PAUSED.value]
+            matching_ids = [
+                i for i in all_item_ids if item_statuses.get(i) == Status.PAUSED.value
+            ]
         elif status_tab == "dropped":
-            matching_ids = [i for i in all_item_ids if item_statuses.get(i) == Status.DROPPED.value]
+            matching_ids = [
+                i for i in all_item_ids if item_statuses.get(i) == Status.DROPPED.value
+            ]
         elif status_tab == "planning":
-            matching_ids = [i for i in all_item_ids if item_statuses.get(i) in (Status.PLANNING.value, None)]
+            matching_ids = [
+                i
+                for i in all_item_ids
+                if item_statuses.get(i) in (Status.PLANNING.value, None)
+            ]
         else:
             matching_ids = all_item_ids
         items = items.filter(id__in=matching_ids)

@@ -161,7 +161,9 @@ class FillTests(TierTestCase):
         """The board config enables the fill for people who can edit."""
         page = reverse("list_detail", args=[self.custom_list.public_reference])
         self.assertTrue(
-            self.client.get(page, {"layout": "tiers"}).context["tier_config"]["canFill"],
+            self.client.get(page, {"layout": "tiers"}).context["tier_config"][
+                "canFill"
+            ],
         )
 
     def test_people_who_cannot_edit_cannot_fill(self):
@@ -171,7 +173,9 @@ class FillTests(TierTestCase):
         self.client.force_login(self.stranger)
         self.assertEqual(self.fill().status_code, 403)
         self.assertEqual(
-            self.client.post(self.undo_url, "{}", content_type="application/json").status_code,
+            self.client.post(
+                self.undo_url, "{}", content_type="application/json"
+            ).status_code,
             403,
         )
         self.assertEqual(self.tier_of("One"), "")

@@ -11,7 +11,9 @@ from app.providers import tmdb
 
 class CarouselOverviewTests(SimpleTestCase):
     def setUp(self):
-        image_url_patch = patch("app.carousel.rewrite_image_url", side_effect=lambda url: url)
+        image_url_patch = patch(
+            "app.carousel.rewrite_image_url", side_effect=lambda url: url
+        )
         image_url_patch.start()
         self.addCleanup(image_url_patch.stop)
 
@@ -44,7 +46,9 @@ class CarouselOverviewTests(SimpleTestCase):
 
     @patch("app.providers.tmdb.get_carousel_image_url")
     @patch("app.providers.tmdb.carousel_media")
-    def test_overview_images_go_through_the_image_cache(self, mock_media, mock_image_url):
+    def test_overview_images_go_through_the_image_cache(
+        self, mock_media, mock_image_url
+    ):
         mock_media.return_value = {
             "video": None,
             "photos": [{"file_path": "/backdrop.jpg"}, {"file_path": "/other.jpg"}],
@@ -69,12 +73,16 @@ class CarouselOverviewTests(SimpleTestCase):
             },
         )
         # The duplicate of the overview backdrop is still dropped from the photos.
-        self.assertEqual([p["url"] for p in result["photos"]], ["cached:w1280/other.jpg"])
+        self.assertEqual(
+            [p["url"] for p in result["photos"]], ["cached:w1280/other.jpg"]
+        )
 
     def test_tmdb_season_prefers_season_backdrop_and_parent_logo(self):
         season_data = {
             "video": None,
-            "photos": [{"file_path": "/season-backdrop.jpg", "width": 1600, "height": 900}],
+            "photos": [
+                {"file_path": "/season-backdrop.jpg", "width": 1600, "height": 900}
+            ],
             "logos": ["/season-logo.png"],
             "backdrop_path": "/season-backdrop.jpg",
         }
@@ -85,7 +93,10 @@ class CarouselOverviewTests(SimpleTestCase):
             "backdrop_path": "/show-backdrop.jpg",
         }
         with (
-            patch("app.providers.tmdb.carousel_media", side_effect=[season_data, show_data]),
+            patch(
+                "app.providers.tmdb.carousel_media",
+                side_effect=[season_data, show_data],
+            ),
             patch(
                 "app.providers.tmdb.get_carousel_image_url",
                 side_effect=lambda path, size: f"{size}{path}",
@@ -139,7 +150,9 @@ class CarouselOverviewTests(SimpleTestCase):
 
         # No logo means no desktop overview, but the phone hero still gets the art.
         self.assertIsNone(result["overview"])
-        self.assertEqual(result["hero"], {"url": "w1280/backdrop.jpg", "logo_url": None})
+        self.assertEqual(
+            result["hero"], {"url": "w1280/backdrop.jpg", "logo_url": None}
+        )
 
     @patch("app.providers.tmdb.get_carousel_image_url")
     @patch("app.providers.tmdb.carousel_media")
@@ -159,7 +172,9 @@ class CarouselOverviewTests(SimpleTestCase):
             MediaTypes.MOVIE.value, Sources.TMDB.value, "42"
         )
 
-        self.assertEqual(result["hero"], {"url": "w1280/backdrop.jpg", "logo_url": None})
+        self.assertEqual(
+            result["hero"], {"url": "w1280/backdrop.jpg", "logo_url": None}
+        )
         self.assertEqual(
             result["photos"],
             [{"url": "w1280/backdrop.jpg", "thumb_url": "w300/backdrop.jpg"}],
@@ -211,7 +226,10 @@ class CarouselOverviewTests(SimpleTestCase):
             MediaTypes.GAME.value, Sources.IGDB.value, "123"
         )
 
-        self.assertEqual(result["overview"]["logo_url"], "https://images.igdb.com/igdb/image/upload/t_logo_med/logo1.png")
+        self.assertEqual(
+            result["overview"]["logo_url"],
+            "https://images.igdb.com/igdb/image/upload/t_logo_med/logo1.png",
+        )
         self.assertEqual(len(result["photos"]), 1)
         self.assertIn("shot2", result["photos"][0]["url"])
 
@@ -249,17 +267,29 @@ class CarouselOverviewTests(SimpleTestCase):
         self.assertLess(html.index("Overview"), html.index("mqdefault.jpg"))
         self.assertIn("detail-carousel-overview-logo", html)
 
-
     def test_fragment_renders_the_phone_hero_only_when_there_is_one(self):
         base = {"video": {"key": "trailer"}, "photos": [], "overview": None}
 
         with_logo = render_to_string(
             "app/components/detail_carousel_fragment.html",
-            {"carousel": {**base, "hero": {"url": "https://x.test/b.jpg", "logo_url": "https://x.test/l.png"}}},
+            {
+                "carousel": {
+                    **base,
+                    "hero": {
+                        "url": "https://x.test/b.jpg",
+                        "logo_url": "https://x.test/l.png",
+                    },
+                }
+            },
         )
         text_only = render_to_string(
             "app/components/detail_carousel_fragment.html",
-            {"carousel": {**base, "hero": {"url": "https://x.test/b.jpg", "logo_url": None}}},
+            {
+                "carousel": {
+                    **base,
+                    "hero": {"url": "https://x.test/b.jpg", "logo_url": None},
+                }
+            },
         )
         without = render_to_string(
             "app/components/detail_carousel_fragment.html",

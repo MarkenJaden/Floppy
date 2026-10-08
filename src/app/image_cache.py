@@ -231,9 +231,14 @@ def _open_image_response(url):
         else:
             return None, None
 
-        if response is None or not HTTP_OK <= response.status_code < HTTP_MULTIPLE_CHOICES:
+        if (
+            response is None
+            or not HTTP_OK <= response.status_code < HTTP_MULTIPLE_CHOICES
+        ):
             return None, None
-        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        content_type = (
+            response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        )
         if not content_type.startswith("image/") or content_type == "image/svg+xml":
             return None, None
         try:

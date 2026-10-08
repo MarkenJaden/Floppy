@@ -76,7 +76,6 @@ logger = logging.getLogger(__name__)
 PSN_IMPORT_LOCK_SECONDS = 15 * 60
 
 
-
 def import_media(
     importer_func,
     identifier,
@@ -104,20 +103,38 @@ def import_media(
         # Credentials never participate in checkpoint storage. Public/OAuth
         # identity and mode must match the original immutable eligibility plan.
         state["request_key"] = durable.digest([user_id, mode, oauth_username])
-        import_run = ImportRun.objects.filter(
-            user=user, source=source, cancel_requested=False,
-            prepared_state__request_key=state["request_key"],
-            status__in=[ImportRun.Status.FAILED, ImportRun.Status.RUNNING],
-        ).filter(
-            Q(lease_expires_at__isnull=True) | Q(lease_expires_at__lte=timezone.now()),
-        ).order_by("started_at").first()
-        if import_run is None and ImportRun.objects.filter(
-            user=user, source=source, status__in=[ImportRun.Status.FAILED, ImportRun.Status.RUNNING],
-        ).exclude(prepared_digest="").exclude(phase="complete").exists():
+        import_run = (
+            ImportRun.objects.filter(
+                user=user,
+                source=source,
+                cancel_requested=False,
+                prepared_state__request_key=state["request_key"],
+                status__in=[ImportRun.Status.FAILED, ImportRun.Status.RUNNING],
+            )
+            .filter(
+                Q(lease_expires_at__isnull=True)
+                | Q(lease_expires_at__lte=timezone.now()),
+            )
+            .order_by("started_at")
+            .first()
+        )
+        if (
+            import_run is None
+            and ImportRun.objects.filter(
+                user=user,
+                source=source,
+                status__in=[ImportRun.Status.FAILED, ImportRun.Status.RUNNING],
+            )
+            .exclude(prepared_digest="")
+            .exclude(phase="complete")
+            .exists()
+        ):
             message = "An interrupted Trakt import must resume with its original identity and mode before starting another."
             raise helpers.MediaImportError(message)
     if import_run is None:
-        import_run = ImportRun.objects.create(user=user, source=source, task_id=task_id, prepared_state=state)
+        import_run = ImportRun.objects.create(
+            user=user, source=source, task_id=task_id, prepared_state=state
+        )
     else:
         ImportRun.objects.filter(pk=import_run.pk).update(task_id=task_id)
 
@@ -163,7 +180,9 @@ def import_media(
     import_run.refresh_from_db()
     completion = ImportRun.objects.filter(id=import_run.id)
     if import_run.prepared_digest:
-        completion = completion.filter(status=ImportRun.Status.RUNNING, cancel_requested=False)
+        completion = completion.filter(
+            status=ImportRun.Status.RUNNING, cancel_requested=False
+        )
     completed = completion.update(
         status=ImportRun.Status.COMPLETED,
         created_count=created_count,
@@ -188,7 +207,9 @@ def import_media(
         try:
             durable.publish_pending(import_run)
         except BaseException:
-            ImportRun.objects.filter(pk=import_run.pk).update(status=ImportRun.Status.FAILED)
+            ImportRun.objects.filter(pk=import_run.pk).update(
+                status=ImportRun.Status.FAILED
+            )
             raise
     elif has_imported_media(imported_counts) and importer_func == gpodder.importer:
         # GPodder saves each play through the ORM, so post_save already marked
@@ -214,9 +235,7 @@ def import_media(
         # the last published numbers keep being served.
         from app import statistics_cache as _statistics_cache
 
-        _statistics_cache.invalidate_all_statistics_days(
-            user.id, reason="media_import"
-        )
+        _statistics_cache.invalidate_all_statistics_days(user.id, reason="media_import")
     else:
         logger.info(
             "calendar_reload_skipped reason=no_items_imported importer=%s user_id=%s",

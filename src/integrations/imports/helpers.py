@@ -550,7 +550,9 @@ def _deduplicate_season_related_tv_item_rows(seasons):
     for season in seasons:
         related_tv_pk = season.related_tv.pk if season.related_tv_id else None
         key = (
-            related_tv_pk if related_tv_pk is not None else f"unsaved:{id(season.related_tv)}",
+            related_tv_pk
+            if related_tv_pk is not None
+            else f"unsaved:{id(season.related_tv)}",
             season.item_id,
         )
         existing = by_related_tv_item.get(key)
@@ -564,7 +566,14 @@ def _deduplicate_season_related_tv_item_rows(seasons):
     return deduplicated
 
 
-def prepare_bulk_media(bulk_media_list, user, *, exclude_tv_ids=(), exclude_season_ids=(), prepare_only=False):
+def prepare_bulk_media(
+    bulk_media_list,
+    user,
+    *,
+    exclude_tv_ids=(),
+    exclude_season_ids=(),
+    prepare_only=False,
+):
     """Resolve incoming coordinates before the durable persistence boundary."""
     from integrations.episode_orders import resolve_incoming, season_for_target
 
@@ -572,8 +581,11 @@ def prepare_bulk_media(bulk_media_list, user, *, exclude_tv_ids=(), exclude_seas
     # alternate orders may split or combine those groups.
     active_shows = set(
         app.models.TV.objects.filter(
-            user=user, active_episode_order__isnull=False,
-        ).exclude(pk__in=exclude_tv_ids).values_list("item__source", "item__media_id"),
+            user=user,
+            active_episode_order__isnull=False,
+        )
+        .exclude(pk__in=exclude_tv_ids)
+        .values_list("item__source", "item__media_id"),
     )
 
     # Importers build rows using their source provider's numbering. Resolve
@@ -589,8 +601,12 @@ def prepare_bulk_media(bulk_media_list, user, *, exclude_tv_ids=(), exclude_seas
             ordered_episodes.append(episode)
             continue
         targets = resolve_incoming(
-            user, item.media_id, item.source, item.season_number,
-            item.episode_number, integration="import",
+            user,
+            item.media_id,
+            item.source,
+            item.season_number,
+            item.episode_number,
+            integration="import",
         )
         if targets is None:
             ordered_episodes.append(episode)
@@ -602,7 +618,9 @@ def prepare_bulk_media(bulk_media_list, user, *, exclude_tv_ids=(), exclude_seas
             if prepare_only:
                 key = (target.episode_order_id, target.season_number)
                 if key not in planned_seasons:
-                    planned_seasons[key] = season_for_target(user, target, prepare_only=True)
+                    planned_seasons[key] = season_for_target(
+                        user, target, prepare_only=True
+                    )
                 mapped.related_season = planned_seasons[key]
             else:
                 mapped.related_season = season_for_target(user, target)
@@ -612,12 +630,15 @@ def prepare_bulk_media(bulk_media_list, user, *, exclude_tv_ids=(), exclude_seas
 
     if MediaTypes.SEASON.value in bulk_media_list:
         bulk_media_list[MediaTypes.SEASON.value] = [
-            season for season in bulk_media_list[MediaTypes.SEASON.value]
+            season
+            for season in bulk_media_list[MediaTypes.SEASON.value]
             if season.item.episode_order_id
             or (season.item.source, season.item.media_id) not in active_shows
         ]
     if prepare_only:
-        new_parents = [season for season in planned_seasons.values() if season.pk is None]
+        new_parents = [
+            season for season in planned_seasons.values() if season.pk is None
+        ]
         if new_parents:
             bulk_media_list.setdefault(MediaTypes.SEASON.value, []).extend(new_parents)
         # Preserve the existing reference helpers' media-id/coordinate policy,
@@ -626,16 +647,32 @@ def prepare_bulk_media(bulk_media_list, user, *, exclude_tv_ids=(), exclude_seas
         # changes an episode order or provider identity.
         seasons = bulk_media_list.get(MediaTypes.SEASON.value, [])
         now = timezone.now().timestamp()
-        existing_tvs = list(app.models.TV.objects.filter(
-            user=user, item__media_id__in={row.item.media_id for row in seasons},
-        ).exclude(pk__in=exclude_tv_ids).select_related("item").only(
-            "id", "item_id", "user_id", "created_at", "item__media_id",
-        ))
-        tvs = existing_tvs + _deduplicate_unique_user_item_rows(app.models.TV, bulk_media_list.get(MediaTypes.TV.value, []))
-        ordered_tvs = sorted(enumerate(tvs), key=lambda pair: (
-            pair[1].item_id, -(pair[1].created_at.timestamp() if pair[1].created_at else now),
-            -pair[0] if pair[1].pk is None else 0,
-        ))
+        existing_tvs = list(
+            app.models.TV.objects.filter(
+                user=user,
+                item__media_id__in={row.item.media_id for row in seasons},
+            )
+            .exclude(pk__in=exclude_tv_ids)
+            .select_related("item")
+            .only(
+                "id",
+                "item_id",
+                "user_id",
+                "created_at",
+                "item__media_id",
+            )
+        )
+        tvs = existing_tvs + _deduplicate_unique_user_item_rows(
+            app.models.TV, bulk_media_list.get(MediaTypes.TV.value, [])
+        )
+        ordered_tvs = sorted(
+            enumerate(tvs),
+            key=lambda pair: (
+                pair[1].item_id,
+                -(pair[1].created_at.timestamp() if pair[1].created_at else now),
+                -pair[0] if pair[1].pk is None else 0,
+            ),
+        )
         by_media_id = {row.item.media_id: row for _index, row in ordered_tvs}
         for season in seasons:
             if season.item.media_id in by_media_id:
@@ -654,18 +691,37 @@ def prepare_bulk_media(bulk_media_list, user, *, exclude_tv_ids=(), exclude_seas
         if seasons:
             bulk_media_list[MediaTypes.SEASON.value] = retained
         episodes = bulk_media_list.get(MediaTypes.EPISODE.value, [])
-        existing_seasons = list(app.models.Season.objects.filter(
-            user=user, item__media_id__in={row.item.media_id for row in episodes},
-        ).exclude(pk__in=exclude_season_ids).select_related("item", "related_tv").only(
-            "id", "item_id", "user_id", "created_at", "related_tv", "related_tv__item_id",
-            "item__media_id", "item__season_number",
-        ))
+        existing_seasons = list(
+            app.models.Season.objects.filter(
+                user=user,
+                item__media_id__in={row.item.media_id for row in episodes},
+            )
+            .exclude(pk__in=exclude_season_ids)
+            .select_related("item", "related_tv")
+            .only(
+                "id",
+                "item_id",
+                "user_id",
+                "created_at",
+                "related_tv",
+                "related_tv__item_id",
+                "item__media_id",
+                "item__season_number",
+            )
+        )
         candidates = existing_seasons + retained
-        ordered_seasons = sorted(enumerate(candidates), key=lambda pair: (
-            pair[1].item_id, -(pair[1].created_at.timestamp() if pair[1].created_at else now),
-            -pair[0] if pair[1].pk is None else 0,
-        ))
-        by_coordinate = {(row.item.media_id, row.item.season_number): row for _index, row in ordered_seasons}
+        ordered_seasons = sorted(
+            enumerate(candidates),
+            key=lambda pair: (
+                pair[1].item_id,
+                -(pair[1].created_at.timestamp() if pair[1].created_at else now),
+                -pair[0] if pair[1].pk is None else 0,
+            ),
+        )
+        by_coordinate = {
+            (row.item.media_id, row.item.season_number): row
+            for _index, row in ordered_seasons
+        }
         for episode in episodes:
             key = (episode.item.media_id, episode.item.season_number)
             if key in by_coordinate:
@@ -674,8 +730,9 @@ def prepare_bulk_media(bulk_media_list, user, *, exclude_tv_ids=(), exclude_seas
     return None
 
 
-
-def bulk_create_media(bulk_media_list, user, *, backfill_completed=True, prepared=False, normalize=True):
+def bulk_create_media(
+    bulk_media_list, user, *, backfill_completed=True, prepared=False, normalize=True
+):
     """Bulk create all media objects.
 
     Returns warning messages for any episodes skipped because no matching

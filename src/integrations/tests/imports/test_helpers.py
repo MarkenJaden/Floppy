@@ -70,27 +70,43 @@ class HelpersTest(TestCase):
         self.assertEqual(row.score, 7)
         self.assertEqual(row.notes, "import plan")
 
-    @patch("app.providers.services.get_media_metadata", return_value={"max_progress": None})
-    def test_batch_normalization_preserves_owner_source_and_first_watch(self, _metadata):
+    @patch(
+        "app.providers.services.get_media_metadata", return_value={"max_progress": None}
+    )
+    def test_batch_normalization_preserves_owner_source_and_first_watch(
+        self, _metadata
+    ):
         """Plans merge into the first watch only, with original deletion hooks."""
         other = get_user_model().objects.create_user(username="other-planner")
         item = Item.objects.create(
-            media_id="batch-movie", source=Sources.TMDB.value,
-            media_type=MediaTypes.MOVIE.value, title="Batch Movie",
+            media_id="batch-movie",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.MOVIE.value,
+            title="Batch Movie",
         )
         alternate = Item.objects.create(
-            media_id="batch-movie", source=Sources.TVDB.value,
-            media_type=MediaTypes.MOVIE.value, title="Alternate Source",
+            media_id="batch-movie",
+            source=Sources.TVDB.value,
+            media_type=MediaTypes.MOVIE.value,
+            title="Alternate Source",
         )
         plan = Movie.objects.create(
-            item=item, user=self.user, status=Status.PLANNING.value,
-            score=7, notes="original plan",
+            item=item,
+            user=self.user,
+            status=Status.PLANNING.value,
+            score=7,
+            notes="original plan",
         )
         unrelated = Movie.objects.create(
-            item=alternate, user=self.user, status=Status.PLANNING.value,
+            item=alternate,
+            user=self.user,
+            status=Status.PLANNING.value,
         )
         other_plan = Movie.objects.create(
-            item=item, user=other, status=Status.PLANNING.value, score=3,
+            item=item,
+            user=other,
+            status=Status.PLANNING.value,
+            score=3,
         )
         watches = [
             Movie(item=item, user=self.user, status=Status.COMPLETED.value),
@@ -111,43 +127,72 @@ class HelpersTest(TestCase):
     @tag("slow", "benchmark")
     def test_batch_normalization_bounds_distinct_item_parameters(self):
         """Distinct identities use bounded queries, rather than one large IN list."""
-        items = Item.objects.bulk_create([
-            Item(media_id=f"bounded-plan-{index}", source=Sources.TMDB.value,
-                 media_type=MediaTypes.MOVIE.value, title="Bounded Movie")
-            for index in range(1001)
-        ])
-        watches = Movie.objects.bulk_create([
-            Movie(item=item, user=self.user, status=Status.COMPLETED.value)
-            for item in items
-        ])
+        items = Item.objects.bulk_create(
+            [
+                Item(
+                    media_id=f"bounded-plan-{index}",
+                    source=Sources.TMDB.value,
+                    media_type=MediaTypes.MOVIE.value,
+                    title="Bounded Movie",
+                )
+                for index in range(1001)
+            ]
+        )
+        watches = Movie.objects.bulk_create(
+            [
+                Movie(item=item, user=self.user, status=Status.COMPLETED.value)
+                for item in items
+            ]
+        )
         with self.assertNumQueries(3):
             normalize_completed_entries(watches)
 
     @tag("slow", "benchmark")
-    @patch("app.providers.services.get_media_metadata", return_value={"max_progress": None})
+    @patch(
+        "app.providers.services.get_media_metadata", return_value={"max_progress": None}
+    )
     def test_batch_episode_normalization_queries_do_not_grow_per_watch(self, _metadata):
         """A thousand completed watches preload owner and planning state once."""
         show_item = Item.objects.create(
-            media_id="batch-show", source=Sources.TMDB.value,
-            media_type=MediaTypes.TV.value, title="Batch Show",
+            media_id="batch-show",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.TV.value,
+            title="Batch Show",
         )
         season_item = Item.objects.create(
-            media_id="batch-show", source=Sources.TMDB.value,
-            media_type=MediaTypes.SEASON.value, season_number=1, title="Season",
+            media_id="batch-show",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.SEASON.value,
+            season_number=1,
+            title="Season",
         )
         episode_item = Item.objects.create(
-            media_id="batch-show", source=Sources.TMDB.value,
-            media_type=MediaTypes.EPISODE.value, season_number=1,
-            episode_number=1, title="Episode",
+            media_id="batch-show",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.EPISODE.value,
+            season_number=1,
+            episode_number=1,
+            title="Episode",
         )
-        tv = TV.objects.create(item=show_item, user=self.user, status=Status.PLANNING.value)
+        tv = TV.objects.create(
+            item=show_item, user=self.user, status=Status.PLANNING.value
+        )
         season = Season.objects.create(
-            item=season_item, user=self.user, related_tv=tv, status=Status.PLANNING.value,
+            item=season_item,
+            user=self.user,
+            related_tv=tv,
+            status=Status.PLANNING.value,
         )
-        watches = Episode.objects.bulk_create([
-            Episode(item=episode_item, related_season=season, status=Status.COMPLETED.value)
-            for _ in range(1000)
-        ])
+        watches = Episode.objects.bulk_create(
+            [
+                Episode(
+                    item=episode_item,
+                    related_season=season,
+                    status=Status.COMPLETED.value,
+                )
+                for _ in range(1000)
+            ]
+        )
         with self.assertNumQueries(2):
             normalize_completed_entries(watches)
         self.assertEqual(Episode.objects.filter(related_season=season).count(), 1000)

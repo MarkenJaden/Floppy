@@ -1,4 +1,5 @@
 """Tests for the provider-id collection endpoints (fork-only)."""
+
 from http import HTTPStatus as HTTP  # noqa: N814
 from unittest.mock import Mock, patch
 

@@ -1263,9 +1263,15 @@ class MediaCoreTests(FloppyApiTestCase):
         """Providers return publishers as a list, a joined string, or nothing."""
         cases = (
             # Open Library edition records return a list
-            (["Smithsonian Institution Press", "Other"], ["Smithsonian Institution Press", "Other"]),
+            (
+                ["Smithsonian Institution Press", "Other"],
+                ["Smithsonian Institution Press", "Other"],
+            ),
             # BoardGameGeek joins names into one string
-            ("Smithsonian Institution Press, Other", ["Smithsonian Institution Press", "Other"]),
+            (
+                "Smithsonian Institution Press, Other",
+                ["Smithsonian Institution Press", "Other"],
+            ),
             # an edition with no publisher
             (None, []),
             ("", []),

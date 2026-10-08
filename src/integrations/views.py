@@ -262,7 +262,10 @@ def _integration_redirect(request, *, connected_slug=None, next_url=None):
     if connected_slug:
         user = request.user
         if connected_slug not in user.onboarding_connected_sources:
-            user.onboarding_connected_sources = [*user.onboarding_connected_sources, connected_slug]
+            user.onboarding_connected_sources = [
+                *user.onboarding_connected_sources,
+                connected_slug,
+            ]
             user.save(update_fields=["onboarding_connected_sources"])
     destination = next_url or request.POST.get("next") or request.GET.get("next")
     return redirect(destination or "import_data")
@@ -763,14 +766,18 @@ def _finish_trakt_connection(request, oauth_result, state_data):
     import_time = state_data["time"]
 
     if frequency == "once":
-        if _queue_task_or_message(request,
-            tasks.import_trakt,
-            token=enc_token,
-            user_id=request.user.id,
-            mode=mode,
-            username=oauth_result["username"],
-            redirect_uri=oauth_result.get("redirect_uri"),
-        ) is False:
+        if (
+            _queue_task_or_message(
+                request,
+                tasks.import_trakt,
+                token=enc_token,
+                user_id=request.user.id,
+                mode=mode,
+                username=oauth_result["username"],
+                redirect_uri=oauth_result.get("redirect_uri"),
+            )
+            is False
+        ):
             return
         messages.info(request, "The task to import media from Trakt has been queued.")
     else:
@@ -908,12 +915,16 @@ def import_trakt_public(request):
     import_time = request.POST["time"]
 
     if frequency == "once":
-        if _queue_task_or_message(request,
-            tasks.import_trakt,
-            user_id=request.user.id,
-            mode=mode,
-            username=username,
-        ) is False:
+        if (
+            _queue_task_or_message(
+                request,
+                tasks.import_trakt,
+                user_id=request.user.id,
+                mode=mode,
+                username=username,
+            )
+            is False
+        ):
             return _integration_redirect(request, connected_slug="trakt")
         messages.info(request, "The task to import media from Trakt has been queued.")
     else:
@@ -959,9 +970,12 @@ def import_mdblist(request):
         return _integration_redirect(request)
 
     if frequency == "once":
-        if _queue_task_or_message(request,
-            tasks.import_mdblist, user_id=request.user.id, mode=mode
-        ) is False:
+        if (
+            _queue_task_or_message(
+                request, tasks.import_mdblist, user_id=request.user.id, mode=mode
+            )
+            is False
+        ):
             return _integration_redirect(request, connected_slug="mdblist")
         messages.info(request, "The task to import media from MDBList has been queued.")
     else:
@@ -1091,8 +1105,12 @@ def plex_callback(request):
     if return_to:
         # Arrived from the setup wizard: queue a sensible default import
         # rather than requiring a second visit to pick a library/mode.
-        _queue_task_or_message(request,
-            tasks.import_plex, user_id=request.user.id, mode="new", library=["all"]
+        _queue_task_or_message(
+            request,
+            tasks.import_plex,
+            user_id=request.user.id,
+            mode="new",
+            library=["all"],
         )
 
     return _integration_redirect(request, connected_slug="plex", next_url=return_to)
@@ -1158,11 +1176,15 @@ def import_plex(request):
         _ensure_plex_watchlist_schedule(request.user, plex_account)
         plex_account.watchlist_sync_enabled = True
         plex_account.save(update_fields=["watchlist_sync_enabled"])
-        if _queue_task_or_message(request,
-            tasks.sync_plex_watchlist,
-            user_id=request.user.id,
-            mode="watchlist",
-        ) is not False:
+        if (
+            _queue_task_or_message(
+                request,
+                tasks.sync_plex_watchlist,
+                user_id=request.user.id,
+                mode="watchlist",
+            )
+            is not False
+        ):
             messages.info(
                 request,
                 (
@@ -1180,11 +1202,15 @@ def import_plex(request):
             )
             return redirect("import_data")
 
-        if _queue_task_or_message(request,
-            tasks.update_collection_metadata_from_plex,
-            library=library,
-            user_id=request.user.id,
-        ) is not False:
+        if (
+            _queue_task_or_message(
+                request,
+                tasks.update_collection_metadata_from_plex,
+                library=library,
+                user_id=request.user.id,
+            )
+            is not False
+        ):
             messages.info(
                 request,
                 "The task to update collection metadata from Plex has been queued.",
@@ -1203,12 +1229,16 @@ def import_plex(request):
         )
         return redirect("import_data")
 
-    if _queue_task_or_message(request,
-        tasks.import_plex,
-        library=library,
-        user_id=request.user.id,
-        mode=mode,
-    ) is not False:
+    if (
+        _queue_task_or_message(
+            request,
+            tasks.import_plex,
+            library=library,
+            user_id=request.user.id,
+            mode=mode,
+        )
+        is not False
+    ):
         messages.info(request, "The task to import media from Plex has been queued.")
     return redirect("import_data")
 
@@ -1254,7 +1284,7 @@ def simkl_oauth(request):
     }
     state_token = secrets.token_urlsafe(32)
     query = (
-        f"client_id={credentials.get("simkl", "client_id")}&redirect_uri={redirect_uri}"
+        f"client_id={credentials.get('simkl', 'client_id')}&redirect_uri={redirect_uri}"
         f"&response_type=code&state={state_token}"
     )
 
@@ -1304,13 +1334,19 @@ def import_simkl_private(request):
     import_time = state_data["time"]
 
     if frequency == "once":
-        if _queue_task_or_message(request,
-            tasks.import_simkl,
-            token=enc_token,
-            user_id=request.user.id,
-            mode=mode,
-        ) is False:
-            return _integration_redirect(request, connected_slug="simkl", next_url=return_to)
+        if (
+            _queue_task_or_message(
+                request,
+                tasks.import_simkl,
+                token=enc_token,
+                user_id=request.user.id,
+                mode=mode,
+            )
+            is False
+        ):
+            return _integration_redirect(
+                request, connected_slug="simkl", next_url=return_to
+            )
         messages.info(request, "The task to import media from Simkl has been queued.")
     else:
         helpers.create_import_schedule(
@@ -1344,9 +1380,16 @@ def import_mal(request):
     frequency = request.POST["frequency"]
 
     if frequency == "once":
-        if _queue_task_or_message(request,
-            tasks.import_mal, username=username, user_id=request.user.id, mode=mode
-        ) is False:
+        if (
+            _queue_task_or_message(
+                request,
+                tasks.import_mal,
+                username=username,
+                user_id=request.user.id,
+                mode=mode,
+            )
+            is False
+        ):
             return _integration_redirect(request, connected_slug="myanimelist")
         messages.info(
             request,
@@ -1414,7 +1457,7 @@ def anilist_oauth(request):
     request.session[state_token] = state
 
     return redirect(
-        f"{url}?client_id={credentials.get("anilist", "client_id")}&redirect_uri={redirect_uri}&response_type=code&state={state_token}",
+        f"{url}?client_id={credentials.get('anilist', 'client_id')}&redirect_uri={redirect_uri}&response_type=code&state={state_token}",
     )
 
 
@@ -1440,14 +1483,20 @@ def import_anilist_private(request):
     import_time = state_data["time"]
 
     if frequency == "once":
-        if _queue_task_or_message(request,
-            tasks.import_anilist,
-            user_id=request.user.id,
-            mode=mode,
-            username=username,
-            token=enc_token,
-        ) is False:
-            return _integration_redirect(request, connected_slug="anilist", next_url=return_to)
+        if (
+            _queue_task_or_message(
+                request,
+                tasks.import_anilist,
+                user_id=request.user.id,
+                mode=mode,
+                username=username,
+                token=enc_token,
+            )
+            is False
+        ):
+            return _integration_redirect(
+                request, connected_slug="anilist", next_url=return_to
+            )
         messages.info(request, "AniList import queued.")
     else:
         helpers.create_import_schedule(
@@ -1475,12 +1524,16 @@ def import_anilist_public(request):
     import_time = request.POST["time"]
 
     if frequency == "once":
-        if _queue_task_or_message(request,
-            tasks.import_anilist,
-            user_id=request.user.id,
-            mode=mode,
-            username=username,
-        ) is False:
+        if (
+            _queue_task_or_message(
+                request,
+                tasks.import_anilist,
+                user_id=request.user.id,
+                mode=mode,
+                username=username,
+            )
+            is False
+        ):
             return redirect("import_data")
         messages.info(request, "AniList import queued.")
     else:
@@ -1507,9 +1560,16 @@ def import_kitsu(request):
     frequency = request.POST["frequency"]
 
     if frequency == "once":
-        if _queue_task_or_message(request,
-            tasks.import_kitsu, username=kitsu_id, user_id=request.user.id, mode=mode
-        ) is False:
+        if (
+            _queue_task_or_message(
+                request,
+                tasks.import_kitsu,
+                username=kitsu_id,
+                user_id=request.user.id,
+                mode=mode,
+            )
+            is False
+        ):
             return _integration_redirect(request)
         messages.info(request, "The task to import media from Kitsu has been queued.")
     else:
@@ -1539,14 +1599,17 @@ def import_yamtrack(request):
         return _integration_redirect(request)
 
     mode = request.POST["mode"]
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_yamtrack,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=mode,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_yamtrack,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=mode,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="yamtrack")
     messages.info(
         request,
@@ -1574,15 +1637,18 @@ def import_clz(request):
         messages.error(request, "Unknown media type for the CLZ import.")
         return _integration_redirect(request)
 
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_clz,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=request.POST.get("mode", "new"),
-        media_type=media_type,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_clz,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=request.POST.get("mode", "new"),
+            media_type=media_type,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="clz")
     messages.info(
         request,
@@ -1613,19 +1679,21 @@ def import_trakt_export_file(request):
 
     mode = request.POST["mode"]
     payloads = [
-        (upload.name, path)
-        for upload, path in zip(uploads, staged_files, strict=True)
+        (upload.name, path) for upload, path in zip(uploads, staged_files, strict=True)
     ]
 
     if len(payloads) == 1 and not _is_trakt_export_payload(*payloads[0]):
-        if _queue_staged_task_or_message(
-            request,
-            tasks.import_trakt_collection_csv,
-            user_id=request.user.id,
-            file=payloads[0][1],
-            mode=mode,
-            staged_paths=tuple(staged_files),
-        ) is False:
+        if (
+            _queue_staged_task_or_message(
+                request,
+                tasks.import_trakt_collection_csv,
+                user_id=request.user.id,
+                file=payloads[0][1],
+                mode=mode,
+                staged_paths=tuple(staged_files),
+            )
+            is False
+        ):
             return _integration_redirect(request, connected_slug="trakt")
         messages.info(
             request,
@@ -1651,14 +1719,17 @@ def import_trakt_export_file(request):
         for path in staged_files:
             discard_staged_upload(path)
 
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_trakt_export,
-        user_id=request.user.id,
-        file=archive_path,
-        mode=mode,
-        staged_paths=(archive_path,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_trakt_export,
+            user_id=request.user.id,
+            file=archive_path,
+            mode=mode,
+            staged_paths=(archive_path,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="trakt")
     messages.info(
         request,
@@ -1703,14 +1774,17 @@ def import_wetrakr(request):
             for path in staged_files:
                 discard_staged_upload(path)
 
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_wetrakr_export,
-        user_id=request.user.id,
-        file=archive_path,
-        mode=request.POST["mode"],
-        staged_paths=(archive_path,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_wetrakr_export,
+            user_id=request.user.id,
+            file=archive_path,
+            mode=request.POST["mode"],
+            staged_paths=(archive_path,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="wetrakr")
     messages.info(
         request,
@@ -1738,14 +1812,17 @@ def import_hltb(request):
         return _integration_redirect(request)
 
     mode = request.POST["mode"]
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_hltb,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=mode,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_hltb,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=mode,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="hltb")
     messages.info(
         request,
@@ -1768,14 +1845,17 @@ def import_grouvee(request):
         return _integration_redirect(request)
 
     mode = request.POST["mode"]
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_grouvee,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=mode,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_grouvee,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=mode,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="grouvee")
     messages.info(
         request,
@@ -1796,9 +1876,16 @@ def import_steam(request):
     frequency = request.POST["frequency"]
 
     if frequency == "once":
-        if _queue_task_or_message(request,
-            tasks.import_steam, username=steam_id, user_id=request.user.id, mode=mode
-        ) is False:
+        if (
+            _queue_task_or_message(
+                request,
+                tasks.import_steam,
+                username=steam_id,
+                user_id=request.user.id,
+                mode=mode,
+            )
+            is False
+        ):
             return _integration_redirect(request, connected_slug="steam")
         messages.info(request, "The task to import media from Steam has been queued.")
     else:
@@ -1847,9 +1934,16 @@ def radarr_connect(request):
         return _integration_redirect(request)
 
     _ensure_arr_schedule(instance, RADARR_RECURRING_TASK_NAME, "Radarr")
-    if _queue_task_or_message(request,
-        tasks.import_radarr, user_id=request.user.id, mode="new", instance_id=instance.id
-    ) is not False:
+    if (
+        _queue_task_or_message(
+            request,
+            tasks.import_radarr,
+            user_id=request.user.id,
+            mode="new",
+            instance_id=instance.id,
+        )
+        is not False
+    ):
         messages.success(
             request,
             "Connected Radarr. Initial import queued and recurring sync enabled.",
@@ -1895,8 +1989,12 @@ def import_radarr(request):
         RadarrInstance, pk=request.POST.get("instance_id"), user=request.user
     )
 
-    queued = _queue_task_or_message(request,
-        tasks.import_radarr, user_id=request.user.id, mode="new", instance_id=instance.id
+    queued = _queue_task_or_message(
+        request,
+        tasks.import_radarr,
+        user_id=request.user.id,
+        mode="new",
+        instance_id=instance.id,
     )
     _ensure_arr_schedule(instance, RADARR_RECURRING_TASK_NAME, "Radarr")
     if queued is not False:
@@ -1937,9 +2035,16 @@ def mylar_connect(request):
         return _integration_redirect(request)
 
     _ensure_arr_schedule(instance, MYLAR_RECURRING_TASK_NAME, "Mylar3")
-    if _queue_task_or_message(request,
-        tasks.import_mylar, user_id=request.user.id, mode="new", instance_id=instance.id
-    ) is not False:
+    if (
+        _queue_task_or_message(
+            request,
+            tasks.import_mylar,
+            user_id=request.user.id,
+            mode="new",
+            instance_id=instance.id,
+        )
+        is not False
+    ):
         messages.success(
             request,
             "Connected Mylar3. Initial import queued and recurring sync enabled.",
@@ -1986,8 +2091,12 @@ def import_mylar(request):
         MylarInstance, pk=request.POST.get("instance_id"), user=request.user
     )
 
-    queued = _queue_task_or_message(request,
-        tasks.import_mylar, user_id=request.user.id, mode="new", instance_id=instance.id
+    queued = _queue_task_or_message(
+        request,
+        tasks.import_mylar,
+        user_id=request.user.id,
+        mode="new",
+        instance_id=instance.id,
     )
     _ensure_arr_schedule(instance, MYLAR_RECURRING_TASK_NAME, "Mylar3")
     if queued is not False:
@@ -2028,9 +2137,16 @@ def kapowarr_connect(request):
         return _integration_redirect(request)
 
     _ensure_arr_schedule(instance, KAPOWARR_RECURRING_TASK_NAME, "Kapowarr")
-    if _queue_task_or_message(request,
-        tasks.import_kapowarr, user_id=request.user.id, mode="new", instance_id=instance.id
-    ) is not False:
+    if (
+        _queue_task_or_message(
+            request,
+            tasks.import_kapowarr,
+            user_id=request.user.id,
+            mode="new",
+            instance_id=instance.id,
+        )
+        is not False
+    ):
         messages.success(
             request,
             "Connected Kapowarr. Initial import queued and recurring sync enabled.",
@@ -2077,8 +2193,12 @@ def import_kapowarr(request):
         KapowarrInstance, pk=request.POST.get("instance_id"), user=request.user
     )
 
-    queued = _queue_task_or_message(request,
-        tasks.import_kapowarr, user_id=request.user.id, mode="new", instance_id=instance.id
+    queued = _queue_task_or_message(
+        request,
+        tasks.import_kapowarr,
+        user_id=request.user.id,
+        mode="new",
+        instance_id=instance.id,
     )
     _ensure_arr_schedule(instance, KAPOWARR_RECURRING_TASK_NAME, "Kapowarr")
     if queued is not False:
@@ -2119,9 +2239,16 @@ def sonarr_connect(request):
         return _integration_redirect(request)
 
     _ensure_arr_schedule(instance, SONARR_RECURRING_TASK_NAME, "Sonarr")
-    if _queue_task_or_message(request,
-        tasks.import_sonarr, user_id=request.user.id, mode="new", instance_id=instance.id
-    ) is not False:
+    if (
+        _queue_task_or_message(
+            request,
+            tasks.import_sonarr,
+            user_id=request.user.id,
+            mode="new",
+            instance_id=instance.id,
+        )
+        is not False
+    ):
         messages.success(
             request,
             "Connected Sonarr. Initial import queued and recurring sync enabled.",
@@ -2167,8 +2294,12 @@ def import_sonarr(request):
         SonarrInstance, pk=request.POST.get("instance_id"), user=request.user
     )
 
-    queued = _queue_task_or_message(request,
-        tasks.import_sonarr, user_id=request.user.id, mode="new", instance_id=instance.id
+    queued = _queue_task_or_message(
+        request,
+        tasks.import_sonarr,
+        user_id=request.user.id,
+        mode="new",
+        instance_id=instance.id,
     )
     _ensure_arr_schedule(instance, SONARR_RECURRING_TASK_NAME, "Sonarr")
     if queued is not False:
@@ -2246,7 +2377,12 @@ def jellyfin_connect(request):
     # Seamless by default: queue an automatic history pull right away so a
     # newly connected user sees their watch history without any manual
     # export/upload step, and keep it running on a schedule going forward.
-    if _queue_task_or_message(request, tasks.pull_jellyfin_history, user_id=request.user.id) is not False:
+    if (
+        _queue_task_or_message(
+            request, tasks.pull_jellyfin_history, user_id=request.user.id
+        )
+        is not False
+    ):
         messages.success(
             request,
             "Connected Jellyfin. Importing your watch history now.",
@@ -2313,7 +2449,12 @@ def jellyfin_push_now(request):
         messages.error(request, "Connect Jellyfin before syncing.")
         return redirect("integrations")
 
-    if _queue_task_or_message(request, tasks.push_jellyfin_watched, user_id=request.user.id) is not False:
+    if (
+        _queue_task_or_message(
+            request, tasks.push_jellyfin_watched, user_id=request.user.id
+        )
+        is not False
+    ):
         messages.info(request, "Jellyfin sync queued.")
     return redirect("integrations")
 
@@ -2328,7 +2469,12 @@ def jellyfin_pull_now(request):
         messages.error(request, "Connect Jellyfin before importing history.")
         return redirect("integrations")
 
-    if _queue_task_or_message(request, tasks.pull_jellyfin_history, user_id=request.user.id) is not False:
+    if (
+        _queue_task_or_message(
+            request, tasks.pull_jellyfin_history, user_id=request.user.id
+        )
+        is not False
+    ):
         messages.info(request, "Jellyfin history import queued.")
     return redirect("integrations")
 
@@ -2338,7 +2484,9 @@ def jellyfin_playback_reporting_import(request):
     """Queue a manual Playback Reporting TSV import for the connected user."""
     account = getattr(request.user, "jellyfin_account", None)
     if not account or not account.is_connected:
-        messages.error(request, "Connect Jellyfin before importing Playback Reporting data.")
+        messages.error(
+            request, "Connect Jellyfin before importing Playback Reporting data."
+        )
         return redirect("integrations")
 
     uploaded_file = request.FILES.get("playback_reporting_file")
@@ -2362,14 +2510,17 @@ def jellyfin_playback_reporting_import(request):
     if staged_file is None:
         return redirect("integrations")
 
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_jellyfin_playback_reporting,
-        staged_file,
-        request.user.id,
-        "new",
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_jellyfin_playback_reporting,
+            staged_file,
+            request.user.id,
+            "new",
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return redirect("integrations")
     messages.info(request, "Jellyfin Playback Reporting import queued.")
     return redirect("integrations")
@@ -2463,9 +2614,12 @@ def audiobookshelf_connect(request):
         _ensure_audiobookshelf_schedule(request.user)
 
     _run_with_lock_retry("connect Audiobookshelf", _connect)
-    if _queue_task_or_message(request,
-        tasks.import_audiobookshelf, user_id=request.user.id, mode="new"
-    ) is not False:
+    if (
+        _queue_task_or_message(
+            request, tasks.import_audiobookshelf, user_id=request.user.id, mode="new"
+        )
+        is not False
+    ):
         messages.success(request, "Connected Audiobookshelf. Initial import queued.")
     return _integration_redirect(request, connected_slug="audiobookshelf")
 
@@ -2495,8 +2649,8 @@ def import_audiobookshelf(request):
         messages.error(request, "Connect Audiobookshelf before importing.")
         return redirect("import_data")
 
-    queued = _queue_task_or_message(request,
-        tasks.import_audiobookshelf, user_id=request.user.id, mode="new"
+    queued = _queue_task_or_message(
+        request, tasks.import_audiobookshelf, user_id=request.user.id, mode="new"
     )
     _ensure_audiobookshelf_schedule(request.user)
 
@@ -2547,9 +2701,12 @@ def _reading_server_connect(
         _ensure_recurring_import_schedule(request.user, service, interval)
 
     _run_with_lock_retry(f"connect {service}", _connect)
-    if _queue_task_or_message(
-        request, import_task, user_id=request.user.id, mode="new"
-    ) is not False:
+    if (
+        _queue_task_or_message(
+            request, import_task, user_id=request.user.id, mode="new"
+        )
+        is not False
+    ):
         messages.success(request, f"Connected {service}. Initial import queued.")
     return _integration_redirect(request, connected_slug=related_name)
 
@@ -3205,7 +3362,9 @@ def import_storyteller(request):
         messages.error(request, "Connect Storyteller before importing.")
         return redirect("import_data")
 
-    queued = _queue_task_or_message(request, tasks.import_storyteller, user_id=request.user.id, mode="new")
+    queued = _queue_task_or_message(
+        request, tasks.import_storyteller, user_id=request.user.id, mode="new"
+    )
     _ensure_storyteller_schedule(request.user)
     if queued is not False:
         messages.info(request, "Storyteller import queued.")
@@ -3301,9 +3460,12 @@ def koreader_connect(request):
     )
 
     if frequency == "once":
-        if _queue_task_or_message(request,
-            tasks.import_koreader, user_id=request.user.id, mode=mode
-        ) is not False:
+        if (
+            _queue_task_or_message(
+                request, tasks.import_koreader, user_id=request.user.id, mode=mode
+            )
+            is not False
+        ):
             messages.success(request, "Connected to KOReader. Import queued.")
     else:
         helpers.create_import_schedule(
@@ -3315,9 +3477,12 @@ def koreader_connect(request):
             source="KOReader",
             extra_kwargs={"user_id": request.user.id},
         )
-        if _queue_task_or_message(request,
-            tasks.import_koreader, user_id=request.user.id, mode=mode
-        ) is not False:
+        if (
+            _queue_task_or_message(
+                request, tasks.import_koreader, user_id=request.user.id, mode=mode
+            )
+            is not False
+        ):
             messages.success(request, "Connected to KOReader. Import scheduled.")
     return redirect("import_data")
 
@@ -3427,9 +3592,12 @@ def import_koreader(request):
     import_time = request.POST["time"]
 
     if frequency == "once":
-        if _queue_task_or_message(request,
-            tasks.import_koreader, user_id=request.user.id, mode=mode
-        ) is not False:
+        if (
+            _queue_task_or_message(
+                request, tasks.import_koreader, user_id=request.user.id, mode=mode
+            )
+            is not False
+        ):
             messages.info(request, "KOReader import queued.")
     else:
         helpers.create_import_schedule(
@@ -3523,9 +3691,12 @@ def stremio_connect(request):
         _ensure_stremio_schedule(request.user)
 
     _run_with_lock_retry("connect Stremio", _connect)
-    if _queue_task_or_message(request,
-        tasks.import_stremio, user_id=request.user.id, mode="new"
-    ) is not False:
+    if (
+        _queue_task_or_message(
+            request, tasks.import_stremio, user_id=request.user.id, mode="new"
+        )
+        is not False
+    ):
         messages.success(
             request,
             "Connected to Stremio. Initial import queued; your library will sync every 2 hours.",
@@ -3558,7 +3729,9 @@ def import_stremio(request):
         messages.error(request, "Connect Stremio before importing.")
         return redirect("import_data")
 
-    queued = _queue_task_or_message(request, tasks.import_stremio, user_id=request.user.id, mode="new")
+    queued = _queue_task_or_message(
+        request, tasks.import_stremio, user_id=request.user.id, mode="new"
+    )
     _ensure_stremio_schedule(request.user)
     if queued is not False:
         messages.info(request, "Stremio import queued.")
@@ -3717,7 +3890,10 @@ def _start_console_import(request, source, task, recurring_task_name):
     import_time = request.POST.get("time") or CONSOLE_DEFAULT_IMPORT_TIME
 
     if frequency not in CONSOLE_RECURRING_FREQUENCIES:
-        if _queue_task_or_message(request, task, user_id=request.user.id, mode=mode) is False:
+        if (
+            _queue_task_or_message(request, task, user_id=request.user.id, mode=mode)
+            is False
+        ):
             return
         messages.info(
             request,
@@ -4074,11 +4250,15 @@ def pocketcasts_connect(request):
 
         if newly_scheduled:
             # Run initial import
-            if _queue_task_or_message(request,
-                tasks.import_pocketcasts,
-                user_id=request.user.id,
-                mode="new",
-            ) is not False:
+            if (
+                _queue_task_or_message(
+                    request,
+                    tasks.import_pocketcasts,
+                    user_id=request.user.id,
+                    mode="new",
+                )
+                is not False
+            ):
                 messages.success(
                     request,
                     "Connected to Pocket Casts successfully. Initial import queued. Recurring imports will run every 2 hours.",
@@ -4193,9 +4373,12 @@ def gpodder_connect(request):
         newly_scheduled = _run_with_lock_retry("connect GPodder", _connect)
 
         if newly_scheduled:
-            if _queue_task_or_message(request,
-                tasks.import_gpodder, user_id=request.user.id, mode="new"
-            ) is not False:
+            if (
+                _queue_task_or_message(
+                    request, tasks.import_gpodder, user_id=request.user.id, mode="new"
+                )
+                is not False
+            ):
                 messages.success(
                     request,
                     "Connected to GPodder successfully. Initial sync queued. Recurring syncs will run every 2 hours.",
@@ -4289,9 +4472,11 @@ def lastfm_connect(request):
 
         _run_with_lock_retry("connect Last.fm", _connect)
         poll_interval_minutes = getattr(settings, "LASTFM_POLL_INTERVAL_MINUTES", 15)
-        poll_queued = _queue_task_or_message(request, tasks.poll_lastfm_for_user, user_id=request.user.id)
-        history_queued = _queue_task_or_message(request,
-            tasks.import_lastfm_history, user_id=request.user.id, reset=False
+        poll_queued = _queue_task_or_message(
+            request, tasks.poll_lastfm_for_user, user_id=request.user.id
+        )
+        history_queued = _queue_task_or_message(
+            request, tasks.import_lastfm_history, user_id=request.user.id, reset=False
         )
         if poll_queued is not False and history_queued is not False:
             messages.success(
@@ -4345,8 +4530,15 @@ def poll_lastfm_manual(request):
         messages.error(request, "Last.fm connection is broken. Please reconnect.")
         return redirect("import_data")
 
-    if _queue_task_or_message(request, tasks.poll_lastfm_for_user, user_id=request.user.id) is not False:
-        messages.info(request, "Last.fm sync queued. Scrobbles will be imported shortly.")
+    if (
+        _queue_task_or_message(
+            request, tasks.poll_lastfm_for_user, user_id=request.user.id
+        )
+        is not False
+    ):
+        messages.info(
+            request, "Last.fm sync queued. Scrobbles will be imported shortly."
+        )
     return redirect("import_data")
 
 
@@ -4371,9 +4563,12 @@ def import_lastfm_history_manual(request):
 
     cutoff_uts = (lastfm_account.last_fetch_timestamp_uts or int(time.time())) - 1
     _save_lastfm_history_reset(lastfm_account, cutoff_uts)
-    if _queue_task_or_message(request,
-        tasks.import_lastfm_history, user_id=request.user.id, reset=False
-    ) is not False:
+    if (
+        _queue_task_or_message(
+            request, tasks.import_lastfm_history, user_id=request.user.id, reset=False
+        )
+        is not False
+    ):
         messages.info(request, "Full Last.fm history import queued.")
     return redirect("import_data")
 
@@ -4443,9 +4638,11 @@ def koito_connect(request):
         _ensure_koito_poll_schedule(request.user)
 
     _run_with_lock_retry("connect Koito", _connect)
-    poll_queued = _queue_task_or_message(request, tasks.poll_koito_for_user, user_id=request.user.id)
-    history_queued = _queue_task_or_message(request,
-        tasks.import_koito_history, user_id=request.user.id, reset=True
+    poll_queued = _queue_task_or_message(
+        request, tasks.poll_koito_for_user, user_id=request.user.id
+    )
+    history_queued = _queue_task_or_message(
+        request, tasks.import_koito_history, user_id=request.user.id, reset=True
     )
     if poll_queued is not False and history_queued is not False:
         messages.success(request, "Connected Koito. Full history import queued.")
@@ -4482,7 +4679,12 @@ def poll_koito_manual(request):
         messages.error(request, "Koito connection is broken. Please reconnect.")
         return redirect("import_data")
 
-    if _queue_task_or_message(request, tasks.poll_koito_for_user, user_id=request.user.id) is not False:
+    if (
+        _queue_task_or_message(
+            request, tasks.poll_koito_for_user, user_id=request.user.id
+        )
+        is not False
+    ):
         messages.info(request, "Koito sync queued. Listens will be imported shortly.")
     return redirect("import_data")
 
@@ -4504,9 +4706,12 @@ def import_koito_history_manual(request):
         messages.info(request, "Full Koito history import already running.")
         return redirect("import_data")
 
-    if _queue_task_or_message(request,
-        tasks.import_koito_history, user_id=request.user.id, reset=True
-    ) is not False:
+    if (
+        _queue_task_or_message(
+            request, tasks.import_koito_history, user_id=request.user.id, reset=True
+        )
+        is not False
+    ):
         messages.info(request, "Full Koito history import queued.")
     return redirect("import_data")
 
@@ -4542,7 +4747,8 @@ def import_pocketcasts(request):
 
     if not existing_task:
         # First import - run immediately, then set up 2-hour schedule
-        queued = _queue_task_or_message(request,
+        queued = _queue_task_or_message(
+            request,
             tasks.import_pocketcasts,
             user_id=request.user.id,
             mode=mode,
@@ -4583,11 +4789,15 @@ def import_pocketcasts(request):
             enabled=True,
         )
     # Just run a manual import
-    elif _queue_task_or_message(request,
-        tasks.import_pocketcasts,
-        user_id=request.user.id,
-        mode=mode,
-    ) is not False:
+    elif (
+        _queue_task_or_message(
+            request,
+            tasks.import_pocketcasts,
+            user_id=request.user.id,
+            mode=mode,
+        )
+        is not False
+    ):
         messages.info(
             request, "The task to import media from Pocket Casts has been queued."
         )
@@ -4630,15 +4840,20 @@ def import_gpodder(request):
             start_time=timezone.now(),
             enabled=True,
         )
-        queued = _queue_task_or_message(request, tasks.import_gpodder, user_id=request.user.id, mode="new")
+        queued = _queue_task_or_message(
+            request, tasks.import_gpodder, user_id=request.user.id, mode="new"
+        )
         if queued is not False:
             messages.info(
                 request,
                 "The task to import media from GPodder has been queued. Recurring syncs will run every 2 hours.",
             )
-    elif _queue_task_or_message(request,
-        tasks.import_gpodder, user_id=request.user.id, mode="new"
-    ) is not False:
+    elif (
+        _queue_task_or_message(
+            request, tasks.import_gpodder, user_id=request.user.id, mode="new"
+        )
+        is not False
+    ):
         messages.info(request, "The task to import media from GPodder has been queued.")
 
     return redirect("import_data")
@@ -4657,14 +4872,17 @@ def import_imdb(request):
         return _integration_redirect(request)
 
     mode = request.POST["mode"]
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_imdb,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=mode,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_imdb,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=mode,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="imdb")
     messages.info(
         request,
@@ -4687,14 +4905,17 @@ def import_goodreads(request):
         return _integration_redirect(request)
 
     mode = request.POST["mode"]
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_goodreads,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=mode,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_goodreads,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=mode,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="goodreads")
     messages.info(
         request,
@@ -4723,14 +4944,17 @@ def import_hardcover(request):
             return _integration_redirect(request, connected_slug="hardcover")
 
         mode = request.POST["mode"]
-        if _queue_staged_task_or_message(
-            request,
-            tasks.import_hardcover,
-            user_id=request.user.id,
-            file=staged_file,
-            mode=mode,
-            staged_paths=(staged_file,),
-        ) is False:
+        if (
+            _queue_staged_task_or_message(
+                request,
+                tasks.import_hardcover,
+                user_id=request.user.id,
+                file=staged_file,
+                mode=mode,
+                staged_paths=(staged_file,),
+            )
+            is False
+        ):
             return _integration_redirect(request, connected_slug="hardcover")
         messages.info(
             request,
@@ -4750,12 +4974,15 @@ def hardcover_sync(request):
     mode = request.POST["mode"]
     frequency = request.POST["frequency"]
     if frequency == "once":
-        if _queue_task_or_message(
-            request,
-            tasks.import_hardcover_account,
-            user_id=request.user.id,
-            mode=mode,
-        ) is not False:
+        if (
+            _queue_task_or_message(
+                request,
+                tasks.import_hardcover_account,
+                user_id=request.user.id,
+                mode=mode,
+            )
+            is not False
+        ):
             messages.info(request, "Hardcover sync queued.")
     else:
         helpers.create_import_schedule(
@@ -4784,14 +5011,17 @@ def import_storygraph(request):
         return _integration_redirect(request)
 
     mode = request.POST["mode"]
-    if _queue_staged_task_or_message(
-        request,
-        tasks.import_storygraph,
-        user_id=request.user.id,
-        file=staged_file,
-        mode=mode,
-        staged_paths=(staged_file,),
-    ) is False:
+    if (
+        _queue_staged_task_or_message(
+            request,
+            tasks.import_storygraph,
+            user_id=request.user.id,
+            file=staged_file,
+            mode=mode,
+            staged_paths=(staged_file,),
+        )
+        is False
+    ):
         return _integration_redirect(request, connected_slug="storygraph")
     messages.info(
         request,
@@ -4823,27 +5053,33 @@ def import_tvtime(request):
     if shows_file:
         staged_file = staged_files[staged_index]
         staged_index += 1
-        if _queue_staged_task_or_message(
-            request,
-            tasks.import_tvtime_shows,
-            user_id=request.user.id,
-            file=staged_file,
-            mode=mode,
-            staged_paths=(staged_file,),
-        ) is False:
+        if (
+            _queue_staged_task_or_message(
+                request,
+                tasks.import_tvtime_shows,
+                user_id=request.user.id,
+                file=staged_file,
+                mode=mode,
+                staged_paths=(staged_file,),
+            )
+            is False
+        ):
             for path in staged_files[staged_index:]:
                 discard_staged_upload(path)
             return _integration_redirect(request, connected_slug="tvtime")
     if movies_file:
         staged_file = staged_files[staged_index]
-        if _queue_staged_task_or_message(
-            request,
-            tasks.import_tvtime_movies,
-            user_id=request.user.id,
-            file=staged_file,
-            mode=mode,
-            staged_paths=(staged_file,),
-        ) is False:
+        if (
+            _queue_staged_task_or_message(
+                request,
+                tasks.import_tvtime_movies,
+                user_id=request.user.id,
+                file=staged_file,
+                mode=mode,
+                staged_paths=(staged_file,),
+            )
+            is False
+        ):
             return _integration_redirect(request, connected_slug="tvtime")
     messages.info(
         request,
@@ -5111,7 +5347,9 @@ def seerr_global_webhook(request):
         }
         if requester.lower() in allowed:
             matched = True
-            queued &= _queue_task_quietly(tasks.process_webhook, "seerr", payload, user.id)
+            queued &= _queue_task_quietly(
+                tasks.process_webhook, "seerr", payload, user.id
+            )
 
     if not matched:
         logger.info(
@@ -5159,9 +5397,7 @@ STREMIO_ADDON_MANIFEST = {
     "id": "org.yamtrack.scrobbler",
     "version": "1.2.0",
     "name": "Floppy",
-    "description": (
-        "Floppy Watchlist catalogs and playback scrobbling for Stremio."
-    ),
+    "description": ("Floppy Watchlist catalogs and playback scrobbling for Stremio."),
     "resources": ["catalog", "meta", "subtitles"],
     "types": ["movie", "series"],
     "idPrefixes": ["tt"],
@@ -5595,9 +5831,11 @@ def _match_reference_ids(user, source_item):
     return list(
         ExternalReference.objects.filter(
             user=user,
-        ).filter(
+        )
+        .filter(
             Q(matched_item_id__in=item_ids) | Q(corrected_item_id__in=item_ids),
-        ).values_list("id", flat=True),
+        )
+        .values_list("id", flat=True),
     )
 
 
@@ -5793,8 +6031,7 @@ def match_fix(request, item_id):
         "source_item": source_item,
         "candidates": candidate_rows,
         "providers": [
-            (key, metadata_resolution.metadata_provider_label(key))
-            for key in providers
+            (key, metadata_resolution.metadata_provider_label(key)) for key in providers
         ],
         "provider": provider,
         "provider_label": provider_label,
@@ -5935,9 +6172,7 @@ def library_panel(request, source, media_type, media_id):
         try:
             seerr_requests = seerr_api.requests_for(
                 seerr_api.SeerrClient.for_user(user).media(seerr_type, media_id),
-                season_number=(
-                    None if media_type == MediaTypes.TV.value else season
-                ),
+                season_number=(None if media_type == MediaTypes.TV.value else season),
             )
         except (seerr_api.SeerrError, helpers.MediaImportError) as exc:
             seerr_error = str(exc)

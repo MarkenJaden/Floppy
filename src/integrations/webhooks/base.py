@@ -538,11 +538,9 @@ class BaseWebhookProcessor:
             mapping_tvdb_id = tvdb_id
             if not mapping_tvdb_id and app.providers.tvdb.enabled():
                 try:
-                    mapping_tvdb_id = (
-                        app.providers.tmdb.resolve_tvdb_id_for_tmdb_show(
-                            media_id,
-                            tv_metadata,
-                        )
+                    mapping_tvdb_id = app.providers.tmdb.resolve_tvdb_id_for_tmdb_show(
+                        media_id,
+                        tv_metadata,
                     )
                 except Exception as exc:  # pragma: no cover - defensive guard
                     logger.warning(
@@ -688,8 +686,7 @@ class BaseWebhookProcessor:
         # to load - and stays eligible for later reclassification. Conflating
         # the two lets the classifier silently overrule a settled verdict.
         classified_not_anime = (
-            grouped_anime_match is not None
-            and not grouped_anime_match.is_grouped_anime
+            grouped_anime_match is not None and not grouped_anime_match.is_grouped_anime
         )
         return self._handle_tv_episode(
             media_id,
@@ -1314,16 +1311,15 @@ class BaseWebhookProcessor:
     def _show_has_season(self, media_id, season_number):
         """Return whether TMDB lists ``season_number`` for the show."""
         try:
-            seasons = (
-                app.providers.tmdb.tv(media_id).get("related") or {}
-            ).get("seasons") or []
+            seasons = (app.providers.tmdb.tv(media_id).get("related") or {}).get(
+                "seasons"
+            ) or []
         except ProviderAPIError as exc:
             if _is_transient_provider_error(exc):
                 raise
             return False
         return any(
-            str(season.get("season_number")) == str(season_number)
-            for season in seasons
+            str(season.get("season_number")) == str(season_number) for season in seasons
         )
 
     def _get_mal_id_from_provider_links(
@@ -1832,7 +1828,11 @@ class BaseWebhookProcessor:
         from integrations.episode_orders import apply_targets, resolve_incoming
 
         targets = resolve_incoming(
-            user, media_id, Sources.TMDB.value, season_number, episode_number,
+            user,
+            media_id,
+            Sources.TMDB.value,
+            season_number,
+            episode_number,
             integration=type(self).__name__,
         )
         if targets is not None:
@@ -1840,10 +1840,14 @@ class BaseWebhookProcessor:
                 user,
                 targets,
                 watched_at=(
-                    self._get_played_at(payload) or timezone.now().replace(
-                        second=0, microsecond=0,
+                    self._get_played_at(payload)
+                    or timezone.now().replace(
+                        second=0,
+                        microsecond=0,
                     )
-                ) if self._is_played(payload) else None,
+                )
+                if self._is_played(payload)
+                else None,
                 unplayed=self._is_unplayed(payload),
             )
             return targets[0] if targets else None
@@ -1891,10 +1895,9 @@ class BaseWebhookProcessor:
 
         season_key = f"season/{season_number}"
         season_metadata = tv_metadata.get(season_key)
-        season_metadata_authoritative = (
-            isinstance(season_metadata, dict)
-            and isinstance(season_metadata.get("episodes"), list)
-        )
+        season_metadata_authoritative = isinstance(
+            season_metadata, dict
+        ) and isinstance(season_metadata.get("episodes"), list)
         used_local_only_fallback = False
 
         # Try remapping before show recovery: the payload's episode-level GUID
@@ -1910,10 +1913,9 @@ class BaseWebhookProcessor:
             )
             if remapped is not None:
                 remapped_season, remapped_episode, season_metadata = remapped
-                season_metadata_authoritative = (
-                    isinstance(season_metadata, dict)
-                    and isinstance(season_metadata.get("episodes"), list)
-                )
+                season_metadata_authoritative = isinstance(
+                    season_metadata, dict
+                ) and isinstance(season_metadata.get("episodes"), list)
                 logger.info(
                     "Remapped Plex episode %s S%sE%s to TMDB S%sE%s",
                     media_id,
@@ -1941,10 +1943,9 @@ class BaseWebhookProcessor:
                 tv_metadata = recovered_tv_metadata
                 self._remember_tvdb_override(media_id, external_ids)
                 season_metadata = tv_metadata.get(season_key)
-                season_metadata_authoritative = (
-                    isinstance(season_metadata, dict)
-                    and isinstance(season_metadata.get("episodes"), list)
-                )
+                season_metadata_authoritative = isinstance(
+                    season_metadata, dict
+                ) and isinstance(season_metadata.get("episodes"), list)
                 logger.info(
                     "Recovered missing season %s using TMDB show %s",
                     season_number,

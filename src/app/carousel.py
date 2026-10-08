@@ -14,7 +14,11 @@ from app.image_cache import rewrite_image_url
 from app.models import MediaTypes, Sources
 from app.providers import tmdb
 
-_TMDB_CAROUSEL_TYPES = (MediaTypes.MOVIE.value, MediaTypes.TV.value, MediaTypes.SEASON.value)
+_TMDB_CAROUSEL_TYPES = (
+    MediaTypes.MOVIE.value,
+    MediaTypes.TV.value,
+    MediaTypes.SEASON.value,
+)
 
 
 def carousel_supported(media_type, source):
@@ -32,7 +36,9 @@ def confirmed_empty(media_type, source, media_id, *, season_number=None) -> bool
     up front instead of paying for the lazy carousel round trip again.
     """
     if source == Sources.TMDB.value and media_type in _TMDB_CAROUSEL_TYPES:
-        data = tmdb.peek_carousel_media(media_type, media_id, season_number=season_number)
+        data = tmdb.peek_carousel_media(
+            media_type, media_id, season_number=season_number
+        )
         if data is None:
             return False
         if media_type == MediaTypes.SEASON.value:
@@ -41,7 +47,12 @@ def confirmed_empty(media_type, source, media_id, *, season_number=None) -> bool
                 return False
             has_overview = bool(
                 show_data
-                and (data.get("backdrop_path") or data["photos"] or show_data.get("backdrop_path") or show_data["photos"])
+                and (
+                    data.get("backdrop_path")
+                    or data["photos"]
+                    or show_data.get("backdrop_path")
+                    or show_data["photos"]
+                )
                 and show_data.get("logos")
             )
         else:
@@ -64,14 +75,20 @@ def confirmed_empty(media_type, source, media_id, *, season_number=None) -> bool
     )
 
 
-def resolve_carousel_media(media_type, source, media_id, *, season_number=None) -> dict | None:
+def resolve_carousel_media(
+    media_type, source, media_id, *, season_number=None
+) -> dict | None:
     """Return {"video": {...}|None, "photos": [{"url", "thumb_url"}, ...]} or None."""
     if source == Sources.TMDB.value and media_type in _TMDB_CAROUSEL_TYPES:
         data = tmdb.carousel_media(media_type, media_id, season_number=season_number)
         photos = [
             {
-                "url": rewrite_image_url(tmdb.get_carousel_image_url(photo["file_path"], size="w1280")),
-                "thumb_url": rewrite_image_url(tmdb.get_carousel_image_url(photo["file_path"], size="w300")),
+                "url": rewrite_image_url(
+                    tmdb.get_carousel_image_url(photo["file_path"], size="w1280")
+                ),
+                "thumb_url": rewrite_image_url(
+                    tmdb.get_carousel_image_url(photo["file_path"], size="w300")
+                ),
             }
             for photo in data["photos"]
         ]
@@ -85,9 +102,17 @@ def resolve_carousel_media(media_type, source, media_id, *, season_number=None) 
         if media_type == MediaTypes.SEASON.value:
             show_data = tmdb.carousel_media(MediaTypes.TV.value, media_id)
             logo_paths = show_data.get("logos", [])
-            backdrop_path = backdrop_path or show_data.get("backdrop_path") or next(
-                (photo["file_path"] for photo in show_data["photos"] if photo.get("file_path")),
-                None,
+            backdrop_path = (
+                backdrop_path
+                or show_data.get("backdrop_path")
+                or next(
+                    (
+                        photo["file_path"]
+                        for photo in show_data["photos"]
+                        if photo.get("file_path")
+                    ),
+                    None,
+                )
             )
             if not backdrop_path:
                 from app.backdrops import resolve_backdrop
@@ -109,9 +134,17 @@ def resolve_carousel_media(media_type, source, media_id, *, season_number=None) 
         overview = None
         if (backdrop_path or backdrop_url) and logo_paths:
             overview = {
-                "url": rewrite_image_url(backdrop_url or tmdb.get_carousel_image_url(backdrop_path, size="w1280")),
-                "thumb_url": rewrite_image_url(backdrop_url or tmdb.get_carousel_image_url(backdrop_path, size="w300")),
-                "logo_url": rewrite_image_url(tmdb.get_carousel_image_url(logo_paths[0], size="w500")),
+                "url": rewrite_image_url(
+                    backdrop_url
+                    or tmdb.get_carousel_image_url(backdrop_path, size="w1280")
+                ),
+                "thumb_url": rewrite_image_url(
+                    backdrop_url
+                    or tmdb.get_carousel_image_url(backdrop_path, size="w300")
+                ),
+                "logo_url": rewrite_image_url(
+                    tmdb.get_carousel_image_url(logo_paths[0], size="w500")
+                ),
             }
             removed_overview = False
             remaining_photos = []
@@ -125,7 +158,10 @@ def resolve_carousel_media(media_type, source, media_id, *, season_number=None) 
         hero = None
         if backdrop_path or backdrop_url:
             hero = {
-                "url": rewrite_image_url(backdrop_url or tmdb.get_carousel_image_url(backdrop_path, size="w1280")),
+                "url": rewrite_image_url(
+                    backdrop_url
+                    or tmdb.get_carousel_image_url(backdrop_path, size="w1280")
+                ),
                 "logo_url": overview["logo_url"] if overview else None,
             }
             if not data["video"] and not photos and not overview:
@@ -134,13 +170,21 @@ def resolve_carousel_media(media_type, source, media_id, *, season_number=None) 
                 photos = [
                     {
                         "url": hero["url"],
-                        "thumb_url": rewrite_image_url(backdrop_url or tmdb.get_carousel_image_url(backdrop_path, size="w300")),
+                        "thumb_url": rewrite_image_url(
+                            backdrop_url
+                            or tmdb.get_carousel_image_url(backdrop_path, size="w300")
+                        ),
                     }
                 ]
 
         if not data["video"] and not photos and not overview:
             return None
-        return {"video": data["video"], "photos": photos, "overview": overview, "hero": hero}
+        return {
+            "video": data["video"],
+            "photos": photos,
+            "overview": overview,
+            "hero": hero,
+        }
 
     if source == Sources.IGDB.value and media_type == MediaTypes.GAME.value:
         from lists.models import CustomList
@@ -163,9 +207,15 @@ def resolve_carousel_media(media_type, source, media_id, *, season_number=None) 
         overview = None
         if data.get("hero_image_id") and data.get("logo_image_id"):
             overview = {
-                "url": rewrite_image_url(f"https://images.igdb.com/igdb/image/upload/t_1080p/{data['hero_image_id']}.jpg"),
-                "thumb_url": rewrite_image_url(f"https://images.igdb.com/igdb/image/upload/t_screenshot_big_2x/{data['hero_image_id']}.jpg"),
-                "logo_url": rewrite_image_url(f"https://images.igdb.com/igdb/image/upload/t_logo_med/{data['logo_image_id']}.png"),
+                "url": rewrite_image_url(
+                    f"https://images.igdb.com/igdb/image/upload/t_1080p/{data['hero_image_id']}.jpg"
+                ),
+                "thumb_url": rewrite_image_url(
+                    f"https://images.igdb.com/igdb/image/upload/t_screenshot_big_2x/{data['hero_image_id']}.jpg"
+                ),
+                "logo_url": rewrite_image_url(
+                    f"https://images.igdb.com/igdb/image/upload/t_logo_med/{data['logo_image_id']}.png"
+                ),
             }
             removed_overview = False
             remaining_photos = []
@@ -180,9 +230,16 @@ def resolve_carousel_media(media_type, source, media_id, *, season_number=None) 
         hero = None
         if data.get("hero_image_id"):
             hero = {
-                "url": rewrite_image_url(f"https://images.igdb.com/igdb/image/upload/t_1080p/{data['hero_image_id']}.jpg"),
+                "url": rewrite_image_url(
+                    f"https://images.igdb.com/igdb/image/upload/t_1080p/{data['hero_image_id']}.jpg"
+                ),
                 "logo_url": overview["logo_url"] if overview else None,
             }
-        return {"video": data["video"], "photos": photos, "overview": overview, "hero": hero}
+        return {
+            "video": data["video"],
+            "photos": photos,
+            "overview": overview,
+            "hero": hero,
+        }
 
     return None

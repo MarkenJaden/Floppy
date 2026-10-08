@@ -704,10 +704,14 @@ class MediaDetailsViewTests(TestCase):
         self.assertIn('class="detail-carousel-grid detail-hero-pending"', content)
         self.assertIn("detail-carousel-grid__title", content)
         self.assertIn("detail-carousel-grid__actions", content)
-        self.assertIn('<p class="detail-mobile-meta md:hidden">2020 · 2h 6min</p>', content)
+        self.assertIn(
+            '<p class="detail-mobile-meta md:hidden">2020 · 2h 6min</p>', content
+        )
 
     @patch("app.providers.services.get_media_metadata")
-    def test_game_header_starts_compact_without_a_reserved_hero(self, mock_get_metadata):
+    def test_game_header_starts_compact_without_a_reserved_hero(
+        self, mock_get_metadata
+    ):
         mock_get_metadata.return_value = {
             "media_id": "123",
             "title": "Test Game",
@@ -1009,7 +1013,8 @@ class MediaDetailsViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         content = response.content.decode()
         self.assertIn(
-            'class="detail-secondary-layout flex flex-col-reverse md:flex-row gap-0 md:gap-10"', content
+            'class="detail-secondary-layout flex flex-col-reverse md:flex-row gap-0 md:gap-10"',
+            content,
         )
         self.assertIn('class="detail-media-grid"', content)
         self.assertIn("window.matchMedia('(max-width: 768px)').matches", content)
