@@ -10,6 +10,14 @@
   overflow-y: auto;
 }
 
+[data-home-section-list] .sortable-ghost {
+  opacity: 0.4;
+}
+
+[data-home-section-list] .sortable-chosen {
+  outline: 1px solid var(--color-surface-hover);
+}
+
 @media (max-width: 63.999rem) {
   .home-settings-row-body {
     height: auto;
@@ -69,6 +77,9 @@
 }
 
 :root {
+  /* Screen edges the camera or system UI covers; 0 on screens without them. */
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
   --color-surface: #2a2f35;
   --color-surface-strong: #39404b;
   --color-surface-hover: #454d5a;
@@ -1082,6 +1093,8 @@ html.light .theme-toggle-icon-moon {
 /* Modal max height with padding from viewport */
 .modal-max-height {
   max-height: calc(100vh - 4rem);
+  /* iOS Safari counts vh with the toolbar hidden; dvh follows the visible height. */
+  max-height: calc(100dvh - 4rem);
 }
 
 /* Custom date/time picker: trigger + popover/sheet */
@@ -1115,11 +1128,30 @@ html.light .theme-toggle-icon-moon {
   overflow-x: auto;
 }
 
-.date-picker-quick-action {
-  min-height: 2.75rem;
+.date-picker-empty-label {
+  display: none;
+  align-items: center;
   flex: 0 0 auto;
   padding: 0.375rem;
-  border: 0;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+@media (min-width: 40rem) {
+  .date-picker-empty-label {
+    display: flex;
+  }
+}
+
+.date-picker-quick-action {
+  align-self: center;
+  min-height: 2rem;
+  flex: 0 0 auto;
+  margin-inline-start: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
   color: var(--color-text);
   font-size: 0.875rem;
   white-space: nowrap;
@@ -1354,6 +1386,252 @@ html.light .theme-toggle-icon-moon {
 
 .detail-promoted-content {
   display: none;
+}
+
+/* Phone header (below md). Two shapes:
+   - Compact, the default: poster at 40% of the width with title, year and
+     runtime beside it; chips and actions follow, then the synopsis.
+   - Backdrop, once the carousel fragment brings a hero (.detail-mobile-hero):
+     no poster; the clear logo (or the title as text) sits on the vertical 50%
+     line, where the sharp backdrop fades into the same blurred extension the
+     desktop overview uses. Movies and TV reserve this shape up front
+     (.detail-hero-pending) so the page does not jump when the art arrives.
+   Both reposition one shared set of includes, like the desktop grid. */
+@media (max-width: 767.98px) {
+  .detail-carousel-grid,
+  .detail-flat-top {
+    --hero-line: calc(50dvh - 4rem);
+    --hero-pad-y: 1.5rem;
+    --hero-gutter-l: max(1rem, var(--safe-left));
+    --hero-gutter-r: max(1rem, var(--safe-right));
+  }
+
+  .detail-mobile-meta {
+    margin-top: 0.25rem;
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+  }
+
+  .detail-carousel-grid,
+  .detail-flat-top {
+    display: grid;
+    position: relative;
+    grid-template-columns: 40% minmax(0, 1fr);
+    column-gap: 1rem;
+    row-gap: 0;
+    align-items: start;
+  }
+
+  .detail-carousel-grid {
+    grid-template-areas:
+      "poster title"
+      "chips chips"
+      "actions actions"
+      "synopsis synopsis";
+  }
+
+  .detail-carousel-grid__header {
+    display: contents;
+  }
+
+  .detail-carousel-grid__poster,
+  .detail-flat-top__poster {
+    max-width: 250px;
+    margin: 0;
+  }
+
+  .detail-carousel-grid__title,
+  .detail-flat-top__title {
+    grid-area: title;
+    align-self: center;
+    text-align: left;
+  }
+
+  .detail-carousel-grid__title .text-center,
+  .detail-flat-top__title .text-center {
+    text-align: left;
+  }
+
+  .detail-carousel-grid__title [id^="detail-activity-subtitle-slot"] button,
+  .detail-flat-top__title [id^="detail-activity-subtitle-slot"] button {
+    justify-content: flex-start;
+  }
+
+  .detail-carousel-grid__title h1,
+  .detail-flat-top__title h1 {
+    font-size: 1.5rem;
+    line-height: 1.2;
+  }
+
+  .detail-carousel-grid__actions {
+    grid-area: actions;
+    margin-top: 1rem;
+  }
+
+  .detail-carousel-grid__chips {
+    margin-top: 1rem;
+  }
+
+  .detail-flat-top__poster {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .detail-flat-top__title {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .detail-flat-top__info {
+    display: contents;
+  }
+
+  .detail-flat-top__info > :not(.detail-flat-top__title),
+  .detail-flat-top__info > div.flex > * {
+    grid-column: 1 / -1;
+  }
+
+  .detail-flat-top .detail-score-card-shell {
+    order: -1;
+    margin: 1rem 0 0;
+  }
+
+  /* Backdrop hero. The carousel pane stays hidden; only the hero shows. */
+  .detail-carousel-grid:has(.detail-mobile-hero) .detail-carousel-grid__carousel,
+  .detail-carousel-grid:has(.detail-mobile-hero) #detail-carousel-wrap {
+    display: contents;
+  }
+
+  .detail-carousel-grid:has(.detail-mobile-hero) .detail-carousel-content {
+    display: none;
+  }
+
+  .detail-carousel-grid:has(.detail-mobile-hero),
+  .detail-carousel-grid.detail-hero-pending {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: max(0px, calc(var(--hero-line) - var(--hero-pad-y) - 2.75rem)) auto;
+    grid-template-areas:
+      "gap"
+      "title"
+      "chips"
+      "actions"
+      "synopsis";
+  }
+
+  .detail-carousel-grid:has(.detail-mobile-hero) .detail-carousel-grid__poster,
+  .detail-carousel-grid.detail-hero-pending .detail-carousel-grid__poster {
+    display: none;
+  }
+
+  .detail-carousel-grid:has(.detail-mobile-hero) .detail-carousel-grid__title,
+  .detail-carousel-grid.detail-hero-pending .detail-carousel-grid__title {
+    z-index: 2;
+    text-align: center;
+  }
+
+  .detail-carousel-grid:has(.detail-mobile-hero) .detail-carousel-grid__title .text-center,
+  .detail-carousel-grid.detail-hero-pending .detail-carousel-grid__title .text-center {
+    text-align: center;
+  }
+
+  .detail-carousel-grid:has(.detail-mobile-hero) .detail-carousel-grid__title [id^="detail-activity-subtitle-slot"] button,
+  .detail-carousel-grid.detail-hero-pending .detail-carousel-grid__title [id^="detail-activity-subtitle-slot"] button {
+    justify-content: center;
+  }
+
+  .detail-carousel-grid:has(.detail-mobile-hero) .detail-carousel-grid__title h1,
+  .detail-carousel-grid.detail-hero-pending .detail-carousel-grid__title h1 {
+    font-size: 2.25rem;
+    font-weight: 800;
+    line-height: 1.1;
+  }
+
+  .detail-carousel-grid:has(.detail-mobile-hero) .detail-carousel-grid__title h1 {
+    color: white;
+    text-shadow: 0 2px 8px rgb(0 0 0 / 70%);
+  }
+
+  /* With a logo the heading stays for screen readers and the logo is the title;
+     the year line starts just below the logo's box (6rem tall, centred on the line). */
+  .detail-carousel-grid:has(.detail-mobile-hero__logo) .detail-carousel-grid__title {
+    padding-top: 5.25rem;
+  }
+
+  .detail-carousel-grid:has(.detail-mobile-hero__logo) .detail-carousel-grid__title h1 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .detail-carousel-grid:has(.detail-mobile-hero) .detail-mobile-meta,
+  .detail-carousel-grid:has(.detail-mobile-hero) [id^="detail-activity-subtitle-slot"] > div {
+    color: white;
+    text-shadow: 0 1px 4px rgb(0 0 0 / 80%);
+  }
+
+  .detail-carousel-grid:has(.detail-mobile-hero) .detail-carousel-grid__chips,
+  .detail-carousel-grid:has(.detail-mobile-hero) .detail-carousel-grid__actions {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Same blurred extension as the desktop overview, then fades into the page. */
+  .detail-mobile-hero {
+    position: absolute;
+    z-index: 0;
+    top: calc(-1 * var(--hero-pad-y));
+    right: calc(-1 * var(--hero-gutter-r));
+    left: calc(-1 * var(--hero-gutter-l));
+    height: calc(100dvh - 4rem);
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .detail-mobile-hero img {
+    position: absolute;
+  }
+
+  .detail-mobile-hero__blur {
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scale(1.15);
+    filter: blur(56px) brightness(0.9);
+    mask-image: linear-gradient(to bottom, #000 0%, #000 45%, rgb(0 0 0 / 70%) 70%, rgb(0 0 0 / 30%) 88%, transparent 100%);
+  }
+
+  /* Faded over its lower 60% so the seam to the blur is hard to find. */
+  .detail-mobile-hero__sharp {
+    top: 0;
+    left: 0;
+    width: 100%;
+    object-fit: cover;
+    height: calc(var(--hero-line) + 9rem);
+    mask-image: linear-gradient(to bottom, #000 0%, #000 38%, rgb(0 0 0 / 85%) 50%, rgb(0 0 0 / 60%) 62%, rgb(0 0 0 / 35%) 74%, rgb(0 0 0 / 15%) 87%, transparent 100%);
+  }
+
+  .detail-mobile-hero__logo {
+    top: var(--hero-line);
+    left: 50%;
+    width: 66%;
+    max-height: 6rem;
+    transform: translate(-50%, -50%);
+    object-fit: contain;
+    filter: drop-shadow(0 2px 8px rgb(0 0 0 / 70%));
+  }
+}
+
+@media (min-width: 640px) and (max-width: 767.98px) {
+  .detail-carousel-grid,
+  .detail-flat-top {
+    --hero-pad-y: 3rem;
+    --hero-gutter-l: max(2rem, var(--safe-left));
+    --hero-gutter-r: max(2rem, var(--safe-right));
+  }
 }
 
 @media (min-width: 768px) {
@@ -3140,6 +3418,29 @@ html.light .theme-toggle-icon-moon {
     margin-inline: auto;
     width: 100%;
     overflow-x: hidden;
+  }
+}
+
+/* A phone turned sideways keeps the card size it had upright: sized from the
+   short side of the screen, so the extra width shows more cards, not bigger ones.
+   100lvh ignores Safari's collapsing toolbar, so cards do not resize on scroll. */
+@media (orientation: landscape) and (max-width: 768px), (orientation: landscape) and (pointer: coarse) and (max-height: 520px) {
+  body {
+    --card-cols: 3;
+    --card-short-side: min(100vw, 100lvh);
+  }
+
+  body[data-mobile-grid="comfortable"] {
+    --card-cols: 2;
+  }
+
+  [data-mobile-grid] .media-grid,
+  [data-mobile-grid] .detail-media-grid {
+    grid-template-columns: repeat(auto-fill, minmax(calc((var(--card-short-side) - 2rem - (var(--card-cols) - 1) * 0.75rem) / var(--card-cols)), 1fr)) !important;
+  }
+
+  [data-mobile-grid] .home-row-card {
+    width: calc((var(--card-short-side) - 2rem - (var(--card-cols) - 1) * 1rem) / var(--card-cols)) !important;
   }
 }
 
