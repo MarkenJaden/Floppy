@@ -106,7 +106,7 @@
         <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
       </svg>
       <span>{% translate "Abgeschlossene unten" %}</span>
-      <span class="text-indigo-400 font-bold" x-show="completedPlacement === 'bottom'" {% if completed_placement != 'bottom' %}style="display: none;"{% endif %}>✓</span>
+      <span class="text-[var(--color-link)] font-bold" x-show="completedPlacement === 'bottom'" {% if completed_placement != 'bottom' %}style="display: none;"{% endif %}>✓</span>
     </button>
   </div>
 </div>

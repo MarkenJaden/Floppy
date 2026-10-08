@@ -160,6 +160,15 @@ def resolve_file(file_path: str, api_key: str, merge_base: str) -> bool:
         print(f"No conflict markers found in {file_path}. Skipping.")
         return True
 
+    divergences_text = ""
+    try:
+        from pathlib import Path
+        div_path = Path(__file__).resolve().parent.parent.parent / "FORK_DIVERGENCES.md"
+        if div_path.is_file():
+            divergences_text = f"\nFork Specifications & Invariants:\n{div_path.read_text(encoding='utf-8')}\n"
+    except Exception:
+        pass
+
     prompt = f"""You are an expert software engineer resolving Git merge conflicts for the application Floppy.
 File path: {file_path}
 
@@ -168,6 +177,7 @@ Below is the complete file content containing Git merge conflict markers (`<<<<<
 Git Context:
 - The `HEAD` block contains the local fork's custom features and changes (e.g. cross-category search, collaborator sync, collection bulk add, custom UI/views).
 - The incoming branch block (e.g. `upstream/latest`) contains new upstream features, bug fixes, and refactorings.
+{divergences_text}
 
 Instructions:
 1. Merge both sides intelligently and cleanly.

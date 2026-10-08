@@ -157,9 +157,36 @@ jobs:
         id: run_tests
         run: |
           export SECRET="$(uv run --no-sync python -c 'import secrets; print(secrets.token_urlsafe(50))')"
+          set +e
           uv run --no-sync python src/manage.py test \
             app users lists events integrations api config \
-            --parallel --buffer --exclude-tag network --exclude-tag slow
+            --parallel --buffer --exclude-tag network --exclude-tag slow 2>&1 | tee test_run.log
+          TEST_EXIT=${PIPESTATUS[0]}
+          set -e
+          if [ $TEST_EXIT -ne 0 ]; then
+            echo "test_status=failed" >> $GITHUB_OUTPUT
+          else
+            echo "test_status=passed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Evaluate and fix test failures with Gemini
+        if: (steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success') && steps.run_tests.outputs.test_status == 'failed'
+        id: gemini_fix_tests
+        run: |
+          echo "Test suite failed. Invoking Gemini Test Evaluator..."
+          if python3 .github/scripts/gemini_test_evaluator.py test_run.log; then
+            echo "Successfully evaluated and resolved test failures!"
+            echo "eval_status=success" >> $GITHUB_OUTPUT
+          else
+            echo "Could not automatically resolve all test failures."
+            echo "eval_status=failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check validation outcome
+        if: (steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success') && steps.run_tests.outputs.test_status == 'failed' && steps.gemini_fix_tests.outputs.eval_status != 'success'
+        run: |
+          echo "Validation checks failed and could not be resolved by AI evaluator."
+          exit 1
 
       - name: Handle test/validation failure
         if: failure() && (steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success')
@@ -182,7 +209,7 @@ jobs:
           exit 1
 
       - name: Push merged changes to target branch
-        if: steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success'
+        if: (steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success') && (steps.run_tests.outputs.test_status == 'passed' || steps.gemini_fix_tests.outputs.eval_status == 'success')
         run: |
           echo "All validation checks passed! Pushing to ${TARGET_BRANCH}..."
           git push origin "${TARGET_BRANCH}"
