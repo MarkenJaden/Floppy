@@ -277,6 +277,9 @@ def edit(request):
                 user=request.user,
                 activity_type=ListActivityType.LIST_EDITED,
             )
+        else:
+            logger.error(form.errors.as_json())
+            helpers.form_error_messages(form, request)
     else:
         messages.error(
             request, gettext("You do not have permission to edit this list.")
@@ -316,6 +319,8 @@ def edit_form(request, list_id):
             "form": form,
             "custom_list": custom_list,
             "list_url_template": _build_list_url_template(request),
+            # request.path is this fragment's URL, not the page hosting the modal.
+            "next_url": reverse("lists"),
         },
     )
 

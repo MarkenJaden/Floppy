@@ -43,6 +43,18 @@ PLAYBACK_PROGRESS_EVENTS = (
 )
 PLAYBACK_COMPLETION_TAIL_RATIO = 0.1
 
+# Types a manual Check-in can put on the card. Media servers only report movies
+# and episodes; these have no runtime to play against, so the card shows elapsed
+# time instead of progress.
+SESSION_MEDIA_TYPES = (
+    MediaTypes.GAME.value,
+    MediaTypes.BOARDGAME.value,
+    MediaTypes.BOOK.value,
+    MediaTypes.COMIC.value,
+    MediaTypes.MANGA.value,
+    MediaTypes.VIDEO.value,
+)
+
 IMAGE_RESOLVE_GUARD_PREFIX = "playback_img_fill"
 IMAGE_RESOLVE_GUARD_SECONDS = 60
 EPISODE_STILL_CACHE_PREFIX = "playback_ep_still"
@@ -137,6 +149,11 @@ def _queue_playback_webhook(user_id: int) -> None:
     from app.tasks import post_playback_webhook
 
     post_playback_webhook.delay(user_id)
+
+
+def peek_user_playback_state(user_id: int) -> dict | None:
+    """Return the cached card state as stored, without expiry side effects."""
+    return cache.get(_cache_key(user_id))
 
 
 def clear_user_playback_state(user_id: int) -> None:
@@ -335,6 +352,14 @@ def store_playback_progress(
     )
 
 
+def _release_checkin_card(user_id: int, state: dict | None) -> None:
+    """Tell the check-in a real event is replacing its card (see ``app.checkin``)."""
+    if state and state.get("checkin_token"):
+        from app import checkin
+
+        checkin.mark_taken_over(user_id, state.pop("checkin_token"))
+
+
 def apply_playback_event(
     *,
     user_id: int,
@@ -353,6 +378,8 @@ def apply_playback_event(
     store_progress: bool = False,
     provider_completed: bool | None = None,
     image: str | None = None,
+    checkin_token: str | None = None,
+    ends_at_ts: int | None = None,
 ) -> None:
     """Update live playback cache state from a webhook event.
 
@@ -363,10 +390,16 @@ def apply_playback_event(
     ``store_progress`` mirrors webhook positions into the durable store.
     ``provider_completed`` is an explicit completion value when the source
     provides one; ``None`` leaves completion inference source-agnostic.
+
+    ``checkin_token`` marks the card as a manual Check-in's (see
+    ``app.checkin``); any later event for the title rebuilds the state without
+    it, which is how a real scrobble takes the card over. ``ends_at_ts`` closes
+    the card at an assumed end.
     """
     if playback_media_type not in (
         MediaTypes.MOVIE.value,
         MediaTypes.EPISODE.value,
+        *SESSION_MEDIA_TYPES,
     ):
         return
 
@@ -391,6 +424,7 @@ def apply_playback_event(
             )
             or not rating_key
         ):
+            _release_checkin_card(user_id, existing_state)
             # Grace period instead of immediate deletion — keeps the
             # card visible across auto-play transitions and brief gaps.
             if view_offset_seconds is not None:
@@ -430,6 +464,9 @@ def apply_playback_event(
 
     if event_type not in ("media.play", "media.pause", "media.scrobble"):
         return
+
+    if not checkin_token:
+        _release_checkin_card(user_id, existing_state)
 
     offset_seconds = view_offset_seconds
     dur_seconds = duration_seconds
@@ -501,6 +538,10 @@ def apply_playback_event(
         "pause_expires_at_ts": None,
         "scrobble_expires_at_ts": None,
     }
+
+    if checkin_token:
+        state["checkin_token"] = checkin_token
+        state["scrobble_expires_at_ts"] = ends_at_ts
 
     if event_type == "media.pause":
         state["pause_expires_at_ts"] = now_ts + PLAYBACK_PAUSE_STALE_SECONDS
@@ -710,6 +751,13 @@ def _resolve_state_item(state: dict):
             episode_number=episode_number,
         ).first()
 
+    if playback_media_type in SESSION_MEDIA_TYPES:
+        return Item.objects.filter(
+            media_id=media_id,
+            source=source,
+            media_type=playback_media_type,
+        ).first()
+
     return None
 
 
@@ -821,7 +869,12 @@ def _resolve_card_subtitle(state, title):
 def _resolve_progress(state, state_item):
     """Compute duration, progress, display string, and percent."""
     duration = max(0, _coerce_int(state.get("duration_seconds"), 0))
-    if not duration and state_item and state_item.runtime_minutes:
+    if (
+        not duration
+        and state_item
+        and state_item.runtime_minutes
+        and state.get("media_type") not in SESSION_MEDIA_TYPES
+    ):
         duration = max(0, int(state_item.runtime_minutes) * 60)
     progress = max(
         0,

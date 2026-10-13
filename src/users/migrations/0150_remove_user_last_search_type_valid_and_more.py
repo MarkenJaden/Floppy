@@ -8,7 +8,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ('app', '0199_episode_rating_only'),
         ('auth', '0012_alter_user_first_name_max_length'),
-        ('users', '0148_list_detail_tier_options'),
+        ('users', '0149_onboarding_metadata_step'),
     ]
 
     operations = [

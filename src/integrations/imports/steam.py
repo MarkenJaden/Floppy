@@ -7,7 +7,7 @@ import requests
 import app
 from app.models import MediaTypes, Sources, Status
 from app.providers import credentials, services
-from app.providers.igdb import ExternalGameSource, external_game
+from app.providers.igdb import ExternalGameSource, describe_credentials, external_game
 from integrations.imports import helpers
 from integrations.imports.helpers import MediaImportError, MediaImportUnexpectedError
 
@@ -52,9 +52,12 @@ class SteamImporter:
         self.bulk_media = defaultdict(list)
 
         logger.info(
-            "Initialized Steam importer for Steam ID %s with mode %s",
+            "Initialized Steam importer for Steam ID %s with mode %s "
+            "(steam_key_from=%s; igdb %s)",
             steam_id,
             mode,
+            credentials.source_of("steam", "api_key", user),
+            describe_credentials(user),
         )
 
     def import_data(self):

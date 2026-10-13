@@ -32,6 +32,7 @@ from lists.models import (
     ListActivityType,
     ListRecommendation,
 )
+from lists.views_recommendations import get_or_create_recommendation_item
 from users.models import DateFormatChoices
 
 
@@ -3138,6 +3139,36 @@ class EditListViewTest(TestCase):
         self.assertEqual(self.list.visibility, "public")
         self.assertEqual(self.list.public_slug, "favorite-movies")
 
+    def test_edit_list_invalid_form_reports_errors(self):
+        """An invalid edit is not saved silently; the user sees why."""
+        CustomList.objects.create(name="Other", owner=self.user, public_slug="taken")
+        self.client.login(**self.credentials)
+        response = self.client.post(
+            reverse("list_edit") + "?next=/lists",
+            {
+                "list_id": self.list.id,
+                "name": "Updated List",
+                "is_public": "on",
+                "public_slug": "taken",
+            },
+            follow=True,
+        )
+
+        self.list.refresh_from_db()
+        self.assertEqual(self.list.name, "Test List")
+        self.assertIn(
+            "Public Slug: That URL is already in use.",
+            [str(message) for message in response.context["messages"]],
+        )
+
+    def test_edit_form_fragment_returns_to_lists_page(self):
+        """The lazily fetched modal must not redirect back to its own URL."""
+        self.client.login(**self.credentials)
+        response = self.client.get(reverse("list_edit_form", args=[self.list.id]))
+
+        self.assertContains(response, f'{reverse("list_edit")}?next=/lists"')
+        self.assertNotContains(response, "?next=/list/")
+
 
 class DeleteListViewTest(TestCase):
     """Test the delete view."""
@@ -4589,6 +4620,83 @@ class QuickAddListItemTests(TestCase):
             reverse("list_detail", args=[self.custom_list.id]),
             fetch_redirect_response=False,
         )
+
+    def _create_show_in_two_buckets(self):
+        """Create one TV identity stored as both a 'tv' and a 'season' row (#1530)."""
+        identity = {
+            "media_id": "1396",
+            "source": Sources.TMDB.value,
+            "media_type": MediaTypes.TV.value,
+            "title": "Breaking Bad",
+            "image": "https://example.com/bb.jpg",
+        }
+        other_user = get_user_model().objects.create_user("other", "o@example.com", "pw")
+        other_row = Item.objects.create(
+            library_media_type=MediaTypes.TV.value, **identity
+        )
+        mine = Item.objects.create(
+            library_media_type=MediaTypes.SEASON.value, **identity
+        )
+        TV.objects.create(item=other_row, user=other_user, status="Planning")
+        TV.objects.create(item=mine, user=self.user, status="Planning")
+        return identity, mine
+
+    def test_add_list_item_submit_survives_item_in_two_library_buckets(self):
+        """A title stored in two buckets adds the user's own row instead of a 500."""
+        identity, mine = self._create_show_in_two_buckets()
+
+        response = self.client.post(
+            reverse("list_add_item_submit", args=[self.custom_list.id]),
+            {
+                "media_id": identity["media_id"],
+                "media_type": identity["media_type"],
+                "source": identity["source"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            list(self.custom_list.items.values_list("id", flat=True)),
+            [mine.id],
+        )
+        self.assertEqual(Item.objects.filter(media_id="1396").count(), 2)
+
+    def test_add_list_item_submit_rejects_title_already_in_list_via_other_bucket(self):
+        """The other bucket's row already on the list must block a second add."""
+        identity, mine = self._create_show_in_two_buckets()
+        other_row = Item.objects.get(
+            media_id=identity["media_id"],
+            library_media_type=MediaTypes.TV.value,
+        )
+        CustomListItem.objects.create(custom_list=self.custom_list, item=other_row)
+
+        self.client.post(
+            reverse("list_add_item_submit", args=[self.custom_list.id]),
+            {
+                "media_id": identity["media_id"],
+                "media_type": identity["media_type"],
+                "source": identity["source"],
+            },
+        )
+
+        self.assertEqual(
+            list(self.custom_list.items.values_list("id", flat=True)),
+            [other_row.id],
+        )
+
+    def test_recommendation_item_survives_item_in_two_library_buckets(self):
+        """Recommending a title stored in two buckets reuses a row, not a crash."""
+        identity, mine = self._create_show_in_two_buckets()
+
+        item = get_or_create_recommendation_item(
+            identity["media_id"],
+            identity["media_type"],
+            identity["source"],
+            user=self.user,
+        )
+
+        self.assertEqual(item, mine)
+        self.assertEqual(Item.objects.filter(media_id="1396").count(), 2)
 
     @patch("lists.views.services.search")
     def test_add_list_item_search_uses_track_results_from_music_combined_payload(

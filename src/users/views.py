@@ -897,9 +897,7 @@ def home_screen_filter_fields(request):
     at a time.
     """
     media_type = request.GET.get("media_type", "")
-    allowed_media_types = get_home_configurable_media_types(
-        request.user, include_disabled_season=False
-    )
+    allowed_media_types = get_home_configurable_media_types(request.user)
     if media_type not in allowed_media_types:
         raise Http404
     return JsonResponse(
@@ -2075,10 +2073,7 @@ def import_data(request):
         "koito_history_can_start": koito_history_can_start,
         "koito_history_button_label": koito_history_button_label,
         "hardcover_personal_key": credentials.has_user_value("hardcover", user),
-        "trakt_configured": bool(
-            credentials.get("trakt", "client_id")
-            and credentials.get("trakt", "client_secret"),
-        ),
+        "trakt_configured": bool(credentials.get("trakt", "client_id")),
         "trakt_redirect_uri": trakt_redirect_uri,
         "trakt_redirect_capable": trakt_redirect_capable,
         "simkl_configured": credentials.is_configured("simkl", user),

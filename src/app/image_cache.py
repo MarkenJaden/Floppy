@@ -52,9 +52,22 @@ APPROVED_IMAGE_HOSTS = frozenset(
         "static.pocketcasts.com",
         "media.kitsu.app",
         "s4.anilist.co",
+        "cdn.cloudflare.steamstatic.com",
+        "cdn2.steamgriddb.com",
+        "cdn.thegamesdb.net",
+        "thumbnails.libretro.com",
+        # YouTube thumbnails. img.youtube.com redirects to i.ytimg.com, and
+        # each redirect hop is checked against this list.
+        "i.ytimg.com",
+        "img.youtube.com",
     },
 )
-APPROVED_IMAGE_HOST_SUFFIXES = (".mzstatic.com", ".comics.org", ".mangabaka.org")
+APPROVED_IMAGE_HOST_SUFFIXES = (
+    ".mzstatic.com",
+    ".comics.org",
+    ".mangabaka.org",
+    ".screenscraper.fr",
+)
 
 
 def cache_root():
@@ -164,9 +177,20 @@ def _paths(url):
     return root / f"{key}.data", root / f"{key}.json"
 
 
+def _requires_proxy(url):
+    """Return whether an image can only be fetched with credentials Floppy holds.
+
+    ScreenScraper media needs the developer credentials, which must never reach
+    a browser, so these URLs go through the proxy whatever the caching toggle.
+    """
+    from app.game_artwork.screenscraper import is_screenscraper_url
+
+    return is_screenscraper_url(url)
+
+
 def rewrite_image_url(url, request=None):
     """Rewrite an approved image URL to Floppy when caching is enabled."""
-    if not is_enabled() or not is_approved_url(url):
+    if not is_approved_url(url) or not (is_enabled() or _requires_proxy(url)):
         return url
     path = reverse("image_cache", kwargs={"token": _token_for_url(url)})
     if request is not None:
@@ -200,6 +224,13 @@ def _remove_temp(path):
         Path(path).unlink()
 
 
+def _authenticated(url):
+    """Attach provider credentials to the fetch URL, never to a stored one."""
+    from app.game_artwork.screenscraper import authenticate
+
+    return authenticate(url)
+
+
 def _open_image_response(url):
     """Open an approved image URL, following approved redirects.
 
@@ -213,7 +244,7 @@ def _open_image_response(url):
             if not is_approved_url(current_url):
                 return None, None
             response = requests.get(
-                current_url,
+                _authenticated(current_url),
                 headers={"Accept": "image/*"},
                 timeout=REQUEST_TIMEOUT,
                 stream=True,
@@ -381,7 +412,7 @@ def serve_cached_image(token, request):
     data_path, metadata_path = _paths(url)
     metadata = _metadata(data_path, metadata_path)
     if not data_path.is_file() or metadata is None:
-        if not is_enabled() or not _fetch_to_disk(url):
+        if not (is_enabled() or _requires_proxy(url)) or not _fetch_to_disk(url):
             return HttpResponseNotFound()
         metadata = _metadata(data_path, metadata_path)
         if metadata is None:

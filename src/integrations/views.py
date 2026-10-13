@@ -747,11 +747,17 @@ def trakt_oauth(request):
         "return_to": request.POST.get("next"),
     }
     state_token = secrets.token_urlsafe(32)
-    request.session[state_token] = state
     client_id = credentials.get("trakt", "client_id")
-    return redirect(
-        f"{url}?client_id={client_id}&redirect_uri={redirect_uri}&response_type=code&state={state_token}",
+    query = (
+        f"client_id={client_id}&redirect_uri={redirect_uri}"
+        f"&response_type=code&state={state_token}"
     )
+    if not trakt.default_client_secret():
+        # An app without a client secret authorizes with PKCE instead.
+        state["code_verifier"], code_challenge = trakt.new_pkce_pair()
+        query += f"&code_challenge={code_challenge}&code_challenge_method=S256"
+    request.session[state_token] = state
+    return redirect(f"{url}?{query}")
 
 
 def _finish_trakt_connection(request, oauth_result, state_data):
@@ -886,7 +892,11 @@ def import_trakt_private(request):
         return _integration_redirect(request)
 
     redirect_uri = state_data.get("redirect_uri")
-    oauth_callback = trakt.handle_oauth_callback(request, redirect_uri=redirect_uri)
+    oauth_callback = trakt.handle_oauth_callback(
+        request,
+        redirect_uri=redirect_uri,
+        code_verifier=state_data.get("code_verifier"),
+    )
     _finish_trakt_connection(request, oauth_callback, state_data)
     return _integration_redirect(
         request,
@@ -3890,11 +3900,13 @@ def psn_connect(request):
         # Remembered totals belong to one PSN account: another account's totals
         # would read as fabricated (or hidden) play against the old ones.
         previous = PSNAccount.objects.filter(user=request.user).first()
-        if previous is None or previous.account_id != account_id:
+        new_account = previous is None or previous.account_id != account_id
+        if new_account:
             PlaytimeSnapshot.objects.filter(user=request.user, source="psn").delete()
         PSNAccount.objects.update_or_create(
             user=request.user,
             defaults={
+                **({"last_sync_at": None} if new_account else {}),
                 "npsso": helpers.encrypt(npsso),
                 "account_id": account_id,
                 "online_id": online_id,

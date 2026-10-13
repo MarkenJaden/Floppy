@@ -23,6 +23,7 @@ from collections import defaultdict
 from datetime import timedelta
 
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 
 import app
@@ -163,8 +164,12 @@ class PSNImporter:
             )
         }
         self.sync_time = timezone.now()
+        # Read before this sync stamps the account: it is when the last sync (a
+        # sync from before totals were remembered, for an upgrading account) ran.
+        self.previous_sync_at = self.account.last_sync_at
         self.created = 0
         self.unchanged = 0
+        self.baseline = 0
         self.bulk_media = defaultdict(list)
         self.lookup_failures = 0
         # Provider errors point at IGDB; anything else is a bug on our side and
@@ -274,6 +279,7 @@ class PSNImporter:
         # unchanged instead of "No media was imported" with no explanation.
         imported_counts["created"] = self.created
         imported_counts["skipped"] = self.unchanged
+        imported_counts["baseline"] = self.baseline
         logger.info(
             "PSN import completed for user %s: %s",
             self.user.username,
@@ -402,15 +408,26 @@ class PSNImporter:
 
         last_played = self._aware(aggregate["last_played"])
         if previous is None:
-            # First sighting: only the setup choice and a game that is not
-            # tracked yet make this an entry. A tracked game keeps its own
-            # history; its PSN total is just the starting point.
-            if existing or not self.account.import_existing_playtime:
-                self.unchanged += 1
+            # First sighting. A tracked game keeps its own history, and its PSN
+            # total is the starting point, except for play since the account's
+            # last sync (the gap). Otherwise only the setup choice makes an
+            # untracked game an entry.
+            gap = self._gap_since_last_sync(existing, minutes, last_played)
+            if gap:
+                start_date = self.previous_sync_at
+                end_date = (
+                    last_played
+                    if start_date <= last_played <= self.sync_time
+                    else self.sync_time
+                )
+                logged = gap
+            elif existing or not self.account.import_existing_playtime:
+                self.baseline += 1
                 return
-            start_date = self._aware(aggregate["first_played"])
-            end_date = last_played
-            logged = minutes
+            else:
+                start_date = self._aware(aggregate["first_played"])
+                end_date = last_played
+                logged = minutes
         elif minutes > previous:
             # The new time happened somewhere between the previous sync and
             # the last time PSN says the game was launched.
@@ -447,6 +464,28 @@ class PSNImporter:
                 end_date=end_date,
             ),
         )
+
+    def _gap_since_last_sync(self, existing, minutes, last_played):
+        """Return the minutes played since the last sync for a tracked game.
+
+        The first sync that remembers totals can't see what was played between
+        the account's previous sync and now, but a tracked game whose hours were
+        close to PSN's at the time shows it as the difference. It counts only
+        when the game was launched since that sync and the difference is no
+        bigger than the hours already tracked; a bigger one is a library that
+        was never in step with PSN, not new play.
+        """
+        if not existing or not self.previous_sync_at or not last_played:
+            return 0
+        if last_played <= self.previous_sync_at:
+            return 0
+        tracked = (
+            app.models.Game.objects.filter(user=self.user, item=existing.item)
+            .aggregate(total=Sum("progress"))["total"]
+            or 0
+        )
+        gap = minutes - tracked
+        return gap if 0 < gap <= tracked else 0
 
     @staticmethod
     def _aware(value):

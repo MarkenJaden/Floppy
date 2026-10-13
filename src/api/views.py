@@ -97,6 +97,7 @@ from .helpers import (
     validate_body,
 )
 from .schema import (
+    LIBRARY_MEDIA_TYPE_PARAM,
     MEDIA_LIST_FILTER_PARAMS,
     MEDIA_LIST_ROOT_PARAMS,
     MEDIA_TYPE_COMPLETE_PARAM,
@@ -1114,7 +1115,7 @@ class MediaDetailView(drf_views.APIView):
 
     serializer_class = MediaSerializer
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def delete(self, request, media_type, source, media_id):
         """Delete a tracked media item and all its consumptions."""
         user = request.user
@@ -1139,6 +1140,7 @@ class MediaDetailView(drf_views.APIView):
                 media_id,
                 media_type,
                 source,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception:
             logger.exception("Internal Server Error.")
@@ -1163,7 +1165,7 @@ class MediaDetailView(drf_views.APIView):
         )
 
     @extend_schema(
-        parameters=[MEDIA_TYPE_PARAM],
+        parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM],
         operation_id="retrieveMediaItem",
         responses={
             200: PolymorphicProxySerializer(
@@ -1289,7 +1291,13 @@ class MediaDetailView(drf_views.APIView):
                 and tracked.item.season_number is not None
             }
 
-        lists = get_item_lists(user, media_id, source, media_type)
+        lists = get_item_lists(
+            user,
+            media_id,
+            source,
+            media_type,
+            library_media_type=request.query_params.get("library_media_type"),
+        )
 
         if media_type == MediaTypes.GAME.value:
             game_length_item = (
@@ -1374,7 +1382,7 @@ class MediaDetailView(drf_views.APIView):
         return Response(serialized, status=HTTP.OK)
 
     @extend_schema(
-        parameters=[MEDIA_TYPE_PARAM],
+        parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM],
         operation_id="updateMediaItem",
         request=TrackedMediaUpdateRequestSerializer,
         responses={
@@ -1431,6 +1439,7 @@ class MediaDetailView(drf_views.APIView):
                 media_id,
                 media_type,
                 source,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception:
             logger.exception(HTTP.INTERNAL_SERVER_ERROR.phrase)
@@ -1503,7 +1512,13 @@ class MediaDetailView(drf_views.APIView):
         ):
             media_metadata["related"].pop("recommendations")
 
-        lists = get_item_lists(user, media_id, source, media_type)
+        lists = get_item_lists(
+            user,
+            media_id,
+            source,
+            media_type,
+            library_media_type=request.query_params.get("library_media_type"),
+        )
 
         data = {
             "media_metadata": media_metadata,
@@ -1523,7 +1538,7 @@ class MediaDetailView(drf_views.APIView):
 class MediaChangesHistoryView(drf_views.APIView):
     """Media changes history view."""
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def get(self, request, media_type, source, media_id):
         """Retrieve changes history timeline entries for a specific media."""
         limit, offset, err = parse_limit_offset(request)
@@ -1549,6 +1564,7 @@ class MediaChangesHistoryView(drf_views.APIView):
             media_id,
             media_type,
             source,
+            library_media_type=request.query_params.get("library_media_type"),
         )
 
         if not user_medias:
@@ -1580,7 +1596,7 @@ class MediaConsumptionHistoryView(drf_views.APIView):
 
     serializer_class = HistorySerializer
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def get(self, request, media_type, source, media_id):
         """Retrieve the history timeline for a specific media."""
         limit, offset, err = parse_limit_offset(request)
@@ -1607,6 +1623,7 @@ class MediaConsumptionHistoryView(drf_views.APIView):
                 media_id,
                 media_type,
                 source,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception:
             logger.exception("Internal Server Error.")
@@ -1657,7 +1674,7 @@ class MediaConsumptionEntryDetailView(drf_views.APIView):
 
     serializer_class = HistorySerializer
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def delete(self, request, media_type, source, media_id, consumption_id):
         """Delete a specific consumption history entry for a specific media."""
         if not check_valid_type(media_type):
@@ -1680,6 +1697,7 @@ class MediaConsumptionEntryDetailView(drf_views.APIView):
                 media_id,
                 media_type,
                 source,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception:
             logger.exception("Internal Server Error.")
@@ -1708,7 +1726,7 @@ class MediaConsumptionEntryDetailView(drf_views.APIView):
 
         return Response(status=HTTP.NO_CONTENT)
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def get(self, request, media_type, source, media_id, consumption_id):
         """Retrieve a specific consumption history entry for a specific media."""
         if not check_valid_type(media_type):
@@ -1731,6 +1749,7 @@ class MediaConsumptionEntryDetailView(drf_views.APIView):
                 media_id,
                 media_type,
                 source,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception:
             logger.exception(HTTP.INTERNAL_SERVER_ERROR.phrase)
@@ -1762,7 +1781,7 @@ class MediaConsumptionEntryDetailView(drf_views.APIView):
         return Response(serialized_data, status=HTTP.OK)
 
     @extend_schema(
-        parameters=[MEDIA_TYPE_PARAM],
+        parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM],
         operation_id="updateMediaConsumption",
         request=MediaUpdateRequestSerializer,
         responses={
@@ -1795,6 +1814,7 @@ class MediaConsumptionEntryDetailView(drf_views.APIView):
                 media_id,
                 media_type,
                 source,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception:
             logger.exception(HTTP.INTERNAL_SERVER_ERROR.phrase)
@@ -1855,7 +1875,7 @@ class MediaConsumptionEntryDetailView(drf_views.APIView):
 class MediaListsView(drf_views.APIView):
     """Media lists view."""
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def get(self, request, media_type, source, media_id):
         """Retrieve the lists that a specific media is in."""
         user = request.user
@@ -1878,7 +1898,13 @@ class MediaListsView(drf_views.APIView):
                 status=HTTP.BAD_REQUEST,
             )
         # TODO: if media doesn't exist in the provider it should return 404
-        lists = get_item_lists(user, media_id, source, media_type)
+        lists = get_item_lists(
+            user,
+            media_id,
+            source,
+            media_type,
+            library_media_type=request.query_params.get("library_media_type"),
+        )
         paginated_data = paginate_data(request, lists, limit, offset)
 
         return Response(paginated_data, status=HTTP.OK)
@@ -1940,7 +1966,7 @@ class MediaListDetailView(drf_views.APIView):
         list_item.delete()
         return Response(status=HTTP.NO_CONTENT)
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def put(self, request, media_type, source, media_id, list_id):
         """Add a specific media to a specific list."""
         user = request.user
@@ -2009,7 +2035,13 @@ class MediaListDetailView(drf_views.APIView):
                 status=HTTP.SERVICE_UNAVAILABLE,
             )
 
-        lists = get_item_lists(user, media_id, source, media_type)
+        lists = get_item_lists(
+            user,
+            media_id,
+            source,
+            media_type,
+            library_media_type=request.query_params.get("library_media_type"),
+        )
 
         return Response(lists, status=HTTP.OK)
 
@@ -2068,7 +2100,7 @@ class MediaRecommendationsView(drf_views.APIView):
 class MediaSeasonsView(drf_views.APIView):
     """Media seasons view."""
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def get(self, request, media_type, source, media_id):
         """Retrieve the history timeline for a specific media."""
         user = request.user
@@ -2135,6 +2167,7 @@ class MediaSeasonsView(drf_views.APIView):
                 source,
                 MediaTypes.SEASON.value,
                 season_number=season_number,
+                library_media_type=request.query_params.get("library_media_type"),
             )
 
         season_numbers = [
@@ -2383,7 +2416,7 @@ class MediaSeasonDetailView(drf_views.APIView):
 
     serializer_class = MediaSerializer
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def delete(self, request, media_type, source, media_id, season_number):
         """Delete a tracked season item for the authenticated user."""
         user = request.user
@@ -2417,6 +2450,7 @@ class MediaSeasonDetailView(drf_views.APIView):
                 "season",
                 source,
                 season_number=season_number,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception:
             logger.exception(HTTP.INTERNAL_SERVER_ERROR.phrase)
@@ -2441,7 +2475,7 @@ class MediaSeasonDetailView(drf_views.APIView):
         )
 
     @extend_schema(
-        parameters=[MEDIA_TYPE_PARAM],
+        parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM],
         operation_id="retrieveMediaSeason",
         responses={
             200: CompleteMediaResponseSerializer,
@@ -2556,6 +2590,7 @@ class MediaSeasonDetailView(drf_views.APIView):
             source,
             "season",
             season_number=season_number,
+            library_media_type=request.query_params.get("library_media_type"),
         )
 
         # FORK: resolve the season's own Item so CompleteMediaSerializer can
@@ -2591,7 +2626,7 @@ class MediaSeasonDetailView(drf_views.APIView):
         )
         return Response(serialized, status=HTTP.OK)
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def patch(self, request, media_type, source, media_id, season_number):
         """Update a tracked season item."""
         user = request.user
@@ -2627,6 +2662,7 @@ class MediaSeasonDetailView(drf_views.APIView):
                 "season",
                 source,
                 season_number=season_number,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception:
             logger.exception(HTTP.INTERNAL_SERVER_ERROR.phrase)
@@ -2695,6 +2731,7 @@ class MediaSeasonDetailView(drf_views.APIView):
             source,
             "season",
             season_number=season_number,
+            library_media_type=request.query_params.get("library_media_type"),
         )
 
         data = {
@@ -2715,7 +2752,7 @@ class MediaSeasonDetailView(drf_views.APIView):
 class MediaSeasonChangesHistoryView(drf_views.APIView):
     """Changes history season view."""
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def get(self, request, media_type, source, media_id, season_number):
         """Retrieve changes history timeline entries for a season."""
         limit, offset, err = parse_limit_offset(request)
@@ -2780,7 +2817,7 @@ class MediaSeasonChangesHistoryView(drf_views.APIView):
 class MediaSeasonEpisodesView(drf_views.APIView):
     """Season episodes view."""
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def get(self, request, media_type, source, media_id, season_number):
         """Retrieve the episodes for a specific season of a tv serie."""
         user = request.user
@@ -2847,6 +2884,7 @@ class MediaSeasonEpisodesView(drf_views.APIView):
                 "episode",
                 season_number=season_number,
                 episode_number=episode_number,
+                library_media_type=request.query_params.get("library_media_type"),
             )
 
         episode_numbers = [
@@ -2898,7 +2936,7 @@ class MediaSeasonConsumptionHistoryView(drf_views.APIView):
 
     serializer_class = HistorySerializer
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def get(self, request, media_type, source, media_id, season_number):
         """Retrieve the history timeline for a specific season of a tv serie."""
         limit, offset, err = parse_limit_offset(request)
@@ -2973,7 +3011,7 @@ class MediaSeasonConsumptionEntryDetailView(drf_views.APIView):
 
     serializer_class = HistorySerializer
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def delete(
         self,
         request,
@@ -3013,6 +3051,7 @@ class MediaSeasonConsumptionEntryDetailView(drf_views.APIView):
                 "season",
                 source,
                 season_number=season_number,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception:
             logger.exception("Failed to retrieve consumption entry.")
@@ -3034,7 +3073,7 @@ class MediaSeasonConsumptionEntryDetailView(drf_views.APIView):
 
         return Response(status=HTTP.NO_CONTENT)
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def get(self, request, media_type, source, media_id, season_number, consumption_id):
         """Retrieve a specific consumption history entry for a specific season."""
         if not check_valid_type(media_type):
@@ -3066,6 +3105,7 @@ class MediaSeasonConsumptionEntryDetailView(drf_views.APIView):
                 "season",
                 source,
                 season_number=season_number,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception:
             logger.exception(HTTP.INTERNAL_SERVER_ERROR.phrase)
@@ -3089,7 +3129,7 @@ class MediaSeasonConsumptionEntryDetailView(drf_views.APIView):
         )
         return Response(serialized_data, status=HTTP.OK)
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def patch(
         self,
         request,
@@ -3129,6 +3169,7 @@ class MediaSeasonConsumptionEntryDetailView(drf_views.APIView):
                 "season",
                 source,
                 season_number=season_number,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception:
             logger.exception(HTTP.INTERNAL_SERVER_ERROR.phrase)
@@ -3182,7 +3223,7 @@ class MediaSeasonConsumptionEntryDetailView(drf_views.APIView):
 class MediaSeasonListsView(drf_views.APIView):
     """Season lists view."""
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def get(self, request, media_type, source, media_id, season_number):
         """Retrieve the lists that a specific season is in."""
         user = request.user
@@ -3219,6 +3260,7 @@ class MediaSeasonListsView(drf_views.APIView):
             source,
             "season",
             season_number=season_number,
+            library_media_type=request.query_params.get("library_media_type"),
         )
         paginated_data = paginate_data(request, lists, limit, offset)
 
@@ -3290,7 +3332,7 @@ class MediaSeasonListDetailView(drf_views.APIView):
         list_item.delete()
         return Response(status=HTTP.NO_CONTENT)
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def put(self, request, media_type, source, media_id, season_number, list_id):
         """Add a specific season to a specific list."""
         user = request.user
@@ -3375,6 +3417,7 @@ class MediaSeasonListDetailView(drf_views.APIView):
             source,
             media_type,
             season_number=season_number,
+            library_media_type=request.query_params.get("library_media_type"),
         )
 
         return Response(lists, status=HTTP.OK)
@@ -3583,7 +3626,7 @@ class MediaEpisodeDetailView(drf_views.APIView):
     serializer_class = MediaSerializer
 
     @extend_schema(
-        parameters=[MEDIA_TYPE_PARAM],
+        parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM],
         responses={204: None, 404: DetailErrorSerializer},
     )
     def delete(
@@ -3639,6 +3682,7 @@ class MediaEpisodeDetailView(drf_views.APIView):
                 source,
                 season_number=season_number,
                 episode_number=episode_number,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception:
             logger.exception("An error occurred while fetching media.")
@@ -3665,7 +3709,7 @@ class MediaEpisodeDetailView(drf_views.APIView):
         )
 
     @extend_schema(
-        parameters=[MEDIA_TYPE_PARAM],
+        parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM],
         operation_id="retrieveMediaEpisode",
         responses={
             200: CompleteEpisodeResponseSerializer,
@@ -3744,6 +3788,7 @@ class MediaEpisodeDetailView(drf_views.APIView):
             "episode",
             season_number=season_number,
             episode_number=episode_number,
+            library_media_type=request.query_params.get("library_media_type"),
         )
 
         # FORK: resolve the episode's own Item so CompleteEpisodeSerializer
@@ -3780,7 +3825,7 @@ class MediaEpisodeDetailView(drf_views.APIView):
         return Response(serialized, status=HTTP.OK)
 
     @extend_schema(
-        parameters=[MEDIA_TYPE_PARAM],
+        parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM],
         responses={404: DetailErrorSerializer},
     )
     def patch(
@@ -3839,6 +3884,7 @@ class MediaEpisodeDetailView(drf_views.APIView):
                 source,
                 season_number=season_number,
                 episode_number=episode_number,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception:
             logger.exception("An error occurred while fetching user media.")
@@ -3928,6 +3974,7 @@ class MediaEpisodeDetailView(drf_views.APIView):
             "episode",
             season_number=season_number,
             episode_number=episode_number,
+            library_media_type=request.query_params.get("library_media_type"),
         )
 
         data = {
@@ -3952,7 +3999,7 @@ class MediaEpisodeChangesHistoryView(drf_views.APIView):
     serializer_class = ChangesHistoryEntrySerializer
 
     @extend_schema(
-        parameters=[MEDIA_TYPE_PARAM],
+        parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM],
         responses={404: DetailErrorSerializer},
     )
     def get(self, request, media_type, source, media_id, season_number, episode_number):
@@ -4034,7 +4081,7 @@ class MediaEpisodeConsumptionHistoryView(drf_views.APIView):
     serializer_class = HistorySerializer
 
     @extend_schema(
-        parameters=[MEDIA_TYPE_PARAM],
+        parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM],
         responses={404: DetailErrorSerializer},
     )
     def get(self, request, media_type, source, media_id, season_number, episode_number):
@@ -4124,7 +4171,7 @@ class MediaEpisodeConsumptionEntryDetailView(drf_views.APIView):
     serializer_class = HistorySerializer
 
     @extend_schema(
-        parameters=[MEDIA_TYPE_PARAM],
+        parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM],
         responses={404: DetailErrorSerializer},
     )
     def delete(
@@ -4179,6 +4226,7 @@ class MediaEpisodeConsumptionEntryDetailView(drf_views.APIView):
                 source,
                 season_number=season_number,
                 episode_number=episode_number,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception as e:
             return Response(
@@ -4198,7 +4246,7 @@ class MediaEpisodeConsumptionEntryDetailView(drf_views.APIView):
         return Response(status=HTTP.NO_CONTENT)
 
     @extend_schema(
-        parameters=[MEDIA_TYPE_PARAM],
+        parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM],
         responses={404: DetailErrorSerializer},
     )
     def get(
@@ -4253,6 +4301,7 @@ class MediaEpisodeConsumptionEntryDetailView(drf_views.APIView):
                 source,
                 season_number=season_number,
                 episode_number=episode_number,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception as e:
             return Response(
@@ -4274,7 +4323,7 @@ class MediaEpisodeConsumptionEntryDetailView(drf_views.APIView):
         return Response(serialized_data, status=HTTP.OK)
 
     @extend_schema(
-        parameters=[MEDIA_TYPE_PARAM],
+        parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM],
         responses={404: DetailErrorSerializer},
     )
     def patch(
@@ -4329,6 +4378,7 @@ class MediaEpisodeConsumptionEntryDetailView(drf_views.APIView):
                 source,
                 season_number=season_number,
                 episode_number=episode_number,
+                library_media_type=request.query_params.get("library_media_type"),
             )
         except Exception as e:
             return Response(
@@ -4379,7 +4429,7 @@ class MediaEpisodeConsumptionEntryDetailView(drf_views.APIView):
 class MediaEpisodeListsView(drf_views.APIView):
     """Episode lists view."""
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def get(self, request, media_type, source, media_id, season_number, episode_number):
         """Retrieve the lists that a specific season is in."""
         user = request.user
@@ -4417,6 +4467,7 @@ class MediaEpisodeListsView(drf_views.APIView):
             "episode",
             season_number=season_number,
             episode_number=episode_number,
+            library_media_type=request.query_params.get("library_media_type"),
         )
         paginated_data = paginate_data(request, lists, limit, offset)
 
@@ -4498,7 +4549,7 @@ class MediaEpisodeListDetailView(drf_views.APIView):
         list_item.delete()
         return Response(status=HTTP.NO_CONTENT)
 
-    @extend_schema(parameters=[MEDIA_TYPE_PARAM])
+    @extend_schema(parameters=[MEDIA_TYPE_PARAM, LIBRARY_MEDIA_TYPE_PARAM])
     def put(
         self,
         request,
@@ -4594,6 +4645,7 @@ class MediaEpisodeListDetailView(drf_views.APIView):
             media_type,
             season_number=season_number,
             episode_number=episode_number,
+            library_media_type=request.query_params.get("library_media_type"),
         )
 
         return Response(lists, status=HTTP.OK)

@@ -1453,8 +1453,8 @@ class TraktAccount(models.Model):
 
     @property
     def is_configured(self):
-        """Return True when client credentials are stored."""
-        return bool(self.client_id and self.client_secret)
+        """Return True when a client ID is stored (PKCE apps have no secret)."""
+        return bool(self.client_id)
 
 
 class ImportRun(models.Model):

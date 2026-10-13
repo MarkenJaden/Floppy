@@ -12,10 +12,10 @@ import urllib.error
 import urllib.request
 
 MODELS = [
-    "gemini-3.1-flash-lite",  # 500 requests/day, 15 RPM on free tier
-    "gemini-3-flash",         # 20 requests/day, 5 RPM
-    "gemini-2.5-flash-lite",   # 20 requests/day, 10 RPM
-    "gemini-2.5-flash",        # 20 requests/day, 5 RPM
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-1.5-flash",
 ]
 
 AUTOMATED_COMMIT_PREFIXES = (
@@ -169,39 +169,88 @@ def resolve_file(file_path: str, api_key: str, merge_base: str) -> bool:
     except Exception:
         pass
 
-    prompt = f"""You are an expert software engineer resolving Git merge conflicts for the application Floppy.
+    import re
+    conflict_pattern = re.compile(r"<{7}[^\n]*\n(.*?)\n={7}\n(.*?)\n>{7}[^\n]*\n", re.DOTALL)
+    matches = list(conflict_pattern.finditer(content))
+
+    if matches:
+        print(f"Found {len(matches)} conflict hunk(s) in {file_path}. Resolving hunk-by-hunk...")
+        new_content = content
+        for match in reversed(matches):
+            head_code = match.group(1)
+            incoming_code = match.group(2)
+            start_idx = match.start()
+            end_idx = match.end()
+
+            # Surrounding context (up to 15 lines before and after)
+            lines_before = content[:start_idx].splitlines()[-15:]
+            context_before = "\n".join(lines_before)
+            lines_after = content[end_idx:].splitlines()[:15]
+            context_after = "\n".join(lines_after)
+
+            prompt = f"""You are an expert software engineer resolving a Git merge conflict hunk in Floppy.
 File path: {file_path}
-
-Below is the complete file content containing Git merge conflict markers (`<<<<<<< HEAD`, `=======`, `>>>>>>>`).
-
-Git Context:
-- The `HEAD` block contains the local fork's custom features and changes (e.g. cross-category search, collaborator sync, collection bulk add, custom UI/views).
-- The incoming branch block (e.g. `upstream/latest`) contains new upstream features, bug fixes, and refactorings.
 {divergences_text}
+Context before conflict:
+{context_before}
+
+Conflict hunk:
+<<<<<<< HEAD (local fork features)
+{head_code}
+======= (incoming upstream changes)
+{incoming_code}
+>>>>>>> upstream
+
+Context after conflict:
+{context_after}
 
 Instructions:
-1. Merge both sides intelligently and cleanly.
+1. Merge the HEAD block and upstream block cleanly and seamlessly.
 2. DO NOT discard or lose any of the local fork's features from HEAD.
 3. Integrate the upstream improvements and fixes seamlessly.
-4. If imports, routes, function arguments, or templates are modified by both, merge them so that both features work without duplicate definitions or syntax errors.
-5. Remove all conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`).
-6. Output ONLY the raw resolved file content. Do NOT add markdown code fences (like ```python or ```) around the entire output. Output nothing else.
-
-File content:
-{content}
+4. Output ONLY the replacement code that resolves this conflict hunk.
+5. Do NOT include conflict markers (<<<<<<<, =======, >>>>>>>).
+6. Do NOT include markdown code fences (like ```python or ```).
+7. Do NOT repeat the surrounding context before or after. Output ONLY the replacement code.
 """
+            try:
+                resolved = call_gemini(prompt, api_key)
+                cleaned = clean_resolved_content(resolved)
+                if "<<<<<<<" in cleaned or ">>>>>>>" in cleaned:
+                    print(f"Warning: Gemini output still contains conflict markers in {file_path}!")
+                    return False
+                new_content = new_content[:start_idx] + cleaned + new_content[end_idx:]
+            except Exception as e:
+                print(f"Failed to resolve hunk in {file_path}: {e}")
+                return False
 
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        subprocess.run(["git", "add", file_path], check=True)
+        print(f"Successfully resolved and staged {file_path}")
+        return True
+
+    # Fallback for full-file if regex didn't match cleanly
+    prompt = f"""You are an expert software engineer resolving Git merge conflicts for Floppy.
+File path: {file_path}
+{divergences_text}
+Complete conflicted file:
+{content}
+
+Instructions:
+1. Merge both sides intelligently and cleanly. Keep local fork features from HEAD.
+2. Remove all conflict markers.
+3. Output ONLY the raw resolved file content without markdown code fences.
+"""
     try:
         resolved = call_gemini(prompt, api_key)
         cleaned = clean_resolved_content(resolved)
-
         if "<<<<<<<" in cleaned or ">>>>>>>" in cleaned:
             print(f"Warning: Gemini output still contains conflict markers in {file_path}!")
             return False
-
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(cleaned)
-
         subprocess.run(["git", "add", file_path], check=True)
         print(f"Successfully resolved and staged {file_path}")
         return True
