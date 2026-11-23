@@ -1,9 +1,9 @@
-name: Upstream Sync & Validate
+name: Upstream Sync (dannyvfilms/Floppy -> Floppy)
 
 on:
   schedule:
-    # Run daily at 04:00 UTC
-    - cron: '0 4 * * *'
+    # Run every 3 hours
+    - cron: '0 */3 * * *'
   workflow_dispatch:
     inputs:
       upstream_repo:
@@ -18,127 +18,42 @@ on:
         description: 'Target branch to update in this repo'
         required: false
         default: 'latest'
+      dry_run:
+        description: 'Validate merge and checks without pushing or opening PRs/issues'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
   pull-requests: write
   issues: write
   actions: write
-  workflows: write
 
 jobs:
-  sync-and-validate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      UPSTREAM_REPO: ${{ inputs.upstream_repo || 'dannyvfilms/Floppy' }}
-      UPSTREAM_BRANCH: ${{ inputs.upstream_branch || 'latest' }}
-      TARGET_BRANCH: ${{ inputs.target_branch || 'latest' }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: ${{ env.TARGET_BRANCH }}
-
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: "0.12.3"
-
-      - name: Fetch upstream
-        run: |
-          echo "Fetching from upstream https://github.com/${UPSTREAM_REPO}.git (${UPSTREAM_BRANCH})..."
-          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" || git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
-          git fetch upstream "${UPSTREAM_BRANCH}"
-
-      - name: Check for upstream changes
-        id: check_changes
-        run: |
-          BEHIND_COUNT=$(git rev-list --count HEAD..upstream/${UPSTREAM_BRANCH})
-          echo "Commits behind upstream: ${BEHIND_COUNT}"
-          if [ "${BEHIND_COUNT}" -eq 0 ]; then
-            echo "Already up to date with upstream."
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-          else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Attempt merge
-        id: attempt_merge
-        if: steps.check_changes.outputs.has_changes == 'true'
-        run: |
-          echo "Attempting merge of upstream/${UPSTREAM_BRANCH} into ${TARGET_BRANCH}..."
-          if git merge --no-edit upstream/${UPSTREAM_BRANCH}; then
-            echo "merge_status=clean" >> $GITHUB_OUTPUT
-          else
-            echo "Merge conflict detected!"
-            echo "merge_status=conflict" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Auto-resolve conflicts with Gemini
-        id: gemini_resolve
-        if: steps.attempt_merge.outputs.merge_status == 'conflict'
-        run: |
-          if [ -z "${GEMINI_API_KEY}" ]; then
-            echo "No GEMINI_API_KEY configured. Skipping AI conflict resolution."
-            echo "resolve_status=skipped" >> $GITHUB_OUTPUT
-          else
-            echo "Attempting automated conflict resolution with Gemini..."
-            if python3 .github/scripts/gemini_conflict_resolver.py; then
-              echo "Gemini successfully resolved all merge conflicts!"
-              echo "resolve_status=success" >> $GITHUB_OUTPUT
-            else
-              echo "Gemini could not resolve all conflicts cleanly."
-              echo "resolve_status=failed" >> $GITHUB_OUTPUT
-            fi
-          fi
-
-      - name: Handle unresolved merge conflict
-        if: steps.attempt_merge.outputs.merge_status == 'conflict' && steps.gemini_resolve.outputs.resolve_status != 'success'
-        run: |
-          echo "Aborting in-progress merge..."
-          git merge --abort || true
-          BRANCH_NAME="upstream-sync/conflict-${{ github.run_id }}"
-          echo "Creating sync branch ${BRANCH_NAME} from upstream..."
-          git checkout -B "${BRANCH_NAME}" "upstream/${UPSTREAM_BRANCH}"
-          git push origin "${BRANCH_NAME}" --force
-          gh pr create \
-            --repo "${{ github.repository }}" \
-            --title "⚠️ Upstream Sync Conflict - Manual Resolution Required" \
-            --body "Automated sync from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` into \`${TARGET_BRANCH}\` encountered merge conflicts. Gemini auto-resolution was either unavailable or could not resolve all conflicts cleanly. Please inspect and resolve conflicts manually on branch \`${BRANCH_NAME}\`." \
-            --base "${TARGET_BRANCH}" \
-            --head "${BRANCH_NAME}" || \
-          gh issue create \
-            --repo "${{ github.repository }}" \
-            --title "⚠️ Upstream Sync Conflict" \
-            --body "Merge conflict occurred when syncing from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\`. Check branch \`${BRANCH_NAME}\`." || \
-          echo "::warning::Could not create PR/Issue via GitHub CLI."
-          exit 1
-
-      - name: Install dependencies
-        if: steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success'
-        run: |
-          uv sync --locked --no-default-groups --group test --group lint
-
-      - name: Auto-format resolved code
-        if: steps.gemini_resolve.outputs.resolve_status == 'success'
-        run: |
-          echo "Running ruff check --fix and ruff format on resolved code..."
-          CHANGED_PY=$(git diff --name-only HEAD~1 | grep -E '\.py$' || true)
+  sync:
+    uses: MarkenJaden/workflows/.github/workflows/upstream-sync.yml@main
+    with:
+      upstream_repo: ${{ inputs.upstream_repo || 'dannyvfilms/Floppy' }}
+      upstream_branch: ${{ inputs.upstream_branch || 'latest' }}
+      target_branch: ${{ inputs.target_branch || 'latest' }}
+      python_version: '3.12'
+      submodules: 'false'
+      workflow_sync_policy: 'preserve_if_no_pat'
+      post_merge_workflow: 'docker-image.yml'
+      dry_run: ${{ inputs.dry_run || false }}
+      preflight_command: |
+        UV_REQ=$(python3 -c '
+        import pathlib, re
+        txt = pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
+        m = re.search(r"required-version\s*=\s*\"([^\"]+)\"", txt)
+        print(m.group(1) if m else "")
+        ')
+        python3 -m pip install --quiet "uv${UV_REQ}"
+        uv sync --locked --all-packages --all-extras
+        LAST_MSG=$(git log -1 --pretty=%s || true)
+        if [[ "$LAST_MSG" == merge:\ auto-resolve* || "$LAST_MSG" == chore\(sync\):\ auto-resolve* ]]; then
+          CHANGED_PY=$(git diff --name-only HEAD~1 HEAD -- '*.py' || true)
           if [ -n "$CHANGED_PY" ]; then
             echo "$CHANGED_PY" | xargs -r uv run --no-sync ruff check --fix || true
             echo "$CHANGED_PY" | xargs -r uv run --no-sync ruff format || true
@@ -146,73 +61,28 @@ jobs:
           if [ -n "$(git status --porcelain)" ]; then
             git commit -am "style: format auto-resolved conflicts with ruff" || true
           fi
-
-      - name: Run lint and preflight checks
-        if: steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success'
-        id: run_checks
-        run: |
-          uv run --no-sync ruff check src
-
-      - name: Run test suite
-        if: steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success'
-        id: run_tests
-        run: |
-          export SECRET="$(uv run --no-sync python -c 'import secrets; print(secrets.token_urlsafe(50))')"
-          set +e
-          uv run --no-sync python src/manage.py test \
-            app users lists events integrations api config \
-            --parallel --buffer --exclude-tag network --exclude-tag slow 2>&1 | tee test_run.log
-          TEST_EXIT=${PIPESTATUS[0]}
-          set -e
-          if [ $TEST_EXIT -ne 0 ]; then
-            echo "test_status=failed" >> $GITHUB_OUTPUT
+        fi
+        uv run --no-sync ruff check src
+        if [ -d mcp_server ]; then
+          uv run --no-sync ruff check mcp_server
+        fi
+        SECRET=ci-preflight-only uv run --no-sync python src/manage.py check_migration_hygiene --strict --base-ref "upstream/${UPSTREAM_BRANCH:-latest}"
+      test_command: |
+        export SECRET="$(uv run --no-sync python -c 'import secrets; print(secrets.token_urlsafe(50))')"
+        set +e
+        uv run --no-sync python src/manage.py test \
+          app users lists events integrations api config \
+          --parallel --buffer --exclude-tag network --exclude-tag slow 2>&1 | tee /tmp/test_run.log
+        TEST_EXIT=${PIPESTATUS[0]}
+        set -e
+        if [ "$TEST_EXIT" -ne 0 ]; then
+          if [ -f .github/scripts/gemini_test_evaluator.py ] && python3 .github/scripts/gemini_test_evaluator.py /tmp/test_run.log; then
+            uv run --no-sync ruff check src
           else
-            echo "test_status=passed" >> $GITHUB_OUTPUT
+            exit "$TEST_EXIT"
           fi
-
-      - name: Evaluate and fix test failures with Gemini
-        if: (steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success') && steps.run_tests.outputs.test_status == 'failed'
-        id: gemini_fix_tests
-        run: |
-          echo "Test suite failed. Invoking Gemini Test Evaluator..."
-          if python3 .github/scripts/gemini_test_evaluator.py test_run.log; then
-            echo "Successfully evaluated and resolved test failures!"
-            echo "eval_status=success" >> $GITHUB_OUTPUT
-          else
-            echo "Could not automatically resolve all test failures."
-            echo "eval_status=failed" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Check validation outcome
-        if: (steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success') && steps.run_tests.outputs.test_status == 'failed' && steps.gemini_fix_tests.outputs.eval_status != 'success'
-        run: |
-          echo "Validation checks failed and could not be resolved by AI evaluator."
-          exit 1
-
-      - name: Handle test/validation failure
-        if: failure() && (steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success')
-        run: |
-          BRANCH_NAME="upstream-sync/test-failure-${{ github.run_id }}"
-          echo "Automated tests or lint checks failed on merged code. Creating branch ${BRANCH_NAME}..."
-          git checkout -b "${BRANCH_NAME}"
-          git push origin "${BRANCH_NAME}"
-          gh pr create \
-            --repo "${{ github.repository }}" \
-            --title "❌ Upstream Sync Validation Failed" \
-            --body "Upstream changes from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` were merged, but automated linting or test suite checks failed. Please review branch \`${BRANCH_NAME}\` before merging into \`${TARGET_BRANCH}\`." \
-            --base "${TARGET_BRANCH}" \
-            --head "${BRANCH_NAME}" || \
-          gh issue create \
-            --repo "${{ github.repository }}" \
-            --title "❌ Upstream Sync Validation Failed" \
-            --body "Upstream changes from \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` caused test or lint failures. Check branch \`${BRANCH_NAME}\`." || \
-          echo "::warning::Could not create PR/Issue via GitHub CLI."
-          exit 1
-
-      - name: Push merged changes to target branch
-        if: (steps.attempt_merge.outputs.merge_status == 'clean' || steps.gemini_resolve.outputs.resolve_status == 'success') && (steps.run_tests.outputs.test_status == 'passed' || steps.gemini_fix_tests.outputs.eval_status == 'success')
-        run: |
-          echo "All validation checks passed! Pushing to ${TARGET_BRANCH}..."
-          git push origin "${TARGET_BRANCH}"
-          echo "Triggering Docker image build workflow..."
-          gh workflow run docker-image.yml --repo "${{ github.repository }}" --ref "${TARGET_BRANCH}" || true
+        fi
+        if [ -d mcp_server/tests ]; then
+          uv run --no-sync python -m pytest -c mcp_server/pyproject.toml mcp_server/tests -q
+        fi
+    secrets: inherit

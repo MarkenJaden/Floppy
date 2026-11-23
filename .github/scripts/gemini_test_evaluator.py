@@ -8,6 +8,7 @@ to reconcile upstream changes with fork features.
 
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -18,7 +19,10 @@ from pathlib import Path
 
 MODELS = [
     "gemini-2.5-flash",
+    "gemini-3.5-flash",
     "gemini-2.5-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-pro",
 ]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -29,6 +33,7 @@ def call_gemini(prompt: str, api_key: str) -> str:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.1,
+            "maxOutputTokens": 65536,
         },
     }
     data = json.dumps(payload).encode("utf-8")
@@ -42,27 +47,39 @@ def call_gemini(prompt: str, api_key: str) -> str:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        for attempt in range(2):
+        for attempt in range(3):
             try:
                 print(f"Calling Gemini ({model}, attempt {attempt + 1})...")
-                time.sleep(3)
-                with urllib.request.urlopen(req, timeout=90) as resp:
+                time.sleep(2)
+                with urllib.request.urlopen(req, timeout=120) as resp:
                     resp_json = json.loads(resp.read().decode("utf-8"))
-                    text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
-                    return text
+                candidates = resp_json.get("candidates") or []
+                if not candidates:
+                    raise RuntimeError(f"Empty Gemini candidates: {resp_json}")
+                parts = candidates[0].get("content", {}).get("parts") or []
+                text = "".join(
+                    part.get("text", "") for part in parts if isinstance(part, dict)
+                )
+                if not text:
+                    finish_reason = candidates[0].get("finishReason", "unknown")
+                    raise RuntimeError(
+                        f"Empty Gemini response text (finishReason={finish_reason})"
+                    )
+                return text
             except urllib.error.HTTPError as e:
                 err_body = e.read().decode("utf-8", errors="replace")
-                print(f"HTTPError {e.code} with {model}: {err_body}")
+                print(f"HTTPError {e.code} with {model}: {err_body[:400]}")
                 last_error = e
-                if e.code == 429:
-                    print("Rate limit hit. Waiting 10s...")
-                    time.sleep(10)
+                if e.code in (429, 500, 502, 503, 504):
+                    backoff = (2**attempt) * 4.0 + random.uniform(0.3, 1.8)
+                    print(f"Transient HTTP {e.code}; sleeping {backoff:.1f}s...")
+                    time.sleep(backoff)
                     continue
                 break
             except Exception as e:
                 print(f"Request failed with {model}: {e}")
                 last_error = e
-                time.sleep(2)
+                time.sleep(2.0 + random.uniform(0.1, 0.8))
 
     raise RuntimeError(f"All Gemini models failed. Last error: {last_error}")
 
@@ -269,30 +286,38 @@ def main():
     if try_fix_theme_tokens(log_text):
         any_fixed = True
 
-    # 2. Check Gemini for remaining failures
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if api_key and not any_fixed:
-        for label in failing_labels:
-            if try_gemini_reconcile(label, log_text, api_key, divergences):
-                any_fixed = True
+    if any_fixed and run_targeted_tests(failing_labels):
+        print("\nAll targeted tests passed after rule-based repairs!")
+    else:
+        # 2. Check Gemini for remaining failures
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if api_key:
+            for label in failing_labels:
+                if try_gemini_reconcile(label, log_text, api_key, divergences):
+                    any_fixed = True
 
-    if not any_fixed:
-        print("Could not automatically determine any fixes.")
-        sys.exit(1)
+        if not any_fixed:
+            print("Could not automatically determine any fixes.")
+            sys.exit(1)
 
-    # 3. Verify fixes
-    if run_targeted_tests(failing_labels):
+        if not run_targeted_tests(failing_labels):
+            print("\nTests still failed after attempted repairs.")
+            sys.exit(1)
         print("\nAll targeted tests passed after automated repairs!")
-        # Commit the changes
+
+    has_diff = subprocess.run(["git", "diff", "--quiet"], cwd=REPO_ROOT).returncode != 0
+    if has_diff:
         subprocess.run(
-            ["git", "commit", "-am", "test: auto-resolve test suite discrepancies using Gemini & fork rules"],
+            [
+                "git",
+                "commit",
+                "-am",
+                "test: auto-resolve test suite discrepancies using Gemini & fork rules",
+            ],
             cwd=REPO_ROOT,
             check=True,
         )
-        sys.exit(0)
-    else:
-        print("\nTests still failed after attempted repairs.")
-        sys.exit(1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":
