@@ -173,7 +173,7 @@ class TvTimeShowImporter(TraktMetadataResolverMixin):
         watched_at = parse_datetime((row.get("created_at") or "").strip())
         if watched_at is None:
             self.warnings.append(
-                f"{series_name} S{season_number}E{episode_number}: "
+                f"{series_name} S{int(season_number):02d}E{int(episode_number):02d}: "
                 "unrecognized watched-at date, skipped.",
             )
             return
@@ -208,7 +208,7 @@ class TvTimeShowImporter(TraktMetadataResolverMixin):
         )
         if not episode_exists:
             self.warnings.append(
-                f"{series_name} S{season_number}E{episode_number}: not found in "
+                f"{series_name} S{int(season_number):02d}E{int(episode_number):02d}: not found in "
                 f"{Sources.TMDB.label} with ID {tmdb_id}.",
             )
             return
@@ -337,7 +337,7 @@ class TvTimeShowImporter(TraktMetadataResolverMixin):
         tv_metadata,
     ):
         """Mark the season (and show, if it's also finished) Completed."""
-        if episode_number != season_metadata.get("max_progress"):
+        if episode_number != helpers.season_last_episode_number(season_metadata):
             return
 
         season_obj.status = Status.COMPLETED.value

@@ -1,4 +1,5 @@
-from unittest.mock import patch
+import time
+from unittest.mock import MagicMock, patch
 
 from django.conf import settings as django_settings
 from django.contrib.auth import get_user_model
@@ -48,16 +49,13 @@ class DatabaseContentionMiddlewareTest(TestCase):
         self.assertIn(b"location.replace(location.href)", response.content)
         self.assertNotIn(b"Service Unavailable", response.content)
 
-    @patch("app.middleware.time.sleep")
-    def test_middleware_lock_retries_end_in_automatic_page_reload(self, _sleep):
-        def locked(_request):
-            raise OperationalError("database is locked")
-
-        response = DatabaseRetryMiddleware(locked)(self.factory.get("/medialist/tv"))
+    def test_lock_error_ends_in_automatic_page_reload(self):
+        # Django hands a view's exception to process_exception; the page's own
+        # reload does the retrying, so the view is never run a second time.
+        response = self.middleware.process_exception(
+            self.factory.get("/medialist/tv"), OperationalError("database is locked")
+        )
         self.assertEqual(response["X-Floppy-Transient-DB"], "contention")
-        # Each SQLite lock error already waited out busy_timeout, so the
-        # server retries once and then hands over to the page's own reload.
-        self.assertEqual(_sleep.call_count, 1)
 
     def test_post_does_not_receive_automatic_retry(self):
         request = self.factory.post("/media_save")

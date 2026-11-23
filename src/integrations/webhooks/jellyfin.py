@@ -17,6 +17,7 @@ from app.services.episode_scores import set_episode_score, tracked_episode_plays
 from integrations.imports.helpers import find_item_across_buckets
 from integrations.source_sync import (
     remove_collection_source_state,
+    set_source_page,
     upsert_collection_source_state,
 )
 
@@ -29,7 +30,8 @@ JELLYFIN_EVENT_MAP = {
     "Pause": "media.pause",
     "Stop": "media.stop",
 }
-JELLYFIN_COLLECTION_EVENTS = {"ItemAdded", "ItemDeleted"}
+# ItemRemoved is the unofficial Webhooks plugin's name for ItemDeleted.
+JELLYFIN_COLLECTION_EVENTS = {"ItemAdded", "ItemDeleted", "ItemRemoved"}
 JELLYFIN_COLLECTION_SOURCE = "jellyfin"
 JELLYFIN_RATING_EVENT = "UserDataSaved"
 JELLYFIN_RATING_MAX = 10
@@ -142,11 +144,12 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
             playback_media_type,
         )
 
-        position_seconds, _ = self._get_playback_progress(payload)
+        position_seconds, duration_seconds = self._get_playback_progress(payload)
         if not self._should_record(
             "mark" if self._is_manual_mark(payload) else JELLYFIN_EVENT_MAP[event_type],
             played=self._is_played(payload),
             position_seconds=position_seconds,
+            duration_seconds=duration_seconds,
         ):
             return
 
@@ -376,6 +379,29 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
                 source=JELLYFIN_COLLECTION_SOURCE,
             )
             logger.info("Removed %s from Jellyfin collection ownership", item.title)
+        self._save_page(event_type, payload, user, item)
+
+    def _save_page(self, event_type, payload, user, item):
+        """Remember the Jellyfin page of a movie or of an episode's series.
+
+        A deleted episode leaves the series page: other episodes may remain.
+        """
+        jellyfin_item = payload.get("Item") or {}
+        if jellyfin_item.get("Type") == "Movie":
+            media_type, jellyfin_id = MediaTypes.MOVIE.value, jellyfin_item.get("Id")
+        elif event_type == "ItemAdded":
+            media_type, jellyfin_id = MediaTypes.TV.value, jellyfin_item.get("SeriesId")
+        else:
+            return
+        added = event_type == "ItemAdded" and jellyfin_id
+        set_source_page(
+            user=user,
+            source=JELLYFIN_COLLECTION_SOURCE,
+            provider=item.source,
+            media_type=media_type,
+            media_id=item.media_id,
+            path=f"web/#/details?id={jellyfin_id}" if added else "",
+        )
 
     def _resolve_collection_item(self, payload, ids, *, allow_create):
         """Resolve the canonical Item for a Jellyfin collection event."""
@@ -460,7 +486,7 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
                 media_id=tmdb_id,
                 source=Sources.TMDB.value,
                 media_type=MediaTypes.MOVIE.value,
-                library_media_type="",
+                library_media_type=MediaTypes.MOVIE.value,
                 defaults=self._item_defaults(
                     metadata,
                     fallback_title=(payload.get("Item") or {}).get("Name"),
@@ -519,7 +545,7 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
                 media_id=media_id,
                 source=Sources.TMDB.value,
                 media_type=MediaTypes.TV.value,
-                library_media_type="",
+                library_media_type=MediaTypes.TV.value,
                 defaults=self._item_defaults(
                     show_metadata,
                     fallback_title=(payload.get("Item") or {}).get("SeriesName"),
@@ -840,7 +866,7 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
                 media_id=media_id,
                 source=Sources.TMDB.value,
                 media_type=MediaTypes.TV.value,
-                library_media_type="",
+                library_media_type=MediaTypes.TV.value,
                 defaults=self._item_defaults(
                     metadata,
                     fallback_title=self._extract_series_title(payload),
@@ -946,6 +972,7 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
             duration_seconds=duration_seconds,
             store_progress=event_type != "media.stop",
             provider_completed=provider_completed,
+            event_ts=getattr(self, "_event_ts", None),
         )
         return {
             "event_type": event_type,
@@ -953,4 +980,5 @@ class JellyfinWebhookProcessor(BaseWebhookProcessor):
             "view_offset_seconds": offset_seconds,
             "duration_seconds": duration_seconds,
             "provider_completed": provider_completed,
+            "event_at": getattr(self, "_event_ts", None),
         }

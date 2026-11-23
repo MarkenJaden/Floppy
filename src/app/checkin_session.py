@@ -6,11 +6,13 @@ shows elapsed time, and what Stop saves depends on the type:
 
 - A game saves a new In Progress entry at the start (each play session is its
   own entry); Stop adds the elapsed minutes and the end time.
-- A board game adds one play to its latest entry at Stop.
+- A board game records a session or increments its latest entry at Stop,
+  according to the user's game logging preference.
 - A book, comic or manga moves its latest entry to In Progress (a finished book
   or comic starts a new entry; manga reuses its entry) and Stop fills in the end
-  time. Pages and chapters are yours to enter, so the page then opens the edit
-  dialog.
+  time, and adds the elapsed minutes to its reading time (an audiobook's progress
+  already is its time). Pages and chapters are yours to enter, so the page then
+  opens the edit dialog.
 - A video with a length is assumed watched to the end; Stop saves how far it got.
 
 A session left running ends after four hours (or at the video's length). Its
@@ -26,7 +28,7 @@ import uuid
 from django.core.cache import cache
 from django.utils import timezone
 
-from app import checkin, live_playback
+from app import live_playback
 from app.checkin import SETTLE_DELAY_SECONDS, SOURCE_LABEL, CheckInError
 from app.models import (
     BoardGame,
@@ -63,20 +65,20 @@ def supports(media_type):
     return media_type in MODELS
 
 
-def _key(user_id):
-    return f"checkin_session_v2:{user_id}"
+def _key(user_id, media_type):
+    return f"checkin_session_v3:{user_id}:{media_type}"
 
 
 def _now_ts():
     return int(timezone.now().timestamp())
 
 
-def _now():
+def _now_to_minute():
     return timezone.now().replace(second=0, microsecond=0)
 
 
-def _record(user_id):
-    return cache.get(_key(user_id))
+def _record(user_id, media_type):
+    return cache.get(_key(user_id, media_type))
 
 
 def _item(user, source, media_type, media_id):
@@ -95,10 +97,9 @@ def _item(user, source, media_type, media_id):
 
 
 def _active_record(user, source, media_type, media_id):
-    record = _record(user.id)
+    record = _record(user.id, media_type)
     if (
         record is None
-        or record["media_type"] != media_type
         or record["media_id"] != str(media_id)
         or record["source"] != source
     ):
@@ -108,7 +109,7 @@ def _active_record(user, source, media_type, media_id):
 
 
 def _owns_card(user_id, record):
-    card = live_playback.peek_user_playback_state(user_id)
+    card = live_playback.peek_user_playback_state(user_id, record["media_type"])
     return card is None or card.get("checkin_token") == record["token"]
 
 
@@ -116,8 +117,8 @@ def _end(user_id, record):
     """Forget the session and take its card off Home if it is still ours."""
     owned = _owns_card(user_id, record)
     if owned:
-        live_playback.clear_user_playback_state(user_id)
-    cache.delete(_key(user_id))
+        live_playback.clear_user_playback_state(user_id, record["media_type"])
+    cache.delete(_key(user_id, record["media_type"]))
     return owned
 
 
@@ -126,7 +127,7 @@ def _begin_game(user, item):
         item=item,
         user=user,
         status=Status.IN_PROGRESS.value,
-        start_date=_now(),
+        start_date=_now_to_minute(),
         entry_source=SOURCE_LABEL,
     )
     return {"row_id": row.id, "created": True, "previous": None}
@@ -141,7 +142,7 @@ def _begin_reading(user, item, media_type):
             item=item,
             user=user,
             status=Status.IN_PROGRESS.value,
-            start_date=_now(),
+            start_date=_now_to_minute(),
             entry_source=SOURCE_LABEL,
         )
         return {"row_id": row.id, "created": True, "previous": None}
@@ -151,18 +152,19 @@ def _begin_reading(user, item, media_type):
         "end_date": latest.end_date,
     }
     latest.status = Status.IN_PROGRESS.value
-    latest.start_date = latest.start_date or _now()
+    latest.start_date = latest.start_date or _now_to_minute()
     latest.save()
     return {"row_id": latest.id, "created": False, "previous": previous}
 
 
-def interrupt(user):
-    """End the running session because another check-in is replacing it.
+def interrupt(user, media_type):
+    """End the running session of this type because another is replacing it.
 
     Keeps what it measured: a game's minutes, a reading end, a video's progress.
+    Sessions of other media types keep running.
     """
-    settle(user.id)
-    running = _record(user.id)
+    _settle_slot(user.id, media_type)
+    running = _record(user.id, media_type)
     if running is None:
         return
     _end(user.id, running)
@@ -173,11 +175,16 @@ def interrupt(user):
 def start(user, source, media_type, media_id):
     """Start a session and put its card on Home."""
     item = _item(user, source, media_type, media_id)
-    interrupt(user)
-    checkin.release_running(user)
+    interrupt(user, media_type)
     row = {"row_id": None, "created": False, "previous": None}
     if media_type == MediaTypes.GAME.value:
         row = _begin_game(user, item)
+    elif media_type == MediaTypes.BOARDGAME.value and user.game_logging_style == "sessions":
+        entry = BoardGame.objects.create(
+            item=item, user=user, status=Status.IN_PROGRESS.value,
+            start_date=_now_to_minute(), entry_source=SOURCE_LABEL,
+        )
+        row = {"row_id": entry.id, "created": True, "previous": None}
     elif media_type in READING:
         row = _begin_reading(user, item, media_type)
 
@@ -203,6 +210,7 @@ def start(user, source, media_type, media_id):
         "started_at_ts": now_ts,
         "end_ts": end_ts,
         "length": length or 0,
+        "boardgame_logging_style": user.game_logging_style if media_type == MediaTypes.BOARDGAME.value else None,
         **row,
     }
     live_playback.apply_playback_event(
@@ -216,8 +224,9 @@ def start(user, source, media_type, media_id):
         view_offset_seconds=0,
         checkin_token=token,
         ends_at_ts=end_ts,
+        slot=media_type,
     )
-    cache.set(_key(user.id), record, timeout=end_ts - now_ts + SETTLE_DELAY_SECONDS * 2)
+    cache.set(_key(user.id, media_type), record, timeout=end_ts - now_ts + SETTLE_DELAY_SECONDS * 2)
 
     from app.tasks import settle_checkin_session
 
@@ -233,6 +242,11 @@ def _save_video(user, record, progress_seconds):
         video.upsert_play(f"check-in:{record['token']}", progress_seconds)
 
 
+def _is_audiobook(record):
+    """Return whether the item is an audiobook, whose progress already is its time."""
+    return Item.objects.filter(id=record["item_id"], format="audiobook").exists()
+
+
 def _save(user, record, media_type):
     """Save what a session measured so far: a game's minutes, a reading end, a video's progress."""
     elapsed = max(0, _now_ts() - record["started_at_ts"])
@@ -243,9 +257,12 @@ def _save(user, record, media_type):
     row = MODELS[media_type].objects.filter(id=record["row_id"], user=user).first()
     if row is None:
         return
+    minutes = max(1, math.ceil(elapsed / 60))
     if media_type == MediaTypes.GAME.value:
-        row.progress += max(1, math.ceil(elapsed / 60))
-    row.end_date = _now()
+        row.progress += minutes
+    elif media_type in READING and not _is_audiobook(record):
+        row.reading_time += minutes
+    row.end_date = _now_to_minute()
     row.save()
 
 
@@ -254,7 +271,15 @@ def stop(user, source, media_type, media_id):
     record = _active_record(user, source, media_type, media_id)
     _end(user.id, record)
     if media_type == MediaTypes.BOARDGAME.value:
-        log_play(user, source, media_id)
+        if record.get("boardgame_logging_style") == "sessions":
+            row = BoardGame.objects.filter(id=record["row_id"], user=user).first()
+            if row is not None:
+                row.progress = 1
+                row.status = Status.COMPLETED.value
+                row.end_date = _now_to_minute()
+                row.save()
+        else:
+            _increment_boardgame(user, record["item_id"])
     else:
         _save(user, record, media_type)
 
@@ -278,15 +303,34 @@ def cancel(user, source, media_type, media_id):
 
 
 def log_play(user, source, media_id):
-    """Add one play to the board game's latest entry."""
+    """Record a board-game play in the user's chosen logging style."""
     item = _item(user, source, MediaTypes.BOARDGAME.value, media_id)
-    row = BoardGame.objects.filter(item=item, user=user).order_by("-created_at").first()
+    if user.game_logging_style == "sessions":
+        now = _now_to_minute()
+        BoardGame.objects.create(
+            item=item, user=user, status=Status.COMPLETED.value, progress=1,
+            start_date=now, end_date=now, entry_source=SOURCE_LABEL,
+        )
+        return
+    _increment_boardgame(user, item.id)
+
+
+def _increment_boardgame(user, item_id):
+    row = BoardGame.objects.filter(item_id=item_id, user=user).order_by("-created_at").first()
+    if row is None:
+        msg = "Track this before checking in."
+        raise CheckInError(msg)
     row.increase_progress()
 
 
 def settle(user_id):
-    """End a session that ran out its time; a video with a length counts as watched."""
-    record = _record(user_id)
+    """End sessions that ran out their time; a video with a length counts as watched."""
+    for media_type in MODELS:
+        _settle_slot(user_id, media_type)
+
+
+def _settle_slot(user_id, media_type):
+    record = _record(user_id, media_type)
     if not record or _now_ts() < record["end_ts"]:
         return
     owned = _end(user_id, record)
@@ -300,14 +344,18 @@ def settle(user_id):
 
 def phase(user, instance):
     """Return the session phase for a detail page."""
-    settle(user.id)
-    record = _record(user.id)
     item = instance.item
+    _settle_slot(user.id, item.media_type)
+    record = _record(user.id, item.media_type)
     if (
         record
-        and record["media_type"] == item.media_type
         and record["media_id"] == str(item.media_id)
         and record["source"] == item.source
     ):
-        return {"phase": PHASE_SESSION, "reload_in": None, "kind": "session"}
+        return {
+            "phase": PHASE_SESSION,
+            "reload_in": None,
+            "kind": "session",
+            "started_at_ts": record.get("started_at_ts"),
+        }
     return {"phase": PHASE_IDLE, "reload_in": None, "kind": "session"}

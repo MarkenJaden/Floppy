@@ -1,9 +1,7 @@
 """Contains views for importing and exporting media data from various sources."""
 
 import base64
-import binascii
 import hashlib
-import hmac
 import json
 import logging
 import re
@@ -11,16 +9,13 @@ import secrets
 import zoneinfo
 from datetime import datetime, timedelta
 from http import HTTPStatus
-from urllib.parse import unquote
 
 import croniter
 import requests
 from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth.decorators import login_not_required, login_required
-from django.core.cache import cache
-from django.core.exceptions import ObjectDoesNotExist
-from django.db import IntegrityError, transaction
+from django.contrib.auth.decorators import login_required
+from django.db import IntegrityError
 from django.db.models import Q
 from django.http import (
     HttpResponse,
@@ -29,12 +24,10 @@ from django.http import (
     StreamingHttpResponse,
 )
 from django.shortcuts import get_object_or_404, redirect, render
-from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.utils.translation import gettext
-from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import (
     require_GET,
     require_http_methods,
@@ -43,12 +36,9 @@ from django.views.decorators.http import (
 
 import users
 from app import helpers as app_helpers
-from app import image_cache
-from app.db_retry import run_retryable_db_operation
 from app.log_safety import exception_summary
-from app.models import TV, Item, MediaTypes, Movie, Sources
+from app.models import TV, Item, MediaTypes, Movie, Sources, Status
 from app.providers import credentials, services
-from app.redis_diagnosis import queue_failure_message
 from app.services import metadata_resolution
 from integrations import (
     arr_library,
@@ -56,21 +46,20 @@ from integrations import (
     gpodder_api,
     koito_api,
     lastfm_api,
+    pending_auth,
     pocketcasts_api,
     psn_api,
     seerr_api,
-    stremio_catalog,
-    stremio_queue,
     tasks,
     xbox_api,
 )
-from integrations import (
-    audiobookshelf_cover as abs_cover_proxy,
-)
 from integrations import plex as plex_api
-from integrations import plex_cover as plex_cover_proxy
+from integrations.cover_proxy_views import (
+    audiobookshelf_cover,  # noqa: F401
+    plex_cover,  # noqa: F401
+)
 from integrations.gpodder_api import GPodderAuthError, GPodderClientError
-from integrations.imports import anilist, helpers, mdblist, simkl, stremio, trakt
+from integrations.imports import anilist, helpers, mdblist, simkl, trakt
 from integrations.imports import plex as plex_import
 from integrations.imports import psn as psn_import
 from integrations.imports.audiobookshelf import (
@@ -105,6 +94,25 @@ from integrations.lastfm_api import (
     LastFMAPIError,
     LastFMClientError,
     LastFMRateLimitError,
+)
+from integrations.mal_sync_views import (
+    mal_callback,  # noqa: F401
+    mal_disconnect,  # noqa: F401
+    mal_episode_mapping_revert,  # noqa: F401
+    mal_episode_mapping_save,  # noqa: F401
+    mal_export_schedule_delete,  # noqa: F401
+    mal_export_schedule_save,  # noqa: F401
+    mal_full_sync,  # noqa: F401
+    mal_full_sync_preview,  # noqa: F401
+    mal_full_sync_retry_failed,  # noqa: F401
+    mal_full_sync_status,  # noqa: F401
+    mal_mapping_episodes,  # noqa: F401
+    mal_mapping_ignore,  # noqa: F401
+    mal_mapping_search,  # noqa: F401
+    mal_oauth,  # noqa: F401
+    mal_per_item_sync_toggle,  # noqa: F401
+    mal_sync_filters_save,  # noqa: F401
+    mal_toggle,  # noqa: F401
 )
 from integrations.match_corrections import (
     InvalidMatchCorrectionError,
@@ -141,7 +149,6 @@ from integrations.models import (
     StateConflict,
     StateConflictStatus,
     StorytellerAccount,
-    StremioAccount,
     SyncBinding,
     XboxAccount,
 )
@@ -150,9 +157,20 @@ from integrations.plex_watchlist import (
     WATCHLIST_TASK_NAME,
 )
 from integrations.pocketcasts_api import PocketCastsAuthError
-from integrations.safe_fetch import send_to_self_hosted
 from integrations.source_sync import remove_collection_source_state
 from integrations.state import outbound
+from integrations.stremio_views import (
+    import_stremio,  # noqa: F401
+    stremio_addon_catalog,  # noqa: F401
+    stremio_addon_configure,  # noqa: F401
+    stremio_addon_library,  # noqa: F401
+    stremio_addon_manifest,  # noqa: F401
+    stremio_addon_meta,  # noqa: F401
+    stremio_addon_player,  # noqa: F401
+    stremio_addon_subtitles,  # noqa: F401
+    stremio_connect,  # noqa: F401
+    stremio_disconnect,  # noqa: F401
+)
 from integrations.upload_staging import (
     build_staged_zip,
     discard_staged_upload,
@@ -161,7 +179,24 @@ from integrations.upload_staging import (
     staged_payload_is_zip,
     staging_failure_message,
 )
-from integrations.webhooks.plex import extract_plex_webhook_usernames
+from integrations.view_helpers import (
+    _consume_oauth_state,
+    _import_queue_failure_message,
+    _integration_redirect,
+    _periodic_task_filter_for_user,
+    _plex_watchlist_task_filter,
+    _queue_task_or_message,
+    _queue_task_quietly,
+    _run_with_lock_retry,
+)
+from integrations.webhook_views import (
+    emby_webhook,  # noqa: F401
+    jellyfin_webhook,  # noqa: F401
+    jellyseerr_webhook,  # noqa: F401
+    kodi_webhook,  # noqa: F401
+    plex_webhook,  # noqa: F401
+    seerr_global_webhook,  # noqa: F401
+)
 
 logger = logging.getLogger(__name__)
 ARR_SYNC_INTERVAL_HOURS = 2
@@ -218,79 +253,6 @@ def _queue_staged_task_or_message(
         return False
 
 
-def _queue_task_or_message(request, task, *args, **kwargs):
-    """Queue a task and turn broker failures into a user message instead of a 500."""
-    try:
-        return task.delay(*args, **kwargs)
-    except Exception as error:
-        logger.exception("Could not queue background import task")
-        messages.error(request, _import_queue_failure_message(error))
-        return False
-
-
-def _import_queue_failure_message(error):
-    """Name an unreachable Redis broker instead of blaming the worker (#1263)."""
-    return queue_failure_message(
-        error,
-        "The import could not be queued.",
-        "Check the worker and try again.",
-        settings.CELERY_BROKER_URL,
-    )
-
-
-def _queue_task_quietly(task, *args, **kwargs):
-    """Queue a task, logging (not raising) on broker failure.
-
-    For call sites with no `messages` flow to surface the failure through
-    (webhook receivers, JSON polling endpoints).
-    """
-    try:
-        task.delay(*args, **kwargs)
-    except Exception:
-        logger.exception("Could not queue background task")
-        return False
-    return True
-
-
-def _integration_redirect(request, *, connected_slug=None, next_url=None):
-    """Redirect back to `next` (e.g. the onboarding wizard) if present.
-
-    Falls back to `import_data`, the normal Settings destination. When
-    `connected_slug` is given, records it on the user's onboarding progress
-    so the setup wizard's queue drops that source on the next request.
-    """
-    if connected_slug:
-        user = request.user
-        if connected_slug not in user.onboarding_connected_sources:
-            user.onboarding_connected_sources = [*user.onboarding_connected_sources, connected_slug]
-            user.save(update_fields=["onboarding_connected_sources"])
-    destination = next_url or request.POST.get("next") or request.GET.get("next")
-    return redirect(destination or "import_data")
-
-
-def _consume_oauth_state(request, provider):
-    """Consume a provider OAuth state value and reject missing or replayed state."""
-    state_token = request.GET.get("state")
-    if not state_token:
-        logger.warning("%s OAuth callback missing state parameter", provider)
-        messages.error(
-            request,
-            f"Invalid or expired {provider} authorization request.",
-        )
-        return None
-
-    state_data = request.session.pop(state_token, None)
-    if not isinstance(state_data, dict):
-        logger.warning("%s OAuth callback state not found in session", provider)
-        messages.error(
-            request,
-            f"Invalid or expired {provider} authorization request.",
-        )
-        return None
-
-    return state_data
-
-
 def _save_plex_usernames(user, raw_usernames):
     """Persist de-duplicated Plex usernames for webhook filtering."""
     if raw_usernames is None:
@@ -307,27 +269,6 @@ def _save_plex_usernames(user, raw_usernames):
         user.save(update_fields=["plex_usernames"])
 
 
-def _plex_watchlist_task_filter(user_id):
-    """Match a user's watchlist task regardless of JSON spacing/quotes."""
-    return (
-        Q(kwargs__contains=f"'user_id': {user_id},")
-        | Q(
-            kwargs__contains=f"'user_id': {user_id}" + "}",
-        )
-        | Q(
-            kwargs__contains=f'"user_id": {user_id},',
-        )
-        | Q(
-            kwargs__contains=f'"user_id": {user_id}' + "}",
-        )
-    )
-
-
-def _periodic_task_filter_for_user(user_id):
-    """Match a user's periodic task regardless of JSON spacing/quotes."""
-    return _plex_watchlist_task_filter(user_id)
-
-
 def _periodic_task_filter_for_instance(instance_id):
     """Match a Radarr/Sonarr instance's periodic task regardless of JSON spacing/quotes."""
     return (
@@ -336,33 +277,6 @@ def _periodic_task_filter_for_instance(instance_id):
         | Q(kwargs__contains=f'"instance_id": {instance_id},')
         | Q(kwargs__contains=f'"instance_id": {instance_id}' + "}")
     )
-
-
-def _run_with_lock_retry(operation_name, fn):
-    """Run an integration connect/disconnect DB write with retry on SQLite locks.
-
-    Connect/disconnect views create or delete `django_celery_beat`
-    `PeriodicTask` rows, which fire a signal that writes to a shared
-    singleton row (`PeriodicTasks.changed()`) — a serialization hotspot on
-    SQLite. Wrapping the write in a retried transaction turns a transient
-    lock into a short delay instead of a 503 (see issue #1112).
-
-    `max_retries=1` (2 attempts total) rather than the helper's default of
-    5: each attempt can block for up to `SQLITE_BUSY_TIMEOUT_SECONDS`
-    (30s by default) before raising, and nginx.conf sets no explicit
-    `proxy_read_timeout` (nginx's own default is 60s) — more attempts would
-    risk the proxy returning a gateway timeout to the user while this view
-    keeps retrying underneath it, so the write could still commit after the
-    client has already seen a failure.
-    """
-
-    def _atomic_fn():
-        with transaction.atomic():
-            return fn()
-
-    return run_retryable_db_operation(
-        _atomic_fn, operation_name=operation_name, max_retries=1
-    ).value
 
 
 def _next_arr_sync_start(now=None):
@@ -756,7 +670,7 @@ def trakt_oauth(request):
         # An app without a client secret authorizes with PKCE instead.
         state["code_verifier"], code_challenge = trakt.new_pkce_pair()
         query += f"&code_challenge={code_challenge}&code_challenge_method=S256"
-    request.session[state_token] = state
+    pending_auth.stash_state(request, state_token, state)
     return redirect(f"{url}?{query}")
 
 
@@ -801,7 +715,7 @@ def _start_trakt_device_flow(request):
         messages.error(request, str(error))
         return _integration_redirect(request)
 
-    request.session[TRAKT_DEVICE_SESSION_KEY] = {
+    pending_auth.put(TRAKT_DEVICE_SESSION_KEY, request.user.pk, {
         "device_code": device["device_code"],
         "user_code": device["user_code"],
         "verification_url": device["verification_url"],
@@ -813,13 +727,13 @@ def _start_trakt_device_flow(request):
         "frequency": request.POST["frequency"],
         "time": request.POST["time"],
         "return_to": request.POST.get("next"),
-    }
+    })
     return redirect("trakt_device_verify")
 
 
 def _trakt_device_state(request):
     """Return the pending device authorization, or None if gone or expired."""
-    state = request.session.get(TRAKT_DEVICE_SESSION_KEY)
+    state = pending_auth.get(TRAKT_DEVICE_SESSION_KEY, request.user.pk)
     if not isinstance(state, dict):
         return None
     expires_at = parse_datetime(state.get("expires_at") or "")
@@ -833,19 +747,48 @@ def trakt_device_verify(request):
     """Show the Trakt device code the user must enter at trakt.tv/activate."""
     state = _trakt_device_state(request)
     if state is None:
-        request.session.pop(TRAKT_DEVICE_SESSION_KEY, None)
+        pending_auth.clear(TRAKT_DEVICE_SESSION_KEY, request.user.pk)
         messages.error(request, "The Trakt authorization code expired. Start again.")
         return _integration_redirect(request)
 
+    poll_url = reverse("trakt_device_poll")
+    cancel_url = reverse("import_data")
+    verification_url = state["verification_url"]
+    user_code = state["user_code"]
+    props = {
+        "code": user_code,
+        "openUrl": f"{verification_url.rstrip('/')}/{user_code}",
+        "pollUrl": poll_url,
+        "cancelUrl": cancel_url,
+        "interval": state["interval"],
+        "expiresAt": state["expires_at"],
+        "title": gettext("Connect Trakt"),
+        "description": gettext(
+            "This instance is not served over HTTPS, so Trakt will not accept "
+            "a browser redirect. Enter this code on Trakt instead."
+        ),
+        "labels": {
+            "copy": gettext("Copy code"),
+            "copied": gettext("Copied!"),
+            "open": gettext("Open %(url)s") % {"url": verification_url},
+            "waiting": gettext("Waiting for you to authorize Floppy…"),
+            "cancel": gettext("Cancel"),
+            "expired": gettext(
+                "The Trakt authorization code expired. Start again."
+            ),
+            "retry": gettext("Start again"),
+        },
+    }
     return render(
         request,
         "integrations/trakt_device_code.html",
         {
-            "user_code": state["user_code"],
-            "verification_url": state["verification_url"],
+            "user_code": user_code,
+            "verification_url": verification_url,
             "interval": state["interval"],
-            "poll_url": reverse("trakt_device_poll"),
-            "cancel_url": reverse("import_data"),
+            "poll_url": poll_url,
+            "cancel_url": cancel_url,
+            "device_connect_props": props,
         },
     )
 
@@ -855,27 +798,39 @@ def _htmx_redirect(location):
     return HttpResponse(status=HTTPStatus.NO_CONTENT, headers={"HX-Redirect": location})
 
 
-@require_GET
-def trakt_device_poll(request):
-    """Poll Trakt once for the pending device authorization."""
+def poll_trakt_device(request):
+    """Poll Trakt once; return (status, message, state) for web and native callers.
+
+    Status is pending, connected, expired or error. A finished state is cleared.
+    """
     state = _trakt_device_state(request)
     if state is None:
-        request.session.pop(TRAKT_DEVICE_SESSION_KEY, None)
-        messages.error(request, "The Trakt authorization code expired. Start again.")
-        return _htmx_redirect(reverse("import_data"))
+        pending_auth.clear(TRAKT_DEVICE_SESSION_KEY, request.user.pk)
+        return "expired", "The Trakt authorization code expired. Start again.", None
 
     try:
         result = trakt.poll_device_token(state["device_code"])
     except helpers.MediaImportError as error:
-        request.session.pop(TRAKT_DEVICE_SESSION_KEY, None)
-        messages.error(request, str(error))
-        return _htmx_redirect(reverse("import_data"))
+        pending_auth.clear(TRAKT_DEVICE_SESSION_KEY, request.user.pk)
+        return "error", error.message, state
 
     if result is None:
-        return HttpResponse(status=HTTPStatus.NO_CONTENT)
+        return "pending", "", state
 
-    request.session.pop(TRAKT_DEVICE_SESSION_KEY, None)
+    pending_auth.clear(TRAKT_DEVICE_SESSION_KEY, request.user.pk)
     _finish_trakt_connection(request, result, state)
+    return "connected", "", state
+
+
+@require_GET
+def trakt_device_poll(request):
+    """Poll Trakt once for the pending device authorization."""
+    status, message, state = poll_trakt_device(request)
+    if status in ("expired", "error"):
+        messages.error(request, message)
+        return _htmx_redirect(reverse("import_data"))
+    if status == "pending":
+        return HttpResponse(status=HTTPStatus.NO_CONTENT)
     redirect_response = _integration_redirect(
         request,
         connected_slug="trakt",
@@ -1001,11 +956,11 @@ def plex_connect(request):
         messages.error(request, f"Unexpected Plex error: {exc}")
         return _integration_redirect(request)
 
-    request.session[state_token] = {
+    pending_auth.stash_state(request, state_token, {
         "plex_pin_id": pin["id"],
         "plex_pin_code": pin["code"],
         "return_to": request.POST.get("next"),
-    }
+    })
 
     auth_url = plex_api.build_auth_url(
         pin["code"], f"{redirect_uri}?state={state_token}"
@@ -1017,7 +972,7 @@ def plex_connect(request):
 def plex_callback(request):
     """Handle Plex auth callback and persist the token."""
     state_token = request.GET.get("state")
-    state_data = request.session.pop(state_token, None)
+    state_data = pending_auth.pop_state(request, state_token)
 
     if not state_data:
         messages.error(request, "Invalid or expired Plex authorization request.")
@@ -1122,7 +1077,13 @@ def plex_disconnect(request):
 
     _run_with_lock_retry("disconnect Plex", _disconnect)
     messages.info(request, "Disconnected Plex.")
-    return redirect("import_data")
+    return redirect(
+        app_helpers.safe_return_url(
+            request,
+            request.POST.get("next"),
+            reverse("provider_detail", args=["plex"]) + "?tab=connection",
+        ),
+    )
 
 
 def _save_plex_content_kind(plex_account, library_content_kinds):
@@ -1285,7 +1246,7 @@ def simkl_oauth(request):
             f"&code_challenge={code_challenge}&code_challenge_method=S256"
         )
 
-    request.session[state_token] = state
+    pending_auth.stash_state(request, state_token, state)
     return redirect(url)
 
 
@@ -1298,6 +1259,22 @@ def import_simkl_private(request):
 
     redirect_uri = state_data.get("redirect_uri")
     return_to = state_data.get("return_to")
+
+    if state_data.get("code_verifier") and request.GET.get("iss") != "https://simkl.com":
+        # AUTH V2 callbacks must come from SIMKL itself, not another provider.
+        logger.warning("SIMKL OAuth callback carried an unexpected issuer")
+        messages.error(request, "Invalid or expired SIMKL authorization request.")
+        return _integration_redirect(request, next_url=return_to)
+
+    if request.GET.get("error"):
+        # AUTH V2 reports a declined consent through the callback, unlike V1.
+        messages.error(request, "SIMKL authorization was cancelled or denied.")
+        return _integration_redirect(request, next_url=return_to)
+
+    if not request.GET.get("code"):
+        messages.error(request, "SIMKL authorization did not return a code.")
+        return _integration_redirect(request, next_url=return_to)
+
     try:
         oauth_callback = simkl.get_token(
             request,
@@ -1421,7 +1398,7 @@ def anilist_oauth(request):
     }
 
     state_token = secrets.token_urlsafe(32)
-    request.session[state_token] = state
+    pending_auth.stash_state(request, state_token, state)
 
     return redirect(
         f"{url}?client_id={credentials.get("anilist", "client_id")}&redirect_uri={redirect_uri}&response_type=code&state={state_token}",
@@ -1478,7 +1455,7 @@ def import_anilist_public(request):
     username = request.POST.get("user")
     if not username:
         messages.error(request, "AniList username is required.")
-        return redirect("import_data")
+        return redirect(app_helpers.safe_return_url(request, request.POST.get("next"), reverse("import_data")))
 
     mode = request.POST["mode"]
     frequency = request.POST["frequency"]
@@ -1491,7 +1468,7 @@ def import_anilist_public(request):
             mode=mode,
             username=username,
         ) is False:
-            return redirect("import_data")
+            return redirect(app_helpers.safe_return_url(request, request.POST.get("next"), reverse("import_data")))
         messages.info(request, "AniList import queued.")
     else:
         helpers.create_import_schedule(
@@ -1502,7 +1479,7 @@ def import_anilist_public(request):
             import_time=import_time,
             source="AniList",
         )
-    return redirect("import_data")
+    return redirect(app_helpers.safe_return_url(request, request.POST.get("next"), reverse("import_data")))
 
 
 @require_POST
@@ -1584,6 +1561,12 @@ def import_clz(request):
         messages.error(request, "Unknown media type for the CLZ import.")
         return _integration_redirect(request)
 
+    wishlist_status = (request.POST.get("clz_wishlist_status") or "").strip() or None
+    if wishlist_status and wishlist_status not in Status.values:
+        discard_staged_upload(staged_file)
+        messages.error(request, "Unknown status for the CLZ wishlist items.")
+        return _integration_redirect(request)
+
     if _queue_staged_task_or_message(
         request,
         tasks.import_clz,
@@ -1591,6 +1574,8 @@ def import_clz(request):
         file=staged_file,
         mode=request.POST.get("mode", "new"),
         media_type=media_type,
+        wishlist_status=wishlist_status,
+        wishlist_tag=(request.POST.get("clz_wishlist_tag") or "").strip() or None,
         staged_paths=(staged_file,),
     ) is False:
         return _integration_redirect(request, connected_slug="clz")
@@ -1642,6 +1627,12 @@ def import_trakt_export_file(request):
             "The task to import collection data from the Trakt CSV file has been "
             "queued.",
         )
+        return _integration_redirect(request, connected_slug="trakt")
+
+    if mode not in helpers.TRAKT_EXPORT_MODES:
+        for path in staged_files:
+            discard_staged_upload(path)
+        messages.error(request, helpers.TRAKT_EXPORT_UNSUPPORTED_MODE_MESSAGE)
         return _integration_redirect(request, connected_slug="trakt")
 
     if len(payloads) == 1 and staged_payload_is_zip(payloads[0][1]):
@@ -1765,6 +1756,32 @@ def import_hltb(request):
 
 
 @require_POST
+def import_playnite(request):
+    """View for importing a Playnite library CSV backup."""
+    file = request.FILES.get("playnite_csv")
+
+    if not file:
+        messages.error(request, "A Playnite CSV file is required.")
+        return _integration_redirect(request)
+
+    staged_file = _stage_upload_or_message(request, file, "Playnite CSV")
+    if staged_file is None:
+        return _integration_redirect(request)
+
+    if _queue_staged_task_or_message(
+        request,
+        tasks.import_playnite,
+        user_id=request.user.id,
+        file=staged_file,
+        mode=request.POST["mode"],
+        staged_paths=(staged_file,),
+    ) is False:
+        return _integration_redirect(request, connected_slug="playnite")
+    messages.info(request, "The Playnite library import has been queued.")
+    return _integration_redirect(request, connected_slug="playnite")
+
+
+@require_POST
 def import_grouvee(request):
     """View for importing game data from a Grouvee export (JSON or zip)."""
     file = request.FILES.get("grouvee_json")
@@ -1881,18 +1898,17 @@ def radarr_disconnect(request):
             _periodic_task_filter_for_instance(instance.id),
             task=RADARR_RECURRING_TASK_NAME,
         ).delete()
-        states = CollectionSourceState.objects.filter(
-            user=request.user, source="radarr", source_instance_id=instance.id
-        ).select_related("item")
-        for state in states:
-            remove_collection_source_state(
-                user=request.user,
-                item=state.item,
-                source="radarr",
-                source_instance_id=instance.id,
-            )
         instance.delete()
 
+    # Queue the row cleanup first: it is too slow for the request (#1911).
+    if _queue_task_or_message(
+        request,
+        tasks.remove_collection_source_states,
+        request.user.id,
+        "radarr",
+        instance.id,
+    ) is False:
+        return redirect("import_data")
     _run_with_lock_retry("disconnect Radarr", _disconnect)
     messages.info(request, "Disconnected Radarr.")
     return redirect("import_data")
@@ -1972,18 +1988,17 @@ def mylar_disconnect(request):
             task=MYLAR_RECURRING_TASK_NAME,
         ).delete()
         # Through the reconciling helper, so copies only Mylar3 created go too.
-        states = CollectionSourceState.objects.filter(
-            user=request.user, source="mylar", source_instance_id=instance.id
-        ).select_related("item")
-        for state in states:
-            remove_collection_source_state(
-                user=request.user,
-                item=state.item,
-                source="mylar",
-                source_instance_id=instance.id,
-            )
         instance.delete()
 
+    # Queue the row cleanup first: it is too slow for the request (#1911).
+    if _queue_task_or_message(
+        request,
+        tasks.remove_collection_source_states,
+        request.user.id,
+        "mylar",
+        instance.id,
+    ) is False:
+        return redirect("import_data")
     _run_with_lock_retry("disconnect Mylar3", _disconnect)
     messages.info(request, "Disconnected Mylar3.")
     return redirect("import_data")
@@ -2153,18 +2168,17 @@ def sonarr_disconnect(request):
             _periodic_task_filter_for_instance(instance.id),
             task=SONARR_RECURRING_TASK_NAME,
         ).delete()
-        states = CollectionSourceState.objects.filter(
-            user=request.user, source="sonarr", source_instance_id=instance.id
-        ).select_related("item")
-        for state in states:
-            remove_collection_source_state(
-                user=request.user,
-                item=state.item,
-                source="sonarr",
-                source_instance_id=instance.id,
-            )
         instance.delete()
 
+    # Queue the row cleanup first: it is too slow for the request (#1911).
+    if _queue_task_or_message(
+        request,
+        tasks.remove_collection_source_states,
+        request.user.id,
+        "sonarr",
+        instance.id,
+    ) is False:
+        return redirect("import_data")
     _run_with_lock_retry("disconnect Sonarr", _disconnect)
     messages.info(request, "Disconnected Sonarr.")
     return redirect("import_data")
@@ -2189,12 +2203,17 @@ def import_sonarr(request):
 @require_POST
 def jellyfin_connect(request):
     """Connect a Jellyfin server using base URL + API key."""
+    redirect_target = app_helpers.safe_return_url(
+        request,
+        request.POST.get("next"),
+        reverse("provider_detail", args=["jellyfin"]) + "?tab=connection",
+    )
     base_url = request.POST.get("base_url", "").strip()
     api_key = request.POST.get("api_key", "").strip()
     username = request.POST.get("username", "").strip()
     if not base_url or not api_key:
         messages.error(request, "Jellyfin base URL and API key are required.")
-        return redirect("integrations")
+        return redirect(redirect_target)
 
     client = JellyfinClient(base_url, api_key)
     try:
@@ -2204,7 +2223,7 @@ def jellyfin_connect(request):
             current_user = client.find_user_by_name(username)
     except (JellyfinAuthError, JellyfinClientError) as exc:
         messages.error(request, f"Failed to connect to Jellyfin: {exc}")
-        return redirect("integrations")
+        return redirect(redirect_target)
 
     if not current_user or not current_user.get("Id"):
         messages.error(
@@ -2213,7 +2232,7 @@ def jellyfin_connect(request):
             "Dashboard API keys are not tied to a user, so enter the exact "
             "Jellyfin username in the username field and try again.",
         )
-        return redirect("integrations")
+        return redirect(redirect_target)
 
     existing_account = getattr(request.user, "jellyfin_account", None)
     identity_changed = existing_account is not None and (
@@ -2261,12 +2280,17 @@ def jellyfin_connect(request):
             request,
             "Connected Jellyfin. Importing your watch history now.",
         )
-    return redirect("integrations")
+    return redirect(redirect_target)
 
 
 @require_POST
 def jellyfin_disconnect(request):
     """Disconnect the Jellyfin integration."""
+    redirect_target = app_helpers.safe_return_url(
+        request,
+        request.POST.get("next"),
+        reverse("provider_detail", args=["jellyfin"]) + "?tab=connection",
+    )
 
     def _disconnect():
         _disable_jellyfin_push_schedule(request.user)
@@ -2275,16 +2299,21 @@ def jellyfin_disconnect(request):
 
     _run_with_lock_retry("disconnect Jellyfin", _disconnect)
     messages.info(request, "Disconnected Jellyfin.")
-    return redirect("integrations")
+    return redirect(redirect_target)
 
 
 @require_POST
 def jellyfin_settings(request):
     """Update Jellyfin push-sync and history-pull toggles."""
+    redirect_target = app_helpers.safe_return_url(
+        request,
+        request.POST.get("next"),
+        reverse("provider_detail", args=["jellyfin"]) + "?tab=sync",
+    )
     account = getattr(request.user, "jellyfin_account", None)
     if not account:
         messages.error(request, "Connect Jellyfin before changing sync settings.")
-        return redirect("integrations")
+        return redirect(redirect_target)
 
     account.push_watched_enabled = "push_watched_enabled" in request.POST
     account.push_unwatched_enabled = "push_unwatched_enabled" in request.POST
@@ -2312,57 +2341,72 @@ def jellyfin_settings(request):
         _disable_jellyfin_pull_schedule(request.user)
 
     messages.success(request, "Jellyfin sync settings updated.")
-    return redirect("integrations")
+    return redirect(redirect_target)
 
 
 @require_POST
 def jellyfin_push_now(request):
     """Queue an immediate Jellyfin watched-state push."""
+    redirect_target = app_helpers.safe_return_url(
+        request,
+        request.POST.get("next"),
+        reverse("provider_detail", args=["jellyfin"]) + "?tab=sync",
+    )
     account = getattr(request.user, "jellyfin_account", None)
     if not account:
         messages.error(request, "Connect Jellyfin before syncing.")
-        return redirect("integrations")
+        return redirect(redirect_target)
 
     if _queue_task_or_message(request, tasks.push_jellyfin_watched, user_id=request.user.id) is not False:
         messages.info(request, "Jellyfin sync queued.")
-    return redirect("integrations")
+    return redirect(redirect_target)
 
 
 @require_POST
 def jellyfin_pull_now(request):
     """Queue an immediate automatic Jellyfin history pull."""
+    redirect_target = app_helpers.safe_return_url(
+        request,
+        request.POST.get("next"),
+        reverse("provider_detail", args=["jellyfin"]) + "?tab=import",
+    )
     account = getattr(request.user, "jellyfin_account", None)
     # A broken account is still queued: the pull re-probes the key and clears
     # the flag when it works again.
     if not account or not account.base_url or not account.api_key:
         messages.error(request, "Connect Jellyfin before importing history.")
-        return redirect("integrations")
+        return redirect(redirect_target)
 
     if _queue_task_or_message(request, tasks.pull_jellyfin_history, user_id=request.user.id) is not False:
         messages.info(request, "Jellyfin history import queued.")
-    return redirect("integrations")
+    return redirect(redirect_target)
 
 
 @require_POST
 def jellyfin_playback_reporting_import(request):
     """Queue a manual Playback Reporting TSV import for the connected user."""
+    redirect_target = app_helpers.safe_return_url(
+        request,
+        request.POST.get("next"),
+        reverse("provider_detail", args=["jellyfin"]) + "?tab=import",
+    )
     account = getattr(request.user, "jellyfin_account", None)
     if not account or not account.is_connected:
         messages.error(request, "Connect Jellyfin before importing Playback Reporting data.")
-        return redirect("integrations")
+        return redirect(redirect_target)
 
     uploaded_file = request.FILES.get("playback_reporting_file")
     if not uploaded_file:
         messages.error(request, "Choose a Playback Reporting TSV export first.")
-        return redirect("integrations")
+        return redirect(redirect_target)
 
     if uploaded_file.size > JELLYFIN_PLAYBACK_REPORTING_MAX_UPLOAD_BYTES:
         messages.error(request, "The Playback Reporting export is larger than 50 MB.")
-        return redirect("integrations")
+        return redirect(redirect_target)
 
     if uploaded_file.size == 0:
         messages.error(request, "The Playback Reporting export is empty.")
-        return redirect("integrations")
+        return redirect(redirect_target)
 
     staged_file = _stage_upload_or_message(
         request,
@@ -2370,7 +2414,7 @@ def jellyfin_playback_reporting_import(request):
         "Jellyfin Playback Reporting export",
     )
     if staged_file is None:
-        return redirect("integrations")
+        return redirect(redirect_target)
 
     if _queue_staged_task_or_message(
         request,
@@ -2380,9 +2424,9 @@ def jellyfin_playback_reporting_import(request):
         "new",
         staged_paths=(staged_file,),
     ) is False:
-        return redirect("integrations")
+        return redirect(redirect_target)
     messages.info(request, "Jellyfin Playback Reporting import queued.")
-    return redirect("integrations")
+    return redirect(redirect_target)
 
 
 def _ensure_recurring_import_schedule(user, label, poll_interval_minutes):
@@ -2494,7 +2538,7 @@ def audiobookshelf_disconnect(request):
 
     _run_with_lock_retry("disconnect Audiobookshelf", _disconnect)
     messages.info(request, "Disconnected Audiobookshelf.")
-    return redirect("import_data")
+    return _integration_redirect(request)
 
 
 @require_POST
@@ -2503,7 +2547,7 @@ def import_audiobookshelf(request):
     account = getattr(request.user, "audiobookshelf_account", None)
     if not account:
         messages.error(request, "Connect Audiobookshelf before importing.")
-        return redirect("import_data")
+        return _integration_redirect(request)
 
     queued = _queue_task_or_message(request,
         tasks.import_audiobookshelf, user_id=request.user.id, mode="new"
@@ -2512,7 +2556,7 @@ def import_audiobookshelf(request):
 
     if queued is not False:
         messages.info(request, "Audiobookshelf import queued.")
-    return redirect("import_data")
+    return _integration_redirect(request)
 
 
 def _sync_interval(request, account_model, default=15):
@@ -2643,399 +2687,22 @@ def import_kavita(request):
     )
 
 
-AUDIOBOOKSHELF_COVER_TIMEOUT = 15
-# After one failed cover fetch, the account's remaining covers skip ABS for this
-# long. Otherwise every poster on a page holds a web worker for the full
-# timeout while the server is down (#1307).
-AUDIOBOOKSHELF_COVER_BACKOFF_SECONDS = 60
-# Plain raster types only - an upstream ABS server (attacker-controlled, or
-# just compromised) returning e.g. text/html or image/svg+xml would have it
-# served as active content from Floppy's own origin to anyone holding the
-# signed proxy URL, since the account owner can share that URL freely.
-# The non-standard spellings are here because real ABS deployments behind a
-# reverse proxy do emit them, and rejecting one lost the poster (#861).
-AUDIOBOOKSHELF_COVER_CONTENT_TYPES = frozenset(
-    {
-        "image/jpeg",
-        "image/jpg",
-        "image/pjpeg",
-        "image/png",
-        "image/x-png",
-        "image/webp",
-        "image/gif",
-        "image/avif",
-        "image/bmp",
-        "image/tiff",
-        "image/heic",
-        "image/heif",
-    },
-)
-# Content types that mean "I don't know", where sniffing the body is the only
-# way to tell a real cover from something we must not serve.
-AUDIOBOOKSHELF_COVER_UNTYPED = frozenset({"", "application/octet-stream"})
-# Leading magic bytes for the raster formats above. WebP is RIFF....WEBP, so it
-# is matched on two separate offsets rather than a single prefix.
-COVER_MAGIC_PREFIXES = (
-    (b"\xff\xd8\xff", "image/jpeg"),
-    (b"\x89PNG\r\n\x1a\n", "image/png"),
-    (b"GIF87a", "image/gif"),
-    (b"GIF89a", "image/gif"),
-    (b"BM", "image/bmp"),
-    (b"II*\x00", "image/tiff"),
-    (b"MM\x00*", "image/tiff"),
-)
-COVER_SNIFF_BYTES = 16
-
-
-def _sniff_cover_content_type(body: bytes) -> str:
-    """Return the image type of `body` from its magic bytes, or "" if unknown.
-
-    Deliberately recognises raster formats only: an SVG or HTML body has no
-    magic number here and so stays rejected, exactly as an explicit
-    image/svg+xml content type would be.
-    """
-    for prefix, content_type in COVER_MAGIC_PREFIXES:
-        if body.startswith(prefix):
-            return content_type
-    if body[:4] == b"RIFF" and body[8:12] == b"WEBP":
-        return "image/webp"
-    if body[4:8] == b"ftyp":
-        brand = body[8:12]
-        if brand in {b"avif", b"avis"}:
-            return "image/avif"
-        if brand in {b"heic", b"heix", b"heim", b"heis", b"mif1", b"msf1"}:
-            return "image/heic"
-    return ""
-
-
-def _placeholder_image_bytes():
-    """Decode settings.IMG_NONE into (body, content_type), or None.
-
-    IMG_NONE is a base64 data URI by default but is overridable to a plain URL,
-    which there is nothing to decode from. Decoded per call rather than cached
-    so an overridden setting is always honoured; this only runs on the failure
-    path, where one small base64 decode is not worth a staleness hazard.
-    """
-    prefix = "data:"
-    value = settings.IMG_NONE or ""
-    if not value.startswith(prefix):
-        return None
-    header, _, payload = value[len(prefix) :].partition(",")
-    if not payload:
-        return None
-    content_type, _, encoding = header.partition(";")
-    if encoding.strip().lower() != "base64":
-        return None
-    try:
-        return base64.b64decode(payload), content_type.strip() or "image/svg+xml"
-    except (binascii.Error, ValueError):
-        return None
-
-
-def _placeholder_image_response():
-    """Return Floppy's own "no artwork" placeholder as a real image response.
-
-    A 404 here renders as the browser's broken-image glyph, because nothing in
-    the templates has an onerror fallback and the stored URL is a perfectly
-    valid proxy URL (#861). Serving the placeholder instead keeps the grid
-    looking the way it does for any other artless item. The bytes are Floppy's
-    own fixed SVG, never anything the upstream server influenced, and the TTL
-    is short so the real cover reappears once ABS recovers.
-    """
-    decoded = _placeholder_image_bytes()
-    if decoded is None:
-        return HttpResponseNotFound()
-    body, content_type = decoded
-    response = HttpResponse(body, content_type=content_type)
-    response["Cache-Control"] = "private, max-age=300"
-    response["X-Content-Type-Options"] = "nosniff"
-    return response
-
-
-@login_not_required
-@require_GET
-def audiobookshelf_cover(request, token):
-    """Stream an Audiobookshelf item's cover art using the account's own token.
-
-    The ABS `/api/items/:id/cover` endpoint requires a bearer token, so it
-    can't be embedded directly in an `<img src>`. This resolves the signed
-    token to the owning account, fetches the cover server-side with that
-    account's stored credentials, and streams it back (see #861). The
-    endpoint is deliberately anonymous, so the response is streamed with a
-    hard size cap and its content type is restricted to known-safe image
-    types - matching the bounded, allow-listed fetch app.image_cache already
-    does for provider artwork.
-
-    Every failure below is logged and answered with Floppy's own placeholder
-    rather than a bare 404: the 404s were both invisible in Settings > Advanced
-    and rendered as broken-image glyphs, which is what made #861 impossible to
-    diagnose from a bug report.
-    """
-    resolved = abs_cover_proxy.resolve_cover_proxy_token(token)
-    if resolved is None:
-        # A tampered or malformed token is not something a Floppy page can
-        # produce, so this one stays a plain 404. It is logged at debug
-        # rather than warning because the view is anonymous: anyone could
-        # otherwise flood the log with junk tokens and bury the real
-        # Audiobookshelf failures below, which are the point of #861. Every
-        # other branch here needs a valid signature to reach.
-        logger.debug("Audiobookshelf cover proxy rejected an unsignable token")
-        return HttpResponseNotFound()
-    account_id, library_item_id = resolved
-
-    account = AudiobookshelfAccount.objects.filter(pk=account_id).first()
-    if account is None:
-        logger.warning(
-            "Audiobookshelf cover unavailable: no account account=%s item=%s",
-            account_id,
-            library_item_id,
-        )
-        return _placeholder_image_response()
-
-    # The last good copy is served while fresh, and whenever ABS cannot answer
-    # (#1307), so a slow server no longer blanks every poster.
-    stored_key = f"abs-cover:{account_id}:{library_item_id}"
-    stored = image_cache.load_stored_cover(stored_key)
-    if stored is not None and stored[2]:
-        return image_cache.stored_cover_response(stored)
-
-    def fallback():
-        if stored is not None:
-            return image_cache.stored_cover_response(stored)
-        return _placeholder_image_response()
-
-    try:
-        api_token = helpers.decrypt(account.api_token)
-    except Exception as error:
-        logger.warning(
-            "Audiobookshelf cover unavailable: token decrypt failed "
-            "account=%s item=%s error=%s",
-            account_id,
-            library_item_id,
-            exception_summary(error),
-        )
-        return fallback()
-
-    backoff_key = f"abs_cover_backoff:{account_id}"
-    if cache.get(backoff_key):
-        logger.debug(
-            "Audiobookshelf cover skipped: server recently unreachable "
-            "account=%s item=%s",
-            account_id,
-            library_item_id,
-        )
-        return fallback()
-
-    cover_url = f"{account.base_url.rstrip('/')}/api/items/{library_item_id}/cover"
-    try:
-        upstream = send_to_self_hosted(
-            requests.get,
-            cover_url,
-            headers={"Authorization": f"Bearer {api_token}"},
-            timeout=AUDIOBOOKSHELF_COVER_TIMEOUT,
-            stream=True,
-        )
-    except requests.RequestException as error:
-        cache.set(backoff_key, 1, AUDIOBOOKSHELF_COVER_BACKOFF_SECONDS)
-        logger.warning(
-            "Audiobookshelf cover unavailable: request failed "
-            "account=%s item=%s error=%s",
-            account_id,
-            library_item_id,
-            exception_summary(error),
-        )
-        return fallback()
-
-    try:
-        if upstream.status_code != HTTPStatus.OK:
-            logger.warning(
-                "Audiobookshelf cover unavailable: upstream status=%s "
-                "account=%s item=%s",
-                upstream.status_code,
-                account_id,
-                library_item_id,
-            )
-            return fallback()
-
-        content_type = (
-            upstream.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-        )
-        if (
-            content_type not in AUDIOBOOKSHELF_COVER_CONTENT_TYPES
-            and content_type not in AUDIOBOOKSHELF_COVER_UNTYPED
-        ):
-            logger.warning(
-                "Audiobookshelf cover unavailable: refused content_type=%s "
-                "account=%s item=%s",
-                content_type,
-                account_id,
-                library_item_id,
-            )
-            return fallback()
-
-        try:
-            content_length = int(upstream.headers.get("Content-Length", "0"))
-        except ValueError:
-            content_length = 0
-        if content_length > image_cache.MAX_IMAGE_BYTES:
-            logger.warning(
-                "Audiobookshelf cover unavailable: declared content_length=%s "
-                "over cap account=%s item=%s",
-                content_length,
-                account_id,
-                library_item_id,
-            )
-            return fallback()
-
-        body = bytearray()
-        oversized = False
-        try:
-            for chunk in upstream.iter_content(chunk_size=64 * 1024):
-                if not chunk:
-                    continue
-                body.extend(chunk)
-                if len(body) > image_cache.MAX_IMAGE_BYTES:
-                    oversized = True
-                    break
-        except requests.RequestException as error:
-            # With stream=True a server that stalls after the headers fails
-            # here rather than at send time, so it gets the same backoff.
-            cache.set(backoff_key, 1, AUDIOBOOKSHELF_COVER_BACKOFF_SECONDS)
-            logger.warning(
-                "Audiobookshelf cover unavailable: body read failed "
-                "account=%s item=%s error=%s",
-                account_id,
-                library_item_id,
-                exception_summary(error),
-            )
-            return fallback()
-    finally:
-        upstream.close()
-
-    if oversized:
-        logger.warning(
-            "Audiobookshelf cover unavailable: body exceeded %s bytes "
-            "account=%s item=%s",
-            image_cache.MAX_IMAGE_BYTES,
-            account_id,
-            library_item_id,
-        )
-        return fallback()
-
-    body = bytes(body)
-    # An upstream that declares nothing useful still has to prove it sent a
-    # raster image; sniffing keeps SVG and HTML out just as the allow-list does.
-    if content_type in AUDIOBOOKSHELF_COVER_UNTYPED:
-        sniffed = _sniff_cover_content_type(body[:COVER_SNIFF_BYTES])
-        if not sniffed:
-            logger.warning(
-                "Audiobookshelf cover unavailable: untyped body was not an image "
-                "content_type=%s account=%s item=%s",
-                content_type,
-                account_id,
-                library_item_id,
-            )
-            return fallback()
-        content_type = sniffed
-
-    image_cache.store_cover(stored_key, body, content_type)
-    response = HttpResponse(body, content_type=content_type)
-    response["Cache-Control"] = "private, max-age=3600"
-    response["X-Content-Type-Options"] = "nosniff"
-    return response
-
-
-PLEX_COVER_TIMEOUT = 15
-# Same allow-list as the Audiobookshelf proxy: a Plex server is an arbitrary
-# user-configured host, so anything but a plain raster type would be served as
-# active content from Floppy's own origin to whoever holds the signed URL.
-PLEX_COVER_CONTENT_TYPES = frozenset(
-    {"image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"},
-)
-
-
-@login_not_required
-@require_GET
-def plex_cover(request, token):
-    """Stream a Plex item's cover art using the account's own Plex token.
-
-    Plex art endpoints require an X-Plex-Token, which must never end up in an
-    `<img src>` or in a stored Item.image. This resolves the signed token to the
-    owning account and server, fetches the art server-side, and streams it back
-    under the same size cap and content-type allow-list as the Audiobookshelf
-    cover proxy.
-    """
-    resolved = plex_cover_proxy.resolve_cover_proxy_token(token)
-    if resolved is None:
-        return HttpResponseNotFound()
-    account_id, machine_identifier, thumb_path = resolved
-
-    account = PlexAccount.objects.filter(pk=account_id).first()
-    if account is None:
-        return HttpResponseNotFound()
-
-    # Same last-good-copy rule as the Audiobookshelf proxy (#1307).
-    stored_key = f"plex-cover:{account_id}:{machine_identifier}:{thumb_path}"
-    stored = image_cache.load_stored_cover(stored_key)
-    if stored is not None and stored[2]:
-        return image_cache.stored_cover_response(stored)
-
-    def fallback():
-        if stored is not None:
-            return image_cache.stored_cover_response(stored)
-        return HttpResponseNotFound()
-
-    uri, plex_token = plex_api.connection_for_machine(
-        account.sections,
-        machine_identifier,
-        account.plex_token,
+@require_POST
+def refresh_kavita(request):
+    """Queue a full Kavita rescan with provider re-resolution."""
+    account = getattr(request.user, "kavita_account", None)
+    if not account:
+        messages.error(request, "Connect Kavita before refreshing.")
+        return redirect("import_data")
+    queued = _queue_task_or_message(
+        request,
+        tasks.import_kavita,
+        user_id=request.user.id,
+        mode="overwrite",
     )
-    if not uri or not plex_token:
-        return fallback()
-
-    try:
-        upstream = requests.get(
-            f"{uri}{thumb_path}",
-            params={"X-Plex-Token": plex_token},
-            timeout=PLEX_COVER_TIMEOUT,
-            stream=True,
-            verify=settings.PLEX_SSL_VERIFY,
-        )
-    except requests.RequestException:
-        return fallback()
-
-    try:
-        if upstream.status_code != HTTPStatus.OK:
-            return fallback()
-
-        content_type = (
-            upstream.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-        )
-        if content_type not in PLEX_COVER_CONTENT_TYPES:
-            return fallback()
-
-        try:
-            content_length = int(upstream.headers.get("Content-Length", "0"))
-        except ValueError:
-            content_length = 0
-        if content_length > image_cache.MAX_IMAGE_BYTES:
-            return fallback()
-
-        body = bytearray()
-        for chunk in upstream.iter_content(chunk_size=64 * 1024):
-            if not chunk:
-                continue
-            body.extend(chunk)
-            if len(body) > image_cache.MAX_IMAGE_BYTES:
-                return fallback()
-    finally:
-        upstream.close()
-
-    body = bytes(body)
-    image_cache.store_cover(stored_key, body, content_type)
-    response = HttpResponse(body, content_type=content_type)
-    response["Cache-Control"] = "private, max-age=3600"
-    return response
+    if queued is not False:
+        messages.info(request, "Kavita metadata refresh queued.")
+    return redirect("import_data")
 
 
 STORYTELLER_RECURRING_TASK_NAME = "Import from Storyteller (Recurring)"
@@ -3109,7 +2776,7 @@ def storyteller_connect(request):
         return _integration_redirect(request)
 
     expires_in = int(data.get("expires_in") or 600)
-    request.session[STORYTELLER_PENDING_SESSION_KEY] = {
+    pending_auth.put(STORYTELLER_PENDING_SESSION_KEY, request.user.pk, {
         "server_url": server_url,
         "device_code": device_code,
         "user_code": data.get("user_code") or "",
@@ -3122,8 +2789,7 @@ def storyteller_connect(request):
         ),
         "interval": int(data.get("interval") or 5),
         "expires_at": (timezone.now() + timedelta(seconds=expires_in)).isoformat(),
-    }
-    request.session.modified = True
+    }, ttl=expires_in)
     messages.info(
         request, "Approve the login on your Storyteller server to finish connecting."
     )
@@ -3133,20 +2799,22 @@ def storyteller_connect(request):
 @require_GET
 def storyteller_poll(request):
     """Poll Storyteller for the access token during device login."""
-    pending = request.session.get(STORYTELLER_PENDING_SESSION_KEY)
+    pending = pending_auth.get(STORYTELLER_PENDING_SESSION_KEY, request.user.pk)
     if not pending:
         return JsonResponse({"status": "idle"})
 
     expires_at = pending.get("expires_at")
     if expires_at and timezone.now() > datetime.fromisoformat(expires_at):
-        request.session.pop(STORYTELLER_PENDING_SESSION_KEY, None)
+        pending_auth.clear(STORYTELLER_PENDING_SESSION_KEY, request.user.pk)
         return JsonResponse({"status": "expired"})
 
     client = StorytellerClient(pending["server_url"])
     try:
         data, status_code = client.poll_device_token(pending["device_code"])
     except Exception as exc:
-        return JsonResponse({"status": "pending", "detail": str(exc)})
+        # requests errors carry the server URL: log the class, answer plainly.
+        logger.warning("Storyteller device poll failed: %s", exception_summary(exc))
+        return JsonResponse({"status": "pending"})
 
     access_token = data.get("access_token") if isinstance(data, dict) else None
     if access_token:
@@ -3164,7 +2832,7 @@ def storyteller_poll(request):
             _ensure_storyteller_schedule(request.user)
 
         _run_with_lock_retry("connect Storyteller", _connect)
-        request.session.pop(STORYTELLER_PENDING_SESSION_KEY, None)
+        pending_auth.clear(STORYTELLER_PENDING_SESSION_KEY, request.user.pk)
         if not _queue_task_quietly(
             tasks.import_storyteller, user_id=request.user.id, mode="new"
         ):
@@ -3178,14 +2846,14 @@ def storyteller_poll(request):
     ):
         return JsonResponse({"status": "pending"})
 
-    request.session.pop(STORYTELLER_PENDING_SESSION_KEY, None)
+    pending_auth.clear(STORYTELLER_PENDING_SESSION_KEY, request.user.pk)
     return JsonResponse({"status": "error", "message": error or "Login failed."})
 
 
 @require_POST
 def storyteller_cancel(request):
     """Cancel an in-progress Storyteller device login."""
-    request.session.pop(STORYTELLER_PENDING_SESSION_KEY, None)
+    pending_auth.clear(STORYTELLER_PENDING_SESSION_KEY, request.user.pk)
     messages.info(request, "Storyteller login cancelled.")
     return redirect("import_data")
 
@@ -3451,127 +3119,6 @@ def import_koreader(request):
             source="KOReader",
             extra_kwargs={"user_id": request.user.id},
         )
-    return redirect("import_data")
-
-
-STREMIO_RECURRING_TASK_NAME = "Import from Stremio (Recurring)"
-
-
-def _ensure_stremio_schedule(user):
-    """Create the recurring Stremio import schedule if missing."""
-    from django_celery_beat.models import CrontabSchedule, PeriodicTask
-
-    existing_task = PeriodicTask.objects.filter(
-        task=STREMIO_RECURRING_TASK_NAME,
-        **helpers.periodic_task_user_kwargs(user.id),
-        enabled=True,
-    ).first()
-    if existing_task:
-        return
-
-    crontab, _ = CrontabSchedule.objects.get_or_create(
-        minute=0,
-        hour="*/2",
-        day_of_week="*",
-        day_of_month="*",
-        month_of_year="*",
-        timezone=timezone.get_default_timezone(),
-    )
-    PeriodicTask.objects.create(
-        name=f"Import from Stremio for {user.username} (every 2 hours)",
-        task=STREMIO_RECURRING_TASK_NAME,
-        crontab=crontab,
-        kwargs=json.dumps({"user_id": user.id}),
-        start_time=timezone.now(),
-        enabled=True,
-    )
-
-
-@require_POST
-def stremio_connect(request):
-    """Connect a Stremio account using email/password or a pasted auth key."""
-    email = request.POST.get("email", "").strip()
-    password = request.POST.get("password", "").strip()
-    auth_key = request.POST.get("auth_key", "").strip()
-
-    if not auth_key and not (email and password):
-        messages.error(
-            request, "Enter your Stremio email and password, or an auth key."
-        )
-        return _integration_redirect(request)
-
-    try:
-        if not auth_key:
-            auth_key = stremio.login(email, password)
-        else:
-            # Validate a pasted auth key before storing it.
-            stremio.get_user(auth_key)
-    except helpers.MediaImportError as error:
-        logger.exception("Stremio login failed")
-        messages.error(
-            request,
-            "Could not connect to Stremio. Check your credentials; for accounts created "
-            "via Facebook login, paste an auth key instead or set a password first. "
-            f"({error})",
-        )
-        return _integration_redirect(request)
-    except Exception as error:
-        logger.exception("Failed to connect to Stremio")
-        messages.error(request, f"Failed to connect to Stremio: {error}")
-        return _integration_redirect(request)
-
-    def _connect():
-        StremioAccount.objects.update_or_create(
-            user=request.user,
-            defaults={
-                "auth_key": helpers.encrypt(auth_key),
-                "email": helpers.encrypt(email) if email else "",
-                "connection_broken": False,
-                "last_error_message": "",
-            },
-        )
-        _ensure_stremio_schedule(request.user)
-
-    _run_with_lock_retry("connect Stremio", _connect)
-    if _queue_task_or_message(request,
-        tasks.import_stremio, user_id=request.user.id, mode="new"
-    ) is not False:
-        messages.success(
-            request,
-            "Connected to Stremio. Initial import queued; your library will sync every 2 hours.",
-        )
-    return _integration_redirect(request, connected_slug="stremio")
-
-
-@require_POST
-def stremio_disconnect(request):
-    """Disconnect the Stremio integration."""
-    from django_celery_beat.models import PeriodicTask
-
-    def _disconnect():
-        PeriodicTask.objects.filter(
-            task=STREMIO_RECURRING_TASK_NAME,
-            **helpers.periodic_task_user_kwargs(request.user.id),
-        ).delete()
-        StremioAccount.objects.filter(user=request.user).delete()
-
-    _run_with_lock_retry("disconnect Stremio", _disconnect)
-    messages.info(request, "Disconnected Stremio.")
-    return redirect("import_data")
-
-
-@require_POST
-def import_stremio(request):
-    """Queue a Stremio import and ensure the recurring schedule exists."""
-    account = getattr(request.user, "stremio_account", None)
-    if not account:
-        messages.error(request, "Connect Stremio before importing.")
-        return redirect("import_data")
-
-    queued = _queue_task_or_message(request, tasks.import_stremio, user_id=request.user.id, mode="new")
-    _ensure_stremio_schedule(request.user)
-    if queued is not False:
-        messages.info(request, "Stremio import queued.")
     return redirect("import_data")
 
 
@@ -4813,6 +4360,36 @@ def import_storygraph(request):
 
 
 @require_POST
+def import_youtube_takeout(request):
+    """View for importing YouTube watch history from a Google Takeout file."""
+    file = request.FILES.get("youtube_takeout")
+
+    if not file:
+        messages.error(request, "A YouTube watch history file is required.")
+        return _integration_redirect(request)
+
+    staged_file = _stage_upload_or_message(request, file, "YouTube watch history")
+    if staged_file is None:
+        return _integration_redirect(request)
+
+    mode = request.POST["mode"]
+    if _queue_staged_task_or_message(
+        request,
+        tasks.import_youtube_takeout,
+        user_id=request.user.id,
+        file=staged_file,
+        mode=mode,
+        staged_paths=(staged_file,),
+    ) is False:
+        return _integration_redirect(request)
+    messages.info(
+        request,
+        "The task to import your YouTube watch history has been queued.",
+    )
+    return _integration_redirect(request)
+
+
+@require_POST
 def import_tvtime(request):
     """View for importing watch history from TV Time's GDPR export CSVs."""
     shows_file = request.FILES.get("tvtime_shows_csv")
@@ -4919,491 +4496,6 @@ def export_csv_letterboxd(request):
     )
     logger.info("User %s started Letterboxd CSV export", request.user.username)
     return response
-
-
-@login_not_required
-@csrf_exempt
-@require_POST
-def jellyfin_webhook(request, token):
-    """Handle Jellyfin webhook notifications for media playback."""
-    try:
-        user = users.models.User.objects.get(token=token, is_active=True)
-    except ObjectDoesNotExist:
-        logger.warning(
-            "Could not process Jellyfin webhook: Invalid token: %s",
-            token,
-        )
-        return HttpResponse(status=401)
-
-    data = request.body
-    if not data:
-        logger.warning("Missing payload in Jellyfin webhook request")
-        return HttpResponse("Missing payload", status=400)
-
-    try:
-        payload = json.loads(data)
-    except (ValueError, UnicodeDecodeError):
-        return HttpResponse("Invalid JSON", status=400)
-    if not isinstance(payload, dict):
-        return HttpResponse("Invalid payload", status=400)
-    if not _queue_task_quietly(tasks.process_webhook, "jellyfin", payload, user.id):
-        return HttpResponse(status=503)
-    return HttpResponse(status=200)
-
-
-@login_not_required
-@csrf_exempt
-@require_POST
-def plex_webhook(request, token):
-    """Handle Plex webhook notifications for media playback."""
-    try:
-        user = users.models.User.objects.get(token=token, is_active=True)
-    except ObjectDoesNotExist:
-        logger.warning(
-            "Could not process Plex webhook: Invalid token: %s",
-            token,
-        )
-        return HttpResponse(status=401)
-
-    # https://support.plex.tv/hc/en-us/articles/115002267687-Webhooks
-    # As stated above, the payload is sent in JSON format inside a multipart
-    # HTTP POST request. For the media.play and media.rate events, a second part of
-    # the POST request contains a JPEG thumbnail for the media.
-
-    data = request.POST.get("payload")
-    if not data:
-        logger.warning("Missing payload in Plex webhook request")
-        user.mark_plex_webhook_error("Missing payload in Plex webhook request")
-        return HttpResponse("Missing payload", status=400)
-
-    try:
-        payload = json.loads(data)
-    except json.JSONDecodeError:
-        logger.warning("Invalid JSON payload in Plex webhook request")
-        user.mark_plex_webhook_error("Invalid JSON payload in Plex webhook request")
-        return HttpResponse("Invalid payload", status=400)
-
-    event_type = payload.get("event")
-    logger.info(
-        "Received Plex webhook request - Event: %s, User: %s", event_type, user.username
-    )
-
-    queued = _queue_task_quietly(tasks.process_webhook, "plex", payload, user.id)
-    payload_usernames = extract_plex_webhook_usernames(payload)
-    for share in PlexWebhookShare.objects.filter(
-        owner=user,
-        recipient_enabled=True,
-        recipient__is_active=True,
-    ).only("id", "recipient_id", "plex_username"):
-        if share.plex_username.strip().casefold() in payload_usernames:
-            queued &= _queue_task_quietly(
-                tasks.process_webhook,
-                "plex",
-                payload,
-                share.recipient_id,
-                share_id=share.id,
-            )
-    if not queued:
-        return HttpResponse(status=503)
-    return HttpResponse(status=200)
-
-
-@login_not_required
-@csrf_exempt
-@require_POST
-def emby_webhook(request, token):
-    """Handle Emby webhook notifications for media playback."""
-    try:
-        user = users.models.User.objects.get(token=token, is_active=True)
-    except ObjectDoesNotExist:
-        logger.warning(
-            "Could not process Emby webhook: Invalid token: %s",
-            token,
-        )
-        return HttpResponse(status=401)
-
-    # The payload is sent in JSON format inside a multipart
-    # HTTP POST request.
-
-    data = request.POST.get("data")
-    if not data:
-        logger.warning("Missing payload in Emby webhook request")
-        return HttpResponse("Missing payload", status=400)
-
-    try:
-        payload = json.loads(data)
-    except (ValueError, UnicodeDecodeError):
-        return HttpResponse("Invalid JSON", status=400)
-    if not isinstance(payload, dict):
-        return HttpResponse("Invalid payload", status=400)
-    if not _queue_task_quietly(tasks.process_webhook, "emby", payload, user.id):
-        return HttpResponse(status=503)
-    return HttpResponse(status=200)
-
-
-# kept: URL name — renaming breaks already-configured Seerr/Jellyseerr webhook URLs
-@login_not_required
-@csrf_exempt
-@require_POST
-def jellyseerr_webhook(request, token):
-    """Handle Seerr webhook notifications for requested/approved media."""
-    try:
-        user = users.models.User.objects.get(token=token, is_active=True)
-    except ObjectDoesNotExist:
-        logger.warning(
-            "Could not process Seerr webhook: Invalid token: %s",
-            token,
-        )
-        return HttpResponse(status=401)
-
-    data = request.body
-    if not data:
-        logger.warning("Missing payload in Seerr webhook request")
-        return HttpResponse("Missing payload", status=400)
-
-    try:
-        payload = json.loads(data)
-    except Exception:
-        logger.warning("Invalid JSON payload in Seerr webhook request")
-        return HttpResponse("Invalid JSON", status=400)
-
-    if not _queue_task_quietly(tasks.process_webhook, "seerr", payload, user.id):
-        return HttpResponse(status=503)
-    return HttpResponse(status=200)
-
-
-@login_not_required
-@csrf_exempt
-@require_POST
-def seerr_global_webhook(request):
-    """Handle a single shared Seerr webhook for multiple Floppy users.
-
-    Unlike the per-user Seerr webhook, this endpoint has no per-user
-    token in the URL, so it demultiplexes users by matching the payload's
-    requester username against each opted-in user's allowed usernames.
-    """
-    if not settings.SEERR_GLOBAL_WEBHOOK_SECRET:
-        return HttpResponse(status=404)
-
-    data = request.body
-    if not data:
-        logger.warning("Missing payload in Seerr global webhook request")
-        return HttpResponse("Missing payload", status=400)
-
-    try:
-        payload = json.loads(data)
-    except Exception:
-        logger.warning("Invalid JSON payload in Seerr global webhook request")
-        return HttpResponse("Invalid JSON", status=400)
-
-    if not hmac.compare_digest(
-        str(payload.get("secret", "")),
-        settings.SEERR_GLOBAL_WEBHOOK_SECRET,
-    ):
-        logger.warning("Seerr global webhook: invalid or missing secret")
-        return HttpResponse(status=401)
-
-    requester = (payload.get("requestedBy_username") or "").strip() or (
-        payload.get("notifyuser_username") or ""
-    ).strip()
-    if not requester:
-        logger.warning("Missing requester in Seerr global webhook request")
-        return HttpResponse("Missing requester", status=400)
-
-    matched = False
-    queued = True
-    for user in users.models.User.objects.filter(
-        jellyseerr_enabled=True,
-        is_active=True,
-    ).exclude(jellyseerr_allowed_usernames=""):
-        allowed = {
-            username.strip().lower()
-            for username in user.jellyseerr_allowed_usernames.split(",")
-            if username.strip()
-        }
-        if requester.lower() in allowed:
-            matched = True
-            queued &= _queue_task_quietly(tasks.process_webhook, "seerr", payload, user.id)
-
-    if not matched:
-        logger.info(
-            "Seerr global webhook: no user matched requester=%r",
-            requester,
-        )
-
-    if not queued:
-        return HttpResponse(status=503)
-    return HttpResponse(status=200)
-
-
-@login_not_required
-@csrf_exempt
-@require_POST
-def kodi_webhook(request, token):
-    """Handle Kodi webhook notifications for media playback."""
-    try:
-        user = users.models.User.objects.get(token=token, is_active=True)
-    except ObjectDoesNotExist:
-        logger.warning(
-            "Could not process Kodi webhook: Invalid token: %s",
-            token,
-        )
-        return HttpResponse(status=401)
-
-    data = request.body
-    if not data:
-        logger.warning("Missing payload in Kodi webhook request")
-        return HttpResponse("Missing payload", status=400)
-
-    try:
-        payload = json.loads(data)
-    except json.JSONDecodeError:
-        logger.warning("Invalid JSON payload in Kodi webhook request")
-        return HttpResponse("Invalid JSON", status=400)
-
-    if not _queue_task_quietly(tasks.process_webhook, "kodi", payload, user.id):
-        return HttpResponse(status=503)
-    return HttpResponse(status=200)
-
-
-STREMIO_ADDON_MANIFEST = {
-    # Keep the existing addon id so installed clients remain compatible.
-    "id": "org.yamtrack.scrobbler",
-    "version": "1.2.0",
-    "name": "Floppy",
-    "description": (
-        "Floppy Watchlist catalogs and playback scrobbling for Stremio."
-    ),
-    "resources": ["catalog", "meta", "subtitles"],
-    "types": ["movie", "series"],
-    "idPrefixes": ["tt"],
-    "catalogs": [],
-    "behaviorHints": {"configurable": True, "configurationRequired": False},
-}
-STREMIO_SCROBBLE_THROTTLE_SECONDS = 1800
-STREMIO_MAX_MEDIA_ID_LENGTH = 128
-STREMIO_MEDIA_ID_PATTERN = re.compile(
-    r"^tt[0-9]+(?::[1-9][0-9]*:[1-9][0-9]*)?$",
-)
-
-
-def _stremio_addon_response(payload, status=200):
-    """Build a JSON response with the CORS headers Stremio requires."""
-    response = JsonResponse(payload, status=status)
-    response["Access-Control-Allow-Origin"] = "*"
-    return response
-
-
-@login_not_required
-@csrf_exempt
-@require_GET
-def stremio_addon_catalog(
-    request,
-    token,
-    media_type,
-    catalog_id,
-    extra=None,
-    config=None,
-):
-    """Serve a Floppy Watchlist catalog to Stremio."""
-    user, grant = stremio_catalog.resolve_addon_credential(token)
-    if user is None:
-        logger.warning("Invalid token on Stremio addon catalog request")
-        return _stremio_addon_response(
-            {"error": "Invalid token"},
-            status=401,
-        )
-
-    spec = stremio_catalog.get_catalog_spec(media_type, catalog_id)
-    if spec is None:
-        return _stremio_addon_response({"metas": []})
-
-    if grant is not None:
-        if not grant.allows_catalog(catalog_id):
-            # Not 403: the add-on protocol has no way to show one, and an empty
-            # catalog is the honest answer for something this install may not see.
-            logger.info(
-                "stremio_catalog grant_scope_excluded catalog_id=%s",
-                catalog_id,
-            )
-            return _stremio_addon_response({"metas": []})
-        stremio_catalog.touch_grant(grant)
-
-    try:
-        skip = stremio_catalog.parse_skip(extra)
-    except ValueError as error:
-        return _stremio_addon_response({"error": str(error)}, status=400)
-
-    metas, unresolved_count = stremio_catalog.project_catalog(user, spec, skip)
-    logger.info(
-        "Stremio catalog projection catalog_id=%s skip=%s returned=%s unresolved=%s",
-        catalog_id,
-        skip,
-        len(metas),
-        unresolved_count,
-    )
-    return _stremio_addon_response({"metas": metas})
-
-
-@login_not_required
-@require_GET
-def stremio_addon_configure(request, token, config=None):
-    """Serve the addon configuration page for a user's install URL."""
-    try:
-        user = users.models.User.objects.get(token=token, is_active=True)
-    except ObjectDoesNotExist:
-        logger.warning("Invalid token on Stremio addon configure request")
-        return HttpResponse("Invalid token", status=401)
-
-    return render(
-        request,
-        "integrations/stremio_configure.html",
-        {
-            "catalog_options": stremio_catalog.catalog_options(user),
-            "selected_ids": list(stremio_catalog.parse_catalog_config(config)),
-        },
-    )
-
-
-@login_not_required
-@csrf_exempt
-@require_GET
-def stremio_addon_manifest(request, token, config=None):
-    """Serve the Stremio addon manifest for a user's install URL."""
-    user, grant = stremio_catalog.resolve_addon_credential(token)
-    if user is None:
-        logger.warning("Invalid token on Stremio addon manifest request")
-        return _stremio_addon_response({"error": "Invalid token"}, status=401)
-
-    if grant is not None:
-        stremio_catalog.touch_grant(grant)
-
-    selected = stremio_catalog.parse_catalog_config(config)
-    manifest = STREMIO_ADDON_MANIFEST | {
-        "logo": request.build_absolute_uri(
-            static("favicon/apple-touch-icon.png"),
-        ),
-        # Both gates: the install URL picks the catalogs, the grant bounds them.
-        "catalogs": stremio_catalog.manifest_catalogs_for_grant(
-            user,
-            grant,
-            selected,
-        ),
-    }
-    return _stremio_addon_response(manifest)
-
-
-@login_not_required
-@csrf_exempt
-@require_GET
-def stremio_addon_meta(request, token, media_type, media_id):
-    """Serve metadata for one item the user tracks."""
-    user, grant = stremio_catalog.resolve_addon_credential(token)
-    if user is None:
-        logger.warning("Invalid token on Stremio addon meta request")
-        return _stremio_addon_response({"error": "Invalid token"}, status=401)
-
-    media_id = unquote(media_id)
-    if (
-        media_type not in {"movie", "series"}
-        or len(media_id) > STREMIO_MAX_MEDIA_ID_LENGTH
-        or not STREMIO_MEDIA_ID_PATTERN.fullmatch(media_id)
-    ):
-        return _stremio_addon_response({"meta": {}}, status=400)
-
-    if grant is not None:
-        stremio_catalog.touch_grant(grant)
-
-    meta = stremio_catalog.project_meta(user, media_type, media_id, grant=grant)
-    if meta is None:
-        # Empty rather than 404: the item is simply not in this library, and
-        # Stremio treats a 404 as the add-on being broken.
-        return _stremio_addon_response({"meta": {}})
-
-    return _stremio_addon_response({"meta": meta})
-
-
-@login_not_required
-@csrf_exempt
-@require_GET
-def stremio_addon_subtitles(request, token, media_type, media_id, config=None):
-    """Record a playback-start scrobble from a Stremio subtitles request."""
-    from django.core.cache import cache
-
-    user, grant = stremio_catalog.resolve_addon_credential(token)
-    if user is None:
-        logger.warning("Invalid token on Stremio addon subtitles request")
-        return _stremio_addon_response({"error": "Invalid token"}, status=401)
-    if grant is not None and not grant.allow_playback_start:
-        # This route records a playback start, which is a write. A grant minted
-        # without that permission serves catalogs and nothing else.
-        logger.info("stremio_subtitles rejected reason=grant_excludes_playback_start")
-        return _stremio_addon_response({"subtitles": []})
-
-    media_id = unquote(media_id)
-    if (
-        media_type not in {"movie", "series"}
-        or len(media_id) > STREMIO_MAX_MEDIA_ID_LENGTH
-        or not STREMIO_MEDIA_ID_PATTERN.fullmatch(media_id)
-        or (media_type == "movie" and ":" in media_id)
-    ):
-        logger.info(
-            "stremio_queue status=limited reason=invalid_media_id user_id=%s "
-            "media_type=%s media_id=%s",
-            user.id,
-            media_type,
-            media_id[:STREMIO_MAX_MEDIA_ID_LENGTH],
-        )
-        return _stremio_addon_response({"subtitles": []})
-
-    # Stremio re-requests subtitles on seeks and quality changes; only the
-    # first request per item in the window records a scrobble.
-    throttle_key = f"stremio_scrobble_{user.id}_{media_type}_{media_id}"
-    throttle_added = cache.add(
-        throttle_key,
-        "1",
-        timeout=STREMIO_SCROBBLE_THROTTLE_SECONDS,
-    )
-    if throttle_added is None:
-        logger.info(
-            "stremio_queue status=unavailable reason=throttle_cache user_id=%s",
-            user.id,
-        )
-    elif throttle_added:
-        queue_member = stremio_queue.member(media_type, media_id)
-        queue_status = stremio_queue.reserve_pending(user.id, queue_member)
-        if queue_status == "accepted":
-            try:
-                tasks.process_stremio_webhook.delay(
-                    {"id": media_id, "type": media_type},
-                    user.id,
-                    queue_member,
-                )
-                logger.info(
-                    "stremio_queue status=queued user_id=%s media_type=%s media_id=%s",
-                    user.id,
-                    media_type,
-                    media_id,
-                )
-            except Exception:
-                stremio_queue.release_pending(user.id, queue_member)
-                logger.exception(
-                    "stremio_queue status=dispatch_failed user_id=%s media_type=%s "
-                    "media_id=%s",
-                    user.id,
-                    media_type,
-                    media_id,
-                )
-        else:
-            logger.info(
-                "stremio_queue status=%s user_id=%s media_type=%s media_id=%s",
-                queue_status,
-                user.id,
-                media_type,
-                media_id,
-            )
-
-    return _stremio_addon_response({"subtitles": []})
 
 
 @require_POST
@@ -5633,7 +4725,7 @@ def _match_review(source_item, preview):
             "id": row_id,
             "key": row["key"],
             "season": row["season"],
-            "code": f"S{row['season']}E{row['episode']}",
+            "code": f"S{int(row['season']):02d}E{int(row['episode']):02d}",
             "title": row["title"],
             "selected": selected,
             "kind": kind,
@@ -5953,6 +5045,9 @@ def library_panel(request, source, media_type, media_id):
             )
         except (seerr_api.SeerrError, helpers.MediaImportError) as exc:
             seerr_error = str(exc)
+        seerr_url = f"{user.seerr_url.rstrip('/')}/{seerr_type}/{media_id}"
+    else:
+        seerr_url = ""
 
     return render(
         request,
@@ -5963,8 +5058,38 @@ def library_panel(request, source, media_type, media_id):
             "error": error,
             "seerr_requests": seerr_requests,
             "seerr_error": seerr_error,
+            "seerr_url": seerr_url,
             "panel_url": request.path,
             "season_number": season,
             "episode_number": episode,
+            # Props for the shared ArrLibraryPanels island; the markup above is
+            # its server fallback.
+            "panel_props": {
+                "panels": panels,
+                "message": message,
+                "error": error,
+                "seerrRequests": seerr_requests,
+                "seerrError": seerr_error,
+                "seerrUrl": seerr_url,
+                "panelUrl": request.path,
+                "seasonNumber": season,
+                "episodeNumber": episode,
+                "labels": {
+                    "requests": gettext("Requests"),
+                    "notRequested": gettext("Not requested in Seerr."),
+                    "searchNow": gettext("Search now"),
+                    "copy": gettext("Copy"),
+                    "copied": gettext("Copied"),
+                    "activity": gettext("Activity"),
+                    "hasFile": gettext("Has file"),
+                    "downloading": gettext("Downloading"),
+                    "missing": gettext("Missing"),
+                    "notMonitored": gettext("Not monitored"),
+                    "episodesHaveFiles": gettext("%s of %s episodes have files"),
+                    "added": gettext("Added %s"),
+                    "openIn": gettext("Open in %s"),
+                    "notFound": gettext("Not in %s"),
+                },
+            },
         },
     )

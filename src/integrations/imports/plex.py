@@ -14,6 +14,7 @@ import app
 from app import fork_services_play_dedupe as play_dedupe
 from app.log_safety import exception_summary, presence_map
 from app.models import MediaTypes, Sources, Status
+from app.progress_log import progress
 from app.providers import services
 from app.services import grouped_anime
 from app.services.music import prefetch_album_covers
@@ -54,6 +55,10 @@ MARK_WATCHED_OVERLAP = timedelta(minutes=10)
 # How long an entry that failed to import keeps the checkpoint held back, so a
 # transient failure is retried but a permanent one cannot pin it forever.
 MARK_WATCHED_RETRY_WINDOW = timedelta(days=1)
+# Library item type codes for the recently-viewed poll (movie, episode).
+RECENTLY_VIEWED_ITEM_TYPES = {"movie": 1, "show": 4}
+# Safety stop when a server sorts never-viewed items first.
+RECENTLY_VIEWED_MAX_PAGES = 10
 
 # Matching an imported history record against a pre-existing row (e.g. one
 # already created by a live webhook, or by a Trakt import) is handled by the
@@ -100,6 +105,18 @@ def mark_watched_importer(library, user, mode):
         since=previous,
     )
     result = plex_importer.import_data()
+    # A progress line, so the downloadable diagnostic report carries it (#1781).
+    # Counts only: warnings can name titles, so they stay in the worker log.
+    progress(
+        "plex_mark_watched_poll user_id=%s since=%s libraries=%s counts=%s warnings=%s",
+        user.id,
+        previous.isoformat(),
+        len(library),
+        dict(plex_importer.summary_counts),
+        len(plex_importer.warnings),
+    )
+    if plex_importer.warnings:
+        logger.info("Plex watched-mark poll warnings: %s", plex_importer.warnings[:5])
 
     checkpoint = poll_started - MARK_WATCHED_OVERLAP
     failed_at = plex_importer.oldest_failed_viewed_at
@@ -202,6 +219,8 @@ class PlexHistoryImporter:
         # Store ratings from library items to apply during bulk media creation
         self._library_ratings: dict[tuple[str, str], float] = {}
         self._anime_import_keys: set[tuple[str, int]] = set()
+        # MAL-backed Anime rows the import wrote, pushed once it finishes.
+        self._imported_mal_anime_ids: set[int] = set()
         # One anime router for the whole run; see AnimeRouteResolver.
         self.anime_router = grouped_anime.AnimeRouteResolver(self.user)
         self._current_section_uri: str = ""
@@ -226,6 +245,8 @@ class PlexHistoryImporter:
         self._preserved_scores: dict[tuple, float] = {}
         # Cached tmdb.find remaps keyed by episode-level external ID
         self._episode_find_cache: dict[tuple[str, str], tuple | None] = {}
+        self._anibridge_mapping_loaded = False
+        self._anibridge_mapping_data = None
         # Cached (source, media_id, tv_metadata, season_metadata) genesis
         # resolution keyed by (tmdb show id, season number) — avoids repeating
         # a TVDB lookup for every episode record of the same show/season.
@@ -234,7 +255,53 @@ class PlexHistoryImporter:
         self._pending_external_references: list[dict] = []
 
     def import_data(self):
-        """Import history for the selected library."""
+        """Import history for the selected library.
+
+        Replayed plays save rows one by one, so their per-item MyAnimeList
+        pushes are skipped; each anime the import touched is pushed once at
+        the end instead.
+        """
+        from integrations.mal_sync import suppress_per_item_push
+
+        with suppress_per_item_push():
+            result = self._import_data()
+        self._push_imported_anime_to_mal()
+        return result
+
+    def _push_imported_anime_to_mal(self):
+        """Queue one MyAnimeList push per anime the import wrote.
+
+        Bulk-created episodes fire no save signals, so without this an imported
+        play reaches MAL only when the user runs or schedules a full sync.
+        """
+        from integrations.mal_sync import per_item_sync_active, queue_grouped_sync
+        from integrations.tasks import sync_mal_status
+
+        if not per_item_sync_active(self.user.id):
+            return
+        seasons = {
+            id(episode.related_season): episode.related_season
+            for episode in self.bulk_media.get(MediaTypes.EPISODE.value, [])
+        }
+        tv_items = {
+            season.related_tv.item_id: season.related_tv.item
+            for season in seasons.values()
+        }
+        # queue_grouped_sync skips non-anime shows and debounces per show.
+        for item in tv_items.values():
+            queue_grouped_sync(self.user.id, item)
+        for anime_id in self._imported_mal_anime_ids:
+            try:
+                sync_mal_status.delay(media_type=MediaTypes.ANIME.value, media_id=anime_id)
+            # The broker is down; the import already committed, so never raise.
+            except Exception as error:
+                logger.warning(
+                    "mal_sync_enqueue_failed media_type=anime media_id=%s error=%s",
+                    anime_id,
+                    error,
+                )
+
+    def _import_data(self):
         self._ensure_account_id()
         self._init_allowed_usernames()
         self._init_allowed_account_ids()
@@ -540,6 +607,10 @@ class PlexHistoryImporter:
             connections, section.get("id"), token=section_token
         )
         self._current_section_uri = uri_used
+        if self.since_ts is not None:
+            entries = entries + self._recently_viewed_entries(
+                uri_used, section, section_type, section_token, entries
+            )
         skipped_users_before = self._skipped_user_count
 
         section_label = section.get("title") or section.get("id") or "Plex"
@@ -661,6 +732,64 @@ class PlexHistoryImporter:
         if max_items is None:
             return entries, uri_used
         return entries[:max_items], uri_used
+
+    def _recently_viewed_entries(
+        self, uri: str, section: dict, section_type: str, token, history: list[dict]
+    ) -> list[dict]:
+        """Library items viewed since the checkpoint that history does not show.
+
+        Plex may not write a history row when an item is marked watched by
+        hand (#1781), but it does update the item's ``lastViewedAt``. Each such
+        item becomes a history-shaped entry so it goes through the same
+        matching and dedupe as a real play. Items history already covers (same
+        ratingKey) are dropped, so a normal play is never counted twice.
+        """
+        item_type = RECENTLY_VIEWED_ITEM_TYPES.get(section_type)
+        section_key = section.get("key") or section.get("id")
+        if item_type is None or not section_key:
+            return []
+        covered = {str(e.get("ratingKey")) for e in history if e.get("ratingKey")}
+        page_size = settings.PLEX_HISTORY_PAGE_SIZE
+        entries: list[dict] = []
+        try:
+            for page_number in range(RECENTLY_VIEWED_MAX_PAGES):
+                page, total = plex_api.fetch_section_all_items(
+                    token or self.account.plex_token,
+                    uri,
+                    str(section_key),
+                    start=page_number * page_size,
+                    size=page_size,
+                    extra_params={"type": item_type, "sort": "lastViewedAt:desc"},
+                )
+                reached_checkpoint = False
+                for item in page:
+                    try:
+                        viewed_at = int(item.get("lastViewedAt"))
+                    except (TypeError, ValueError):
+                        continue
+                    if viewed_at <= self.since_ts:
+                        reached_checkpoint = True
+                        break
+                    if str(item.get("ratingKey")) in covered:
+                        continue
+                    entries.append(
+                        {
+                            **item,
+                            "viewedAt": viewed_at,
+                            # Item views belong to the connected account.
+                            "accountID": self._account_id or "1",
+                        }
+                    )
+                if (
+                    reached_checkpoint
+                    or len(page) < page_size
+                    or (page_number + 1) * page_size >= total
+                ):
+                    break
+        except plex_api.PlexClientError as exc:
+            # History already ran; a failure here only loses the manual marks.
+            self.warnings.append(f"Could not read recently viewed Plex items: {exc}")
+        return entries
 
     def _entries_since(self, page: list[dict]) -> tuple[list[dict], bool]:
         """Keep entries viewed after the checkpoint; history is newest first."""
@@ -1513,7 +1642,12 @@ class PlexHistoryImporter:
             tmdb_id,
             reference=reference,
         )
-        if not self._should_process_media(MediaTypes.MOVIE.value, tmdb_id):
+        # skip_existing=False: a movie already tracked (Planning, In progress)
+        # must not drop a new watch of it; exact duplicates are still filtered
+        # by _should_skip_movie_record.
+        if not self._should_process_media(
+            MediaTypes.MOVIE.value, tmdb_id, skip_existing=False
+        ):
             self.summary_counts["skipped_existing"] += 1
             return True
 
@@ -1668,6 +1802,37 @@ class PlexHistoryImporter:
         if season_number is None or episode_number is None:
             # Don't log a warning yet; return False to allow fallback to Movie
             return False
+
+        # Plex's season can exist on TMDB yet hold different episodes (TVDB
+        # Medabots S2E1 is TMDB S1E27), which the missing-season remap never
+        # sees. A TMDB-numbered find result or a correction is already right;
+        # a cached match that only repeats Plex's numbers is not.
+        if not corrected and (found_season, found_episode) in {
+            (None, None),
+            (plex_season_number, plex_episode_number),
+        }:
+            try:
+                translated = episode_remap.remap_via_anibridge(
+                    anime_mappings.fetch_mapping_data(),
+                    str(media_id),
+                    plex_season_number,
+                    plex_episode_number,
+                    {"tvdb_id": show_ids.get("tvdb_id")},
+                    lambda season: self._ensure_season_payload(
+                        str(media_id),
+                        season,
+                        series_search_title,
+                        show_year,
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover - defensive network guard
+                logger.warning(
+                    "Failed to fetch anime mappings during Plex import: %s",
+                    exception_summary(exc),
+                )
+                translated = None
+            if translated is not None:
+                season_number, episode_number, _ = translated
 
         season_number, episode_number = external_references.map_episode_coordinates(
             reference,
@@ -2147,13 +2312,8 @@ class PlexHistoryImporter:
         if not tvdb_id:
             return
 
-        try:
-            mapping_data = anime_mappings.fetch_mapping_data()
-        except Exception as exc:  # pragma: no cover - defensive network guard
-            logger.warning(
-                "Failed to fetch anime mappings during Plex import: %s",
-                exception_summary(exc),
-            )
+        mapping_data = self._get_anibridge_mapping_data()
+        if not mapping_data:
             return
         yield (
             "TVDB",
@@ -2220,6 +2380,7 @@ class PlexHistoryImporter:
         ).first()
         if anime:
             self._apply_import_timestamp(anime, record["watched_at"])
+            self._imported_mal_anime_ids.add(anime.pk)
 
         self.counts[MediaTypes.ANIME.value] += 1
         self.summary_counts["created"] += 1
@@ -2376,6 +2537,15 @@ class PlexHistoryImporter:
                 actual_tmdb_id,
             )
             if existing and self.mode == "new":
+                if existing.status != Status.COMPLETED.value:
+                    # Tracked but not watched yet (Planning, In progress): the
+                    # play is what finishes it, e.g. a movie marked watched in
+                    # Plex after being added to Floppy.
+                    existing.status = Status.COMPLETED.value
+                    existing.end_date = record["watched_at"]
+                    existing._history_date = record["watched_at"]
+                    existing.save()
+                    self.summary_counts["updated"] += 1
                 self.media_instances[MediaTypes.MOVIE.value][actual_tmdb_id] = [
                     existing
                 ]
@@ -2504,6 +2674,26 @@ class PlexHistoryImporter:
                         if existing:
                             item_source, item_media_id = other_source, other_media_id
                             tv_key = f"{item_source}:{item_media_id}"
+                if existing is None:
+                    # A show tracked under another id is linked to this one
+                    # only through its provider links; the webhook finds it
+                    # the same way, so the two paths can't split one show. Only
+                    # the TMDB id is matched: the TVDB id TMDB reports can be a
+                    # parent series (D.Gray-man Hallow reports D.Gray-man's).
+                    linked_item = self.processor._find_existing_tracked_tv_item(
+                        self.user,
+                        {},
+                        actual_tmdb_id,
+                        preferred_library_media_type=anime_class,
+                    )
+                    if linked_item is not None:
+                        existing = self.existing_media[MediaTypes.TV.value][
+                            linked_item.source
+                        ].get(linked_item.media_id)
+                        if existing:
+                            item_source = linked_item.source
+                            item_media_id = linked_item.media_id
+                            tv_key = f"{item_source}:{item_media_id}"
                 if existing and self.mode == "new":
                     tv_obj = existing
                     # Apply rating from library items if available and different
@@ -2588,7 +2778,13 @@ class PlexHistoryImporter:
                         item=season_item,
                         user=self.user,
                         related_tv=tv_obj,
-                        status=Status.IN_PROGRESS.value,
+                        # History for a new season of a show the user dropped
+                        # or paused is recorded without reopening the show.
+                        status=(
+                            tv_obj.status
+                            if tv_obj.status in app.models.USER_HELD_STATUSES
+                            else Status.IN_PROGRESS.value
+                        ),
                     )
                     season_score = self._preserved_score(
                         MediaTypes.SEASON.value,
@@ -2688,7 +2884,9 @@ class PlexHistoryImporter:
         ):
             return season_metadata
 
-        remapped = self._remap_episode_via_tmdb_find(record, tv_metadata)
+        remapped = self._remap_episode_via_anibridge(record, tv_metadata)
+        if remapped is None:
+            remapped = self._remap_episode_via_tmdb_find(record, tv_metadata)
         if remapped is None:
             remapped = self._remap_episode_via_cumulative_numbering(
                 record,
@@ -2711,7 +2909,7 @@ class PlexHistoryImporter:
 
         item_identifier = (
             f"{record['series_title'] or tv_metadata.get('title')} "
-            f"S{record['season_number']}E{record['episode_number']}"
+            f"S{int(record['season_number']):02d}E{int(record['episode_number']):02d}"
         )
         self.warnings.append(
             f"{item_identifier}: not found in {Sources.TMDB.label} with ID "
@@ -2747,6 +2945,21 @@ class PlexHistoryImporter:
             find_cache=self._episode_find_cache,
         )
 
+    def _remap_episode_via_anibridge(self, record: dict, tv_metadata: dict):
+        """Resolve anime episode numbering from the cached AniBridge graph."""
+        mapping_data = self._get_anibridge_mapping_data()
+        if not mapping_data:
+            return None
+
+        return episode_remap.remap_via_anibridge(
+            mapping_data,
+            tv_metadata.get("media_id", record["tmdb_id"]),
+            record["season_number"],
+            record["episode_number"],
+            tv_metadata,
+            self._season_loader(record),
+        )
+
     def _remap_episode_via_cumulative_numbering(self, record: dict, tv_metadata: dict):
         """Carry a TVDB-numbered episode into the right TMDB split season."""
         return episode_remap.remap_via_cumulative_numbering(
@@ -2755,6 +2968,24 @@ class PlexHistoryImporter:
             tv_metadata,
             self._season_loader(record),
         )
+
+    def _get_anibridge_mapping_data(self):
+        """Load AniBridge mappings once for this import, failing open."""
+        if self._anibridge_mapping_loaded:
+            return self._anibridge_mapping_data
+
+        self._anibridge_mapping_loaded = True
+        if not getattr(self.user, "anime_enabled", False):
+            return None
+
+        try:
+            self._anibridge_mapping_data = anime_mappings.fetch_mapping_data()
+        except Exception as exc:  # pragma: no cover - defensive network guard
+            logger.warning(
+                "AniBridge mapping lookup unavailable for Plex import: %s",
+                exception_summary(exc),
+            )
+        return self._anibridge_mapping_data
 
     def _ensure_season_payload(
         self,
@@ -3087,11 +3318,17 @@ class PlexHistoryImporter:
         tv_metadata: dict,
     ):
         """Update completion status for season and TV show if applicable."""
-        if episode_number == season_metadata.get("max_progress"):
-            season_obj.status = Status.COMPLETED.value
+        if episode_number == helpers.season_last_episode_number(season_metadata):
+            # A dropped or paused show stays off the shelf (#1133).
+            if season_obj.status not in app.models.USER_HELD_STATUSES:
+                season_obj.status = Status.COMPLETED.value
 
             last_season = tv_metadata.get("last_episode_season")
-            if last_season and last_season == season_number:
+            if (
+                last_season
+                and last_season == season_number
+                and tv_obj.status not in app.models.USER_HELD_STATUSES
+            ):
                 tv_obj.status = Status.COMPLETED.value
 
     def _build_metadata(self, entry: dict) -> dict:

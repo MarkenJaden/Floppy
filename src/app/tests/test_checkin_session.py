@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.db.models import Sum
 from django.test import TestCase
 from django.urls import reverse
 
@@ -19,6 +20,39 @@ from app.models import (
     Video,
 )
 from app.track_actions import track_actions
+
+
+def running_checkin(user_id):
+    """Return the running movie or show check-in record, if any."""
+    for slot in checkin.SLOTS:
+        record = checkin._record(user_id, slot)
+        if record:
+            return record
+    return None
+
+
+def running_session(user_id):
+    """Return the running session record of any type, if any."""
+    for slot in checkin_session.MODELS:
+        record = checkin_session._record(user_id, slot)
+        if record:
+            return record
+    return None
+
+def peek_card(user_id):
+    """Return the stored card of the real playback, else the first check-in's."""
+    for slot in (None, *live_playback.CHECKIN_SLOTS):
+        state = live_playback.peek_user_playback_state(user_id, slot)
+        if state:
+            return state
+    return None
+
+
+def build_card(user):
+    """Return the first Home card, if any."""
+    cards = live_playback.build_home_playback_cards(user)
+    return cards[0] if cards else None
+
 
 HOUR = 60 * 60
 
@@ -58,7 +92,7 @@ class SessionTestCase(TestCase):
         checkin_session.start(self.user, "igdb", self.media_type, "1942")
 
     def at(self, seconds_after_start):
-        record = cache.get(checkin_session._key(self.user.id))
+        record = running_session(self.user.id)
         return patch(
             "app.checkin_session._now_ts",
             return_value=record["started_at_ts"] + seconds_after_start,
@@ -126,7 +160,7 @@ class GameSessionTests(SessionTestCase):
         first = Game.objects.filter(item=self.item).exclude(pk=self.earlier.pk).get()
         self.assertEqual(first.progress, 30)
         self.assertIsNotNone(first.end_date)
-        record = cache.get(checkin_session._key(self.user.id))
+        record = running_session(self.user.id)
         self.assertEqual(record["media_id"], "77")
 
     def test_a_session_from_before_the_record_changed_is_ignored(self):
@@ -135,7 +169,7 @@ class GameSessionTests(SessionTestCase):
         self.assertEqual(self.phase(), checkin.PHASE_IDLE)
         self.start()
 
-    def test_starting_a_game_pauses_a_running_movie_check_in(self):
+    def test_starting_a_game_leaves_a_running_movie_check_in_running(self):
         movie_item = Item.objects.create(
             media_id="603",
             source=Sources.TMDB.value,
@@ -158,13 +192,14 @@ class GameSessionTests(SessionTestCase):
         ):
             checkin.start(self.user, "movie", "603")
 
-        started = cache.get(checkin._key(self.user.id))["started_at_ts"]
+        started = running_checkin(self.user.id)["started_at_ts"]
         with patch("app.checkin._now_ts", return_value=started + 600):
             self.start()
 
-        self.assertIsNone(cache.get(checkin._key(self.user.id)))
+        self.assertIsNotNone(running_checkin(self.user.id))
+        self.assertIsNotNone(running_session(self.user.id))
         movie.refresh_from_db()
-        self.assertEqual(checkin.phase(self.user, movie)["phase"], checkin.PHASE_PAUSED)
+        self.assertEqual(checkin.phase(self.user, movie)["phase"], checkin.PHASE_ACTIVE)
 
     def test_cancel_removes_the_entry_it_added(self):
         self.start()
@@ -228,7 +263,7 @@ class GameSessionTests(SessionTestCase):
         idle = checkin.phase(self.user, self.earlier)
         self.assertEqual(
             [a["key"] for a in track_actions("game", Status.COMPLETED.value, idle)],
-            ["create", "start", "edit"],
+            ["start", "create", "edit"],
         )
         self.start()
         running = checkin.phase(self.user, self.earlier)
@@ -247,6 +282,83 @@ class BoardGameSessionTests(SessionTestCase):
 
     def plays(self):
         return BoardGame.objects.get(pk=self.earlier.pk).progress
+
+    def sessions_mode(self):
+        self.user.game_logging_style = "sessions"
+        self.user.save(update_fields=["game_logging_style"])
+
+    def test_exact_plays_are_individual_completed_entries(self):
+        self.sessions_mode()
+        checkin_session.log_play(self.user, "igdb", "1942")
+        checkin_session.log_play(self.user, "igdb", "1942")
+        entries = list(BoardGame.objects.exclude(pk=self.earlier.pk))
+        self.assertEqual(len(entries), 2)
+        for entry in entries:
+            self.assertEqual(entry.progress, 1)
+            self.assertEqual(entry.status, Status.COMPLETED.value)
+            self.assertIsNotNone(entry.start_date)
+            self.assertEqual(entry.start_date, entry.end_date)
+        self.assertEqual(self.plays(), 0)
+        self.assertEqual(BoardGame.objects.filter(item=self.item, user=self.user).aggregate(total=Sum("progress"))["total"], 2)
+        from app.history_cache import _build_game_entries
+
+        history = _build_game_entries([], entries, "sessions", False, True, None)
+        self.assertEqual({entry["instance_id"] for entry in history}, {entry.id for entry in entries})
+
+    def test_exact_checkin_completes_its_own_entry_after_preference_change(self):
+        self.sessions_mode()
+        self.start()
+        entry = BoardGame.objects.exclude(pk=self.earlier.pk).get()
+        self.assertIsNotNone(entry.start_date)
+        self.assertIsNone(entry.end_date)
+        self.user.game_logging_style = "repeats"
+        checkin_session.stop(self.user, "igdb", "boardgame", "1942")
+        entry.refresh_from_db()
+        self.assertEqual(entry.progress, 1)
+        self.assertEqual(entry.status, Status.COMPLETED.value)
+        self.assertIsNotNone(entry.end_date)
+        self.assertEqual(self.plays(), 0)
+
+    def test_repeats_checkin_keeps_its_mode_after_preference_change(self):
+        self.start()
+        self.sessions_mode()
+        checkin_session.stop(self.user, "igdb", "boardgame", "1942")
+        self.assertEqual(self.plays(), 1)
+        self.assertEqual(BoardGame.objects.count(), 1)
+
+    def test_exact_cancel_removes_unedited_entry_and_timeout_does_not_complete_it(self):
+        self.sessions_mode()
+        self.start()
+        checkin_session.cancel(self.user, "igdb", "boardgame", "1942")
+        self.assertEqual(BoardGame.objects.count(), 1)
+        self.start()
+        with self.at(4 * HOUR + 1):
+            self.assertEqual(self.phase(), checkin_session.PHASE_IDLE)
+        entry = BoardGame.objects.exclude(pk=self.earlier.pk).get()
+        self.assertEqual(entry.progress, 0)
+        self.assertIsNone(entry.end_date)
+
+    def test_native_api_records_exact_plays_and_returns_actions(self):
+        self.sessions_mode()
+        self.client.force_login(self.user)
+        url = reverse("api_media_checkin", kwargs={
+            "media_type": "boardgame", "source": "igdb", "media_id": "1942",
+        })
+        response = self.client.post(url, {"action": "log_play"}, content_type="application/json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([a["key"] for a in response.json()["actions"]], ["log_play", "start", "edit"])
+        self.assertEqual(BoardGame.objects.exclude(pk=self.earlier.pk).get().progress, 1)
+
+    def test_another_user_cannot_log_or_stop_this_session(self):
+        self.sessions_mode()
+        self.start()
+        other = get_user_model().objects.create_user(username="other-session")
+        with self.assertRaises(checkin.CheckInError):
+            checkin_session.log_play(other, "igdb", "1942")
+        with self.assertRaises(checkin.CheckInError):
+            checkin_session.stop(other, "igdb", "boardgame", "1942")
+        self.assertEqual(BoardGame.objects.filter(user=other).count(), 0)
+        self.assertEqual(self.phase(), checkin_session.PHASE_SESSION)
 
     def test_log_a_play_adds_one_to_the_latest_entry(self):
         checkin_session.log_play(self.user, "igdb", "1942")
@@ -294,7 +406,7 @@ class NowPlayingCardTests(SessionTestCase):
     """Anything checked in shows on Home as Now Playing, and leaves it when it ends."""
 
     def card(self):
-        return live_playback.peek_user_playback_state(self.user.id)
+        return peek_card(self.user.id)
 
     def test_start_shows_the_card_with_the_assumed_end(self):
         self.start()
@@ -302,7 +414,7 @@ class NowPlayingCardTests(SessionTestCase):
         card = self.card()
         self.assertEqual(card["media_type"], "game")
         self.assertEqual(card["title"], "Hades")
-        record = cache.get(checkin_session._key(self.user.id))
+        record = running_session(self.user.id)
         self.assertEqual(card["checkin_token"], record["token"])
         self.assertEqual(record["end_ts"] - record["started_at_ts"], 4 * HOUR)
 
@@ -356,7 +468,7 @@ class ReadingSessionTests(SessionTestCase):
         self.assertEqual(read.status, Status.IN_PROGRESS.value)
         self.assertEqual(read.entry_source, "check-in")
         self.assertEqual(
-            live_playback.peek_user_playback_state(self.user.id)["media_type"], "book"
+            peek_card(self.user.id)["media_type"], "book"
         )
 
     def test_an_unfinished_book_is_picked_up_where_it_is(self):
@@ -378,7 +490,93 @@ class ReadingSessionTests(SessionTestCase):
         self.earlier.refresh_from_db()
         self.assertIsNotNone(self.earlier.end_date)
         self.assertEqual(self.earlier.progress, 0)
-        self.assertIsNone(live_playback.peek_user_playback_state(self.user.id))
+        self.assertIsNone(peek_card(self.user.id))
+
+    def test_stop_adds_the_elapsed_minutes_to_reading_time(self):
+        Book.objects.filter(pk=self.earlier.pk).update(status=Status.PLANNING.value)
+        self.start()
+
+        with self.at(95 * 60 + 10):
+            checkin_session.stop(self.user, "openlibrary", "book", "1942")
+
+        self.earlier.refresh_from_db()
+        self.assertEqual(self.earlier.reading_time, 96)
+
+    def test_a_second_session_adds_to_the_same_read(self):
+        Book.objects.filter(pk=self.earlier.pk).update(
+            status=Status.IN_PROGRESS.value,
+            reading_time=30,
+        )
+        self.start()
+
+        with self.at(20 * 60):
+            checkin_session.stop(self.user, "openlibrary", "book", "1942")
+
+        self.earlier.refresh_from_db()
+        self.assertEqual(self.earlier.reading_time, 50)
+
+    def test_a_re_read_starts_its_own_reading_time(self):
+        Book.objects.filter(pk=self.earlier.pk).update(reading_time=300)
+        self.start()
+
+        with self.at(10 * 60):
+            checkin_session.stop(self.user, "openlibrary", "book", "1942")
+
+        read = Book.objects.exclude(pk=self.earlier.pk).get()
+        self.assertEqual(read.reading_time, 10)
+        self.earlier.refresh_from_db()
+        self.assertEqual(self.earlier.reading_time, 300)
+
+    def test_a_replaced_check_in_keeps_the_time_read(self):
+        Book.objects.filter(pk=self.earlier.pk).update(status=Status.PLANNING.value)
+        self.start()
+
+        with self.at(15 * 60):
+            self.start()
+
+        self.earlier.refresh_from_db()
+        self.assertEqual(self.earlier.reading_time, 15)
+
+    def test_cancel_and_a_forgotten_session_add_no_reading_time(self):
+        Book.objects.filter(pk=self.earlier.pk).update(status=Status.PLANNING.value)
+        self.start()
+        checkin_session.cancel(self.user, "openlibrary", "book", "1942")
+        self.start()
+
+        with self.at(5 * HOUR):
+            checkin_session.settle(self.user.id)
+
+        self.earlier.refresh_from_db()
+        self.assertEqual(self.earlier.reading_time, 0)
+
+    def test_an_audiobook_has_no_reading_time(self):
+        Item.objects.filter(pk=self.item.pk).update(format="audiobook")
+        Book.objects.filter(pk=self.earlier.pk).update(status=Status.PLANNING.value)
+        self.start()
+
+        with self.at(30 * 60):
+            checkin_session.stop(self.user, "openlibrary", "book", "1942")
+
+        self.earlier.refresh_from_db()
+        self.assertEqual(self.earlier.reading_time, 0)
+
+    def test_manga_reading_time_builds_up_on_its_one_entry(self):
+        item = Item.objects.create(
+            media_id="5",
+            source=Sources.MANGAUPDATES.value,
+            media_type=MediaTypes.MANGA.value,
+            title="Berserk",
+        )
+        row = Manga.objects.create(
+            item=item, user=self.user, status=Status.COMPLETED.value, reading_time=40
+        )
+
+        checkin_session.start(self.user, "mangaupdates", "manga", "5")
+        with self.at(25 * 60):
+            checkin_session.stop(self.user, "mangaupdates", "manga", "5")
+
+        row.refresh_from_db()
+        self.assertEqual(row.reading_time, 65)
 
     def test_cancel_puts_the_entry_back(self):
         Book.objects.filter(pk=self.earlier.pk).update(status=Status.PLANNING.value)
@@ -453,7 +651,7 @@ class VideoSessionTests(SessionTestCase):
     def test_the_card_ends_when_the_video_does(self):
         self.start()
 
-        record = cache.get(checkin_session._key(self.user.id))
+        record = running_session(self.user.id)
         self.assertEqual(record["end_ts"] - record["started_at_ts"], 600)
 
     def test_stop_saves_the_time_watched(self):
@@ -507,14 +705,63 @@ class SessionViewTests(SessionTestCase):
             kwargs={"source": "igdb", "media_type": media_type, "media_id": "1942"},
         )
 
-    def test_start_then_stop_refreshes_the_page(self):
+    def test_start_then_stop_updates_tracking_without_reloading(self):
         started = self.client.post(self.url(), {"action": "start"})
         stopped = self.client.post(self.url(), {"action": "stop"})
 
         for response in (started, stopped):
-            self.assertEqual(response.status_code, 204)
-            self.assertEqual(response["HX-Refresh"], "true")
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn("HX-Refresh", response)
+            self.assertContains(response, 'hx-swap-oob="outerHTML"')
+            self.assertNotContains(response, "detail-carousel-wrap")
         self.assertEqual(Game.objects.count(), 2)
+
+    def test_refresh_keeps_the_same_session_and_modal_targets(self):
+        started = self.client.post(self.url(), {"action": "start"})
+        current = Game.objects.order_by("-id").first()
+        self.assertContains(started, "Stop</span>")
+        self.assertContains(started, f'"instance_id": "{current.id}"')
+        count = Game.objects.count()
+        with patch("app.providers.services.get_media_metadata", side_effect=AssertionError("provider called")):
+            refreshed = self.client.post(self.url(), {"action": "refresh"})
+        self.assertEqual(refreshed.status_code, 200)
+        self.assertEqual(Game.objects.count(), count)
+        self.assertContains(refreshed, "/details/igdb/game/1942/hades")
+        self.assertNotContains(refreshed, "location.reload()")
+        cancelled = self.client.post(self.url(), {"action": "cancel"})
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(list(Game.objects.all()), [self.earlier])
+        self.assertContains(cancelled, "Check-in</span>")
+
+    def test_now_playing_stop_saves_elapsed_game_time(self):
+        self.client.post(self.url(), {"action": "start"})
+        record = running_session(self.user.id)
+        card = build_card(self.user)
+        self.assertEqual(card["checkin_control"]["action"], "stop")
+        with patch("app.checkin_session._now_ts", return_value=record["started_at_ts"] + 120):
+            response = self.client.post(self.url(), {
+                "action": "stop", "from_now_playing": "1", "checkin_token": record["token"],
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"")
+        self.assertNotIn("HX-Refresh", response)
+        self.assertIsNone(build_card(self.user))
+        self.assertEqual(Game.objects.get(pk=record["row_id"]).progress, 2)
+
+    def test_now_playing_cancel_removes_the_session_it_started(self):
+        self.client.post(self.url(), {"action": "start"})
+        record = running_session(self.user.id)
+        fragment = self.client.get(reverse("active_playback_fragment"))
+        self.assertContains(fragment, 'aria-label="Stop check-in"')
+        self.assertContains(fragment, 'aria-label="Cancel check-in"')
+        self.assertContains(fragment, "rounded-full", count=2)
+        response = self.client.post(self.url(), {
+            "action": "cancel", "from_now_playing": "1", "checkin_token": record["token"],
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"")
+        self.assertEqual(list(Game.objects.all()), [self.earlier])
+        self.assertIsNone(build_card(self.user))
 
     def test_movie_actions_are_not_available_for_a_game(self):
         for name in ("pause", "finish", "resume"):

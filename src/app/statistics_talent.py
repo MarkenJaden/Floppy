@@ -6,10 +6,10 @@ from heapq import nsmallest
 from types import SimpleNamespace
 
 from django.conf import settings
+from django.db import connection
 from django.db.models import Q
 
 from app import credits as credit_helpers
-from app import statistics as stats
 from app.models import (
     CreditRoleType,
     Episode,
@@ -23,12 +23,24 @@ from app.models import (
     PersonGender,
     Studio,
 )
+from app.stats_utils import _format_hours_minutes
 
 logger = logging.getLogger(__name__)
 
 # Controls the maximum items shown in every top-N statistics card.
 # Change this ONE value to resize all top cards simultaneously.
 STATISTICS_TOP_N = 50
+# Scan credits sequentially for dense SQLite watch histories.
+DENSE_CREDIT_SCAN_MIN_ITEMS = 1_000
+DENSE_CREDIT_SCAN_RATIO = 0.8
+# Played items per credit query on the sparse path.
+TALENT_CREDIT_BATCH_SIZE = 500
+# Credited people per gender/name lookup.
+TALENT_PERSON_BATCH_SIZE = 2000
+# When a range credits most known people (All Time on a large library), one
+# sequential read of app_person costs a fraction of a key lookup per person.
+TALENT_PERSON_SCAN_MIN = 10_000
+TALENT_PERSON_SCAN_RATIO = 0.5
 # Cross-type global top-rated heap — intentionally same value but a distinct card.
 STATISTICS_TOP_RATED_OVERALL = 50
 
@@ -69,7 +81,7 @@ def _tv_episode_play_rows(user, start_date, end_date, *, is_all_time=None):
     """Return watched TV episode rows and the season/show items they touch."""
     if is_all_time is None:
         is_all_time = start_date is None and end_date is None
-    episodes_qs = Episode.objects.filter(related_season__user=user)
+    episodes_qs = Episode.objects.filter(Episode.watch_q(), related_season__user=user)
     if not is_all_time:
         if start_date or end_date:
             episodes_qs = episodes_qs.filter(end_date__isnull=False)
@@ -116,6 +128,7 @@ def _tv_episode_play_rows(user, start_date, end_date, *, is_all_time=None):
     if season_item_ids:
         for credit in (
             ItemPersonCredit.objects.filter(item_id__in=season_item_ids)
+            .order_by()
             .values_list("item_id", "role_type", "department", "role", named=True)
             .iterator(chunk_size=500)
         ):
@@ -346,18 +359,24 @@ def _get_person_talent_totals_from_context(user, person, context):
     director_credit_item_ids = set()
     writer_credit_item_ids = set()
 
-    person_credits = ItemPersonCredit.objects.filter(
-        item_id__in=played_item_ids,
-        person_id=person.id,
-    ).values_list(
-        "item_id",
-        "role_type",
-        "department",
-        "role",
-        "sort_order",
-        named=True,
+    # One person has at most a few hundred credits, read through the person
+    # index. Filtering by the played IDs in SQL meant an IN list of every
+    # played item, thousands of index probes that took a minute on slow disks.
+    person_credits = (
+        ItemPersonCredit.objects.filter(person_id=person.id)
+        .order_by()
+        .values_list(
+            "item_id",
+            "role_type",
+            "department",
+            "role",
+            "sort_order",
+            named=True,
+        )
     )
     for credit in person_credits.iterator(chunk_size=500):
+        if credit.item_id not in played_item_ids:
+            continue
         item_media_type = item_media_type_by_id.get(credit.item_id)
         if not item_media_type:
             continue
@@ -497,7 +516,7 @@ def _get_person_talent_totals_from_context(user, person, context):
             "bucket": bucket,
             "plays": int(bucket_plays.get(bucket, 0)),
             "watched_minutes": watched_minutes,
-            "watched_time": stats._format_hours_minutes(
+            "watched_time": _format_hours_minutes(
                 watched_minutes, user.duration_format
             ),
             "unique_movies": unique_movies,
@@ -782,49 +801,108 @@ def _aggregate_top_talent(
     people_by_id = {}
     studios_by_id = {}
 
-    # Project only aggregation fields. A cached select_related queryset keeps a
-    # separate Person instance (including biography) alive for every credit.
-    person_credits = ItemPersonCredit.objects.filter(
-        item_id__in=played_item_ids
-    ).values_list(
-        "item_id",
-        "person_id",
-        "role_type",
-        "role",
-        "department",
-        "sort_order",
-        "person__gender",
-        "person__name",
-        named=True,
+    # Project only aggregation fields, avoiding materialised Person objects.
+    # Sparse histories use the indexed, batched query introduced upstream in
+    # #1855. For dense SQLite histories, a sequential scan avoids repeated
+    # index probes and expensive person-join plans.
+    dense_credit_scan = (
+        connection.vendor == "sqlite"
+        and len(played_item_ids) >= DENSE_CREDIT_SCAN_MIN_ITEMS
+        and len(played_item_ids) >= Item.objects.count() * DENSE_CREDIT_SCAN_RATIO
     )
-    for credit in person_credits.iterator(chunk_size=500):
-        person_names[credit.person_id] = credit.person__name.lower()
-        if credit.role_type == CreditRoleType.CAST.value:
-            item_media_type = item_media_type_by_id.get(credit.item_id)
-            if (
-                item_media_type == MediaTypes.TV.value
-                and not credit_helpers.is_usable_tv_show_credit(
-                    item_source_by_id.get(credit.item_id),
-                    credit.role_type,
-                    credit.sort_order,
-                )
-            ):
+    played_item_id_batches = list(played_item_ids)
+    batch_size = TALENT_CREDIT_BATCH_SIZE
+    if dense_credit_scan:
+        credit_querysets = (ItemPersonCredit.objects.all().order_by(),)
+    else:
+        credit_querysets = (
+            ItemPersonCredit.objects.filter(
+                item_id__in=played_item_id_batches[offset : offset + batch_size]
+            ).order_by()
+            for offset in range(0, len(played_item_id_batches), batch_size)
+        )
+
+    # Credits are read without joining app_person: a person credited on many
+    # titles would be looked up again in every batch (about 2M page reads for
+    # an All Time range on PostgreSQL). Gender and name are read once per
+    # person below.
+    cast_ids_by_item = defaultdict(set)
+    talent_person_ids = set()
+    for person_credit_qs in credit_querysets:
+        person_credits = person_credit_qs.values_list(
+            "item_id",
+            "person_id",
+            "role_type",
+            "role",
+            "department",
+            "sort_order",
+            named=True,
+        )
+        chunk_size = 2000 if dense_credit_scan else batch_size
+        for credit in person_credits.iterator(chunk_size=chunk_size):
+            if dense_credit_scan and credit.item_id not in played_item_ids:
                 continue
-            if credit.person__gender == PersonGender.FEMALE.value:
-                cast_actress_ids_by_item[credit.item_id].add(credit.person_id)
-            else:
-                cast_actor_ids_by_item[credit.item_id].add(credit.person_id)
-            continue
-        if credit.role_type == CreditRoleType.CREW.value:
-            if _is_director_credit(credit):
-                director_ids_by_item[credit.item_id].add(credit.person_id)
-            if _is_writer_credit(credit):
-                writer_ids_by_item[credit.item_id].add(credit.person_id)
+            talent_person_ids.add(credit.person_id)
+            if credit.role_type == CreditRoleType.CAST.value:
+                item_media_type = item_media_type_by_id.get(credit.item_id)
+                if (
+                    item_media_type == MediaTypes.TV.value
+                    and not credit_helpers.is_usable_tv_show_credit(
+                        item_source_by_id.get(credit.item_id),
+                        credit.role_type,
+                        credit.sort_order,
+                    )
+                ):
+                    continue
+                cast_ids_by_item[credit.item_id].add(credit.person_id)
+                continue
+            if credit.role_type == CreditRoleType.CREW.value:
+                if _is_director_credit(credit):
+                    director_ids_by_item[credit.item_id].add(credit.person_id)
+                if _is_writer_credit(credit):
+                    writer_ids_by_item[credit.item_id].add(credit.person_id)
+
+    female_person_ids = set()
+    talent_person_id_list = list(talent_person_ids)
+    if (
+        len(talent_person_id_list) >= TALENT_PERSON_SCAN_MIN
+        and len(talent_person_id_list)
+        >= Person.objects.count() * TALENT_PERSON_SCAN_RATIO
+    ):
+        person_row_sets = (
+            Person.objects.order_by()
+            .values_list("id", "gender", "name")
+            .iterator(chunk_size=TALENT_PERSON_BATCH_SIZE),
+        )
+    else:
+        person_row_sets = (
+            Person.objects.filter(
+                pk__in=talent_person_id_list[offset : offset + TALENT_PERSON_BATCH_SIZE],
+            ).values_list("id", "gender", "name")
+            for offset in range(
+                0, len(talent_person_id_list), TALENT_PERSON_BATCH_SIZE
+            )
+        )
+    for person_rows in person_row_sets:
+        for person_id, gender, name in person_rows:
+            if person_id not in talent_person_ids:
+                continue
+            person_names[person_id] = name.lower()
+            if gender == PersonGender.FEMALE.value:
+                female_person_ids.add(person_id)
+    for item_id, cast_ids in cast_ids_by_item.items():
+        actress_ids = cast_ids & female_person_ids
+        if actress_ids:
+            cast_actress_ids_by_item[item_id] = actress_ids
+        if len(actress_ids) < len(cast_ids):
+            cast_actor_ids_by_item[item_id] = cast_ids - actress_ids
 
     studio_item_ids = movie_item_ids | show_item_ids | game_item_ids
-    studio_credits = ItemStudioCredit.objects.filter(
-        item_id__in=studio_item_ids
-    ).values_list("item_id", "studio_id", "studio__name")
+    studio_credits = (
+        ItemStudioCredit.objects.filter(item_id__in=studio_item_ids)
+        .order_by()
+        .values_list("item_id", "studio_id", "studio__name")
+    )
     for item_id, studio_id, name in studio_credits.iterator(chunk_size=500):
         studio_names[studio_id] = name.lower()
         studio_ids_by_item[item_id].add(studio_id)
@@ -1114,7 +1192,7 @@ def _aggregate_top_talent(
                     "person_id": person.source_person_id,
                     "plays": int(plays),
                     "watched_minutes": watched_minutes,
-                    "watched_time": stats._format_hours_minutes(
+                    "watched_time": _format_hours_minutes(
                         watched_minutes, user.duration_format
                     ),
                     "unique_movies": unique_movies,
@@ -1169,7 +1247,7 @@ def _aggregate_top_talent(
                     "studio_id": studio.source_studio_id,
                     "plays": int(plays),
                     "watched_minutes": watched_minutes,
-                    "watched_time": stats._format_hours_minutes(
+                    "watched_time": _format_hours_minutes(
                         watched_minutes, user.duration_format
                     ),
                     "unique_movies": unique_movies,

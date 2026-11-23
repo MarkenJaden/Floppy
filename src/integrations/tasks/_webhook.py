@@ -1,17 +1,23 @@
-import json
 import logging
+import time
 from contextlib import contextmanager, suppress
 from types import SimpleNamespace
 
 import requests
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.utils.module_loading import import_string
 from simple_history.models import HistoricalRecords
 
-from app import cache_safety
-from app.log_safety import redact_payload_pii, redact_secrets
+from app import cache_safety, live_playback
+from app.log_safety import mapping_keys
+from app.providers import credentials
 from app.providers.services import ProviderAPIError
+from config.celery import FloppyTask
 from integrations import anime_mapping
 from integrations.models import PlexWebhookShare
 
@@ -26,9 +32,84 @@ WEBHOOK_PROCESSORS = {
     "stremio": "integrations.webhooks.stremio.StremioWebhookProcessor",
 }
 
-# Bounds one event's logged payload so a pathological payload can't crowd out
-# other log history in the rotating file the sanitized log export reads from.
-_WEBHOOK_PAYLOAD_LOG_CAP = 4000
+# Queue wait is logged as a millisecond value plus one fixed bucket label, so
+# the distribution is visible without a metrics backend. Anything past the
+# warning threshold deserves an incident note (see
+# docs/architecture/webhook-delivery.md).
+QUEUE_DELAY_BUCKETS_MS = (100, 500, 1_000, 5_000, 10_000, 30_000)
+QUEUE_DELAY_WARNING_MS = 10_000
+
+
+def _queue_delay_bucket(delay_ms):
+    """Return the histogram bucket label for a queue delay."""
+    if delay_ms is None:
+        return "unknown"
+    for upper in QUEUE_DELAY_BUCKETS_MS:
+        if delay_ms <= upper:
+            return f"le_{upper}ms"
+    return f"gt_{QUEUE_DELAY_BUCKETS_MS[-1]}ms"
+
+
+def _event_identity(payload):
+    """Return the provider event and item key for correlation, never values."""
+    event = metadata = None
+    if isinstance(payload, dict):
+        event = payload.get("event") or payload.get("Event")
+        metadata = payload.get("Metadata") or payload.get("Item") or {}
+    rating_key = None
+    if isinstance(metadata, dict):
+        rating_key = (
+            metadata.get("ratingKey")
+            or metadata.get("ratingkey")
+            or metadata.get("Id")
+            or metadata.get("id")
+        )
+    rating_key = str(rating_key).strip() if rating_key is not None else None
+    return event, rating_key or None
+
+
+def _log_webhook_finished(
+    *,
+    event_id,
+    provider,
+    user_id,
+    event,
+    rating_key,
+    outcome,
+    started,
+):
+    """Log the terminal state of one webhook task attempt."""
+    logger.info(
+        "webhook_finished event_id=%s provider=%s user_id=%s event=%s "
+        "rating_key=%s outcome=%s elapsed_ms=%s",
+        event_id,
+        provider,
+        user_id,
+        event,
+        rating_key,
+        outcome,
+        int((time.monotonic() - started) * 1000),
+    )
+
+
+def _received_at_details(received_at):
+    """Return (queue delay in ms, event epoch seconds) for a receipt timestamp.
+
+    The epoch keeps its fraction: two events received in the same second must
+    still order correctly when a backlog processes them in reverse.
+    """
+    if not received_at:
+        return None, None
+    try:
+        received = parse_datetime(received_at)
+    except (TypeError, ValueError):
+        return None, None
+    if received is None:
+        return None, None
+    if timezone.is_naive(received):
+        received = timezone.make_aware(received)
+    delay_ms = max(0, int((timezone.now() - received).total_seconds() * 1000))
+    return delay_ms, received.timestamp()
 
 
 @contextmanager
@@ -46,13 +127,58 @@ def _webhook_history_user(user):
             del HistoricalRecords.context.request
 
 
-def _process_webhook(provider, payload, user_id, share_id=None):
+def _process_webhook(
+    provider,
+    payload,
+    user_id,
+    share_id=None,
+    received_at=None,
+    event_id=None,
+):
     """Process a validated media server webhook payload in the worker."""
+    started = time.monotonic()
+    event, rating_key = _event_identity(payload)
+    queue_delay_ms, event_ts = _received_at_details(received_at)
+    logger.info(
+        "webhook_started event_id=%s provider=%s user_id=%s event=%s "
+        "rating_key=%s queue_delay_ms=%s queue_delay_bucket=%s",
+        event_id,
+        provider,
+        user_id,
+        event,
+        rating_key,
+        queue_delay_ms,
+        _queue_delay_bucket(queue_delay_ms),
+    )
+    if queue_delay_ms is not None and queue_delay_ms > QUEUE_DELAY_WARNING_MS:
+        logger.warning(
+            "webhook_slow_queue event_id=%s provider=%s user_id=%s event=%s "
+            "rating_key=%s queue_delay_ms=%s",
+            event_id,
+            provider,
+            user_id,
+            event,
+            rating_key,
+            queue_delay_ms,
+        )
+
+    def finish(outcome):
+        _log_webhook_finished(
+            event_id=event_id,
+            provider=provider,
+            user_id=user_id,
+            event=event,
+            rating_key=rating_key,
+            outcome=outcome,
+            started=started,
+        )
+
     user_model = get_user_model()
     share = None
     source_account = None
     source_username = None
     source_libraries = None
+    result = None
 
     if share_id is not None:
         try:
@@ -65,17 +191,26 @@ def _process_webhook(provider, payload, user_id, share_id=None):
                 recipient_enabled=True,
             )
         except PlexWebhookShare.DoesNotExist:
-            logger.info("Skipping disabled or missing Plex webhook share id %s", share_id)
+            logger.info(
+                "Skipping disabled or missing Plex webhook share id %s", share_id
+            )
+            finish("ignored")
             return
 
         if not share.owner.is_active:
-            logger.info("Skipping Plex webhook share from inactive owner id %s", share.owner_id)
+            logger.info(
+                "Skipping Plex webhook share from inactive owner id %s", share.owner_id
+            )
+            finish("ignored")
             return
 
         user = share.recipient
         source_account = getattr(share.owner, "plex_account", None)
         if not source_account or not source_account.plex_token:
-            logger.info("Skipping Plex webhook share %s without an owner Plex account", share.id)
+            logger.info(
+                "Skipping Plex webhook share %s without an owner Plex account", share.id
+            )
+            finish("ignored")
             return
         source_username = share.plex_username
         source_libraries = share.allowed_libraries
@@ -83,14 +218,20 @@ def _process_webhook(provider, payload, user_id, share_id=None):
         try:
             user = user_model.objects.get(pk=user_id)
         except user_model.DoesNotExist:
-            logger.warning("Skipping %s webhook for missing user id %s", provider, user_id)
+            logger.warning(
+                "Skipping %s webhook for missing user id %s", provider, user_id
+            )
+            finish("ignored")
             return
 
     if not user.is_active:
         logger.info("Skipping %s webhook for inactive user id %s", provider, user.id)
+        finish("ignored")
         return
 
     processor = import_string(WEBHOOK_PROCESSORS[provider])()
+    processor._event_ts = event_ts
+    processor._event_id = event_id
     if user.anime_enabled:
         try:
             processor._grouped_anime_snapshot = anime_mapping.load_mapping_snapshot()
@@ -107,19 +248,18 @@ def _process_webhook(provider, payload, user_id, share_id=None):
                 error,
             )
 
-    dumped_payload = redact_secrets(
-        json.dumps(redact_payload_pii(payload), default=str),
-    )
-    if len(dumped_payload) > _WEBHOOK_PAYLOAD_LOG_CAP:
-        dumped_payload = dumped_payload[:_WEBHOOK_PAYLOAD_LOG_CAP] + "...[truncated]"
-    logger.info("Webhook payload for %s: %s", provider, dumped_payload)
+    logger.info("Webhook received provider=%s keys=%s", provider, mapping_keys(payload))
 
     try:
-        with _webhook_history_user(user):
+        with (
+            _webhook_history_user(user),
+            credentials.current_user_scope(user),
+            live_playback.webhook_event_time(event_ts),
+        ):
             if share is None:
-                processor.process_payload(payload, user)
+                result = processor.process_payload(payload, user)
             else:
-                processor.process_payload(
+                result = processor.process_payload(
                     payload,
                     user,
                     source_account=source_account,
@@ -128,9 +268,14 @@ def _process_webhook(provider, payload, user_id, share_id=None):
                 )
     except Exception:
         logger.exception(
-            "Error processing %s webhook payload%s",
+            "Error processing %s webhook payload%s event_id=%s event=%s "
+            "rating_key=%s outcome=error elapsed_ms=%s",
             provider,
             f" for Plex webhook share {share.id}" if share else "",
+            event_id,
+            event,
+            rating_key,
+            int((time.monotonic() - started) * 1000),
         )
         if provider == "plex" and share is None:
             user.mark_plex_webhook_error(
@@ -139,6 +284,11 @@ def _process_webhook(provider, payload, user_id, share_id=None):
         raise
     if provider == "plex" and share is None:
         user.mark_plex_webhook_received()
+
+    outcome = getattr(processor, "outcome", None) or "skipped"
+    if outcome == "skipped" and result is not None:
+        outcome = "persisted"
+    finish(outcome)
 
     if provider == "jellyfin":
         _queue_jellyfin_instant_push(user, payload)
@@ -178,29 +328,151 @@ def _queue_jellyfin_instant_push(user, payload):
     )
 
 
+# A message that kills its worker every time (too much memory, a crash in a
+# library) is handed back every time, because these tasks acknowledge late. Cap
+# how often one message may start so it cannot hold the interactive queue
+# forever. Four normal attempts (one plus three retries) fit well inside it.
+# Counted by Celery task id, which a redelivery and a retry both keep.
+MAX_WEBHOOK_STARTS = 8
+WEBHOOK_STARTS_TTL_SECONDS = 6 * 60 * 60
+
+# Options shared by every task whose broker message is the only copy of an
+# event the receiver already answered. The message is acknowledged only after
+# the task finishes, so a worker stopped or killed mid-task (deploy, restart,
+# out of memory) leaves it unacknowledged and the broker delivers it again.
+# Each task is repeat-safe (test_webhook_redelivery). Task-level only: imports
+# and rebuilds are long and not all repeat-safe. See webhook-delivery.md.
+REDELIVERED_TASK_OPTIONS = {
+    "acks_late": True,
+    "reject_on_worker_lost": True,
+}
+
+
+def _count_task_start(task_id):
+    """Return how many times this message has started, or None if unknown."""
+    if not task_id:
+        return None
+    key = f"webhook_starts:{task_id}"
+    try:
+        cache.add(key, 0, timeout=WEBHOOK_STARTS_TTL_SECONDS)
+        return cache.incr(key)
+    except Exception:
+        return None
+
+
+class _WebhookTask(FloppyTask):
+    """Caps redeliveries and logs an event that will not be tried again."""
+
+    def _log_fields(self, args, kwargs):
+        """Return (event id, provider, user id) without payload values."""
+        if self.name == "Process media server webhook":
+            provider, _payload, user_id, *_ = (*args, None, None, None)
+            return (
+                kwargs.get("event_id"),
+                kwargs.get("provider", provider),
+                kwargs.get("user_id", user_id),
+            )
+        # Stremio tasks: (payload or kind, user_id, ...) or (session_id,).
+        user_id = kwargs.get("user_id", args[1] if len(args) > 1 else None)
+        return self.request.id, "stremio", user_id
+
+    def __call__(self, *args, **kwargs):
+        """Drop a message that has started too many times, else run it."""
+        starts = _count_task_start(self.request.id)
+        if starts is not None and starts > MAX_WEBHOOK_STARTS:
+            event_id, provider, user_id = self._log_fields(args, kwargs)
+            logger.warning(
+                "webhook_failed event_id=%s provider=%s user_id=%s outcome=error "
+                "starts=%s error=TooManyDeliveries",
+                event_id,
+                provider,
+                user_id,
+                starts,
+            )
+            return None
+        return super().__call__(*args, **kwargs)
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        """Log one WARNING when the final attempt fails (no payload values)."""
+        event_id, provider, user_id = self._log_fields(args, kwargs)
+        logger.warning(
+            "webhook_failed event_id=%s provider=%s user_id=%s outcome=error "
+            "retries=%s error=%s",
+            event_id,
+            provider,
+            user_id,
+            self.request.retries,
+            type(exc).__name__,
+        )
+        super().on_failure(exc, task_id, args, kwargs, einfo)
+
+
 @shared_task(
     name="Process media server webhook",
+    base=_WebhookTask,
+    **REDELIVERED_TASK_OPTIONS,
     # A provider blip used to discard the scrobble outright, since the task
-    # re-raised with no retry configured (#521). Only provider/network errors are
-    # retried: a malformed payload will fail identically every time, and
-    # retrying it would just burn the worker.
-    autoretry_for=(ProviderAPIError, requests.exceptions.RequestException),
+    # re-raised with no retry configured (#521). Only provider/network errors
+    # and the soft time limit are retried: a malformed payload will fail
+    # identically every time, and retrying it would just burn the worker.
+    autoretry_for=(
+        ProviderAPIError,
+        requests.exceptions.RequestException,
+        SoftTimeLimitExceeded,
+    ),
     max_retries=3,
     retry_backoff=True,
     retry_jitter=True,
+    # A wedged metadata lookup used to hold this interactive worker slot
+    # indefinitely; the delay surfaced as minutes of webhook lag (#1708).
+    soft_time_limit=120,
+    time_limit=150,
 )
-def process_webhook(provider, payload, user_id, share_id=None):
+def process_webhook(
+    provider,
+    payload,
+    user_id,
+    share_id=None,
+    received_at=None,
+    event_id=None,
+):
     """Process a media-server webhook using its provider-specific processor.
 
     Keeps webhook HTTP handlers fast: external metadata lookups and DB writes
     run on the worker instead of blocking a web worker.
+
+    ``received_at`` is the request arrival time, used for queue-delay
+    telemetry and to keep a late event from overwriting newer state.
+    ``event_id`` ties receipt, worker start and the saved result together.
     """
-    return _process_webhook(provider, payload, user_id, share_id=share_id)
+    return _process_webhook(
+        provider,
+        payload,
+        user_id,
+        share_id=share_id,
+        received_at=received_at,
+        event_id=event_id,
+    )
+
+
+def _schedule_verifier(session_id, countdown, revision):
+    """Queue the verifier for one session revision."""
+    verify_stremio_playback.apply_async(
+        args=[session_id],
+        kwargs={"revision": revision},
+        countdown=countdown,
+    )
 
 
 @shared_task(
     name="Process Stremio playback webhook",
-    autoretry_for=(ProviderAPIError, requests.exceptions.RequestException),
+    base=_WebhookTask,
+    **REDELIVERED_TASK_OPTIONS,
+    autoretry_for=(
+        ProviderAPIError,
+        requests.exceptions.RequestException,
+        SoftTimeLimitExceeded,
+    ),
     max_retries=3,
     retry_backoff=True,
     retry_jitter=True,
@@ -220,14 +492,10 @@ def process_stremio_webhook(payload, user_id, queue_member=None):
 
     from integrations.stremio_playback import start_session
 
-    decision = start_session(payload, user_id)
-    if decision.status == "schedule":
-        verify_stremio_playback.apply_async(
-            args=[decision.session_id],
-            countdown=decision.countdown,
-            queue="interactive",
-        )
-    else:
+    # The first verifier is queued inside start_session, before the session is
+    # stored, so a worker lost in between still leaves one waiting.
+    decision = start_session(payload, user_id, schedule=_schedule_verifier)
+    if decision.status != "schedule":
         logger.info(
             "stremio_verify_start status=%s reason=%s user_id=%s media_id=%s",
             decision.status,
@@ -239,23 +507,86 @@ def process_stremio_webhook(payload, user_id, queue_member=None):
 
 
 @shared_task(
-    name="Verify Stremio playback completion",
+    name="Process Stremio tracker event",
+    base=_WebhookTask,
+    **REDELIVERED_TASK_OPTIONS,
+    autoretry_for=(
+        ProviderAPIError,
+        requests.exceptions.RequestException,
+        SoftTimeLimitExceeded,
+    ),
+    max_retries=3,
+    retry_backoff=True,
+    retry_jitter=True,
     soft_time_limit=90,
     time_limit=120,
 )
-def verify_stremio_playback(session_id):
-    """Run one bounded observation and schedule only the requested successor."""
-    from integrations.stremio_playback import observe_session
+def process_stremio_tracker_event(
+    kind,
+    user_id,
+    media_type,
+    media_id,
+    extra,
+    received_at,
+):
+    """Record one Stremio player or library event on the worker.
 
-    decision = observe_session(session_id)
-    if decision.status == "schedule":
-        verify_stremio_playback.apply_async(
-            args=[session_id],
-            countdown=decision.countdown,
-            queue="interactive",
-        )
-    elif decision.status == "complete":
+    `received_at` is when the request arrived, so a queued event keeps its place
+    in the session even if the worker picks it up late.
+    """
+    from django.utils.dateparse import parse_datetime
+
+    from integrations import stremio_tracker
+
+    user = get_user_model().objects.filter(pk=user_id).first()
+    if user is None:
+        return "unknown_user"
+    handler = (
+        stremio_tracker.record_player_event
+        if kind == "player"
+        else stremio_tracker.record_library_event
+    )
+    return handler(
+        user,
+        media_type,
+        media_id,
+        extra,
+        now=parse_datetime(received_at),
+    )
+
+
+@shared_task(
+    name="Verify Stremio playback completion",
+    base=_WebhookTask,
+    **REDELIVERED_TASK_OPTIONS,
+    # A retry is safe: the verifier carries the session revision it was queued
+    # for, and a claimed completion is handed back until its play is saved.
+    autoretry_for=(
+        ProviderAPIError,
+        requests.exceptions.RequestException,
+        SoftTimeLimitExceeded,
+    ),
+    max_retries=3,
+    retry_backoff=True,
+    retry_jitter=True,
+    soft_time_limit=90,
+    time_limit=120,
+)
+def verify_stremio_playback(session_id, revision=None):
+    """Run one bounded observation; its successor is queued before it is stored.
+
+    ``revision`` is the session revision this verifier was queued for, so a
+    redelivered or duplicate verifier stops once the session has moved on.
+    Messages queued before it existed carry none and skip that check.
+    """
+    from integrations.stremio_playback import finish_completion, observe_session
+
+    decision = observe_session(
+        session_id, revision=revision, schedule=_schedule_verifier
+    )
+    if decision.status == "complete":
         _process_webhook("stremio", decision.payload, decision.user_id)
+        finish_completion(session_id)
     logger.info(
         "stremio_verify status=%s reason=%s session_id=%s",
         decision.status,

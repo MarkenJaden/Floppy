@@ -1,0 +1,50 @@
+/* The sidebar host adds no box: its children lay out inside the server's <aside>. */
+[data-sidebar-root] {
+  display: contents;
+}
+
+/*
+ * Web-only: the closed clip is also visibility:hidden, so the sidebar measuring itself
+ * on load records no layout shift. A clipped, translated box still counts as one.
+ * Visibility flips straight away on open and waits for the slide on close. Native
+ * animates a measured height and needs nothing here.
+ */
+.sidebar-reveal-clip {
+  visibility: hidden;
+  transition: visibility 0s linear var(--sidebar-reveal-duration);
+}
+
+.sidebar-reveal-clip[data-open="true"] {
+  visibility: visible;
+  transition: visibility 0s;
+}
+
+.sidebar-reveal {
+  transform: translateY(100%);
+  transition: transform var(--sidebar-reveal-duration) ease-in-out;
+}
+
+.sidebar-reveal[data-open="true"] {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-reveal,
+  .sidebar-reveal-clip,
+  .sidebar-reveal-clip[data-open="true"] { transition: none; }
+}
+
+/* Keep a keyboard ring, but do not leave a focus ring after a pointer click. */
+[data-sidebar-root] :focus:not(:focus-visible) {
+  outline: none !important;
+}
+
+/*
+ * Web-only carve-out: on a phone the sidebar drawer is the server's <aside> at z-index
+ * 10000, above React Native Web's modal layer (9999), so a row's options dropdown would open
+ * underneath the menu it belongs to. Lift the modal layer that holds one above the drawer.
+ * Native stacks its modals above everything, so it needs nothing.
+ */
+body > div:has([data-menu-dropdown]) > div {
+  z-index: 10001 !important;
+}

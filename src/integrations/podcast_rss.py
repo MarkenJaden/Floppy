@@ -16,10 +16,12 @@ from defusedxml import ElementTree as ET  # noqa: N817  # long-standing alias
 from django.utils import timezone
 
 from app.log_safety import exception_summary, safe_url
+from integrations.safe_fetch import UnsafeUrlError, safe_fetch
 
 logger = logging.getLogger(__name__)
 
 USER_AGENT = "Floppy/1.0 (https://github.com/dannyvfilms/Floppy)"
+MAX_FEED_BYTES = 10 * 1024 * 1024
 
 # Component counts for duration strings formatted as "MM:SS" or "HH:MM:SS".
 DURATION_PARTS_MM_SS = 2
@@ -35,11 +37,16 @@ def _fetch_feed_root(rss_feed_url: str) -> Element | None:
     page does on every view.
     """
     try:
-        response = requests.get(
-            rss_feed_url, headers={"User-Agent": USER_AGENT}, timeout=30
+        response, body = safe_fetch(
+            rss_feed_url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/rss+xml, application/atom+xml, application/xml",
+            },
+            max_bytes=MAX_FEED_BYTES,
         )
         response.raise_for_status()
-    except requests.RequestException as e:
+    except (requests.RequestException, UnsafeUrlError) as e:
         logger.exception(
             "Failed to fetch RSS feed %s: %s",
             safe_url(rss_feed_url),
@@ -55,7 +62,7 @@ def _fetch_feed_root(rss_feed_url: str) -> Element | None:
         return None
 
     try:
-        return ET.fromstring(response.content)
+        return ET.fromstring(body)
     except ET.ParseError:
         logger.exception("Failed to parse RSS feed XML")
         return None
@@ -258,7 +265,7 @@ def _parse_rss_feed(root: Element, limit: int | None) -> list[dict]:
         # Published date
         pub_date_elem = item.find("pubDate")
         if pub_date_elem is not None and pub_date_elem.text:
-            episode["published"] = _parse_date(pub_date_elem.text.strip())
+            episode["published"] = _parse_feed_datetime(pub_date_elem.text.strip())
 
         # GUID
         guid_elem = item.find("guid")
@@ -343,7 +350,7 @@ def _parse_atom_feed(root: Element, limit: int | None) -> list[dict]:
         if published_elem is None:
             published_elem = entry.find("published")
         if published_elem is not None and published_elem.text:
-            episode["published"] = _parse_date(published_elem.text.strip())
+            episode["published"] = _parse_feed_datetime(published_elem.text.strip())
 
         # ID (used as GUID)
         id_elem = entry.find("{http://www.w3.org/2005/Atom}id")
@@ -403,7 +410,7 @@ def _parse_atom_feed(root: Element, limit: int | None) -> list[dict]:
     return episodes
 
 
-def _parse_date(date_str: str) -> datetime | None:
+def _parse_feed_datetime(date_str: str) -> datetime | None:
     """Parse date string from RSS feed.
 
     Handles common formats:

@@ -459,13 +459,11 @@ class ImportMDBList(TestCase):
         self.assertEqual(tv.status, Status.IN_PROGRESS.value)
         self.assertEqual(Episode.objects.filter(item__media_id="12345").count(), 1)
 
-    def test_season_rating_backfills_episodes(self):
-        """Rating a season with no watch history still creates its episodes.
+    def test_season_rating_does_not_mark_season_watched(self):
+        """A season rating without a watch stores the score and no episode plays.
 
-        A season rating with no accompanying watched entry is built as a
-        COMPLETED Season via bulk_create, which bypasses Season.save()'s
-        normal episode-completion fan-out (see issue #369: exports/stats
-        were missing episodes for seasons completed this way).
+        MDBList ratings are not watch evidence (issue #1851). The season must
+        stay statusless so the completed-season backfill creates no episodes.
         """
         responses = {
             "/sync/ratings": {
@@ -481,30 +479,76 @@ class ImportMDBList(TestCase):
                 ],
             },
         }
-        season_metadata = {
-            "title": "Season 1",
-            "image": "season_image.jpg",
-            "episodes": [
-                {"episode_number": 1, "still_path": "/still.jpg"},
-                {"episode_number": 2, "still_path": None},
-            ],
-            "max_progress": 2,
-            "_tvdb_episode_image_map": {},
-        }
-        with patch(
-            "app.providers.services.get_media_metadata",
-            side_effect=lambda media_type, *_a, **_kw: (
-                season_metadata if media_type == MediaTypes.SEASON.value else {}
-            ),
-        ):
-            self._run_import(responses)
+        self._run_import(responses)
 
         season = Season.objects.get(item__media_id="12345", user=self.user)
-        self.assertEqual(season.status, Status.COMPLETED.value)
-        self.assertEqual(
-            Episode.objects.filter(related_season=season).count(),
-            2,
-        )
+        self.assertIsNone(season.status)
+        self.assertEqual(season.score, 7)
+        self.assertFalse(Episode.objects.filter(related_season=season).exists())
+
+    def test_movie_and_show_ratings_do_not_mark_media_watched(self):
+        """A rating on unwatched media stores only the score (issue #1851)."""
+        responses = {
+            "/sync/ratings": {
+                "movies": [
+                    {
+                        "rated_at": "2023-01-03T00:00:00Z",
+                        "rating": 8,
+                        "movie": {"title": "Test Movie", "ids": {"tmdb": 67890}},
+                    },
+                ],
+                "shows": [
+                    {
+                        "rated_at": "2023-01-03T00:00:00Z",
+                        "rating": 6,
+                        "show": {"title": "Rated Show", "ids": {"tmdb": 11111}},
+                    },
+                ],
+            },
+        }
+        self._run_import(responses)
+
+        movie = Movie.objects.get(item__media_id="67890", user=self.user)
+        self.assertIsNone(movie.status)
+        self.assertEqual(movie.progress, 0)
+        self.assertEqual(movie.score, 8)
+        self.assertIsNone(movie.end_date)
+
+        show = TV.objects.get(item__media_id="11111", user=self.user)
+        self.assertIsNone(show.status)
+        self.assertEqual(show.score, 6)
+
+    def test_rerating_a_saved_episode_names_the_row_it_changed(self):
+        """The score update sends no signal, so the import must report the row."""
+        show = {"title": "Test Show", "ids": {"tmdb": 12345}}
+        responses = {
+            "/sync/watched": {
+                "episodes": [
+                    {
+                        "watched_at": "2023-01-01T00:00:00Z",
+                        "episode": {"season": 1, "number": 1, "show": show},
+                    },
+                ],
+            },
+            "/sync/ratings": {
+                "episodes": [
+                    {
+                        "rated_at": "2023-01-03T00:00:00Z",
+                        "rating": 9,
+                        "episode": {"season": 1, "number": 1, "show": show},
+                    },
+                ],
+            },
+        }
+        self._run_import(responses)
+        responses["/sync/ratings"]["episodes"][0]["rating"] = 4
+
+        with helpers.record_bulk_rows() as recorded:
+            self._run_import(responses)
+
+        episode = Episode.objects.get(item__media_id="12345")
+        self.assertEqual(episode.score, self.user.scale_score_for_storage(Decimal(4)))
+        self.assertIn(episode.pk, [row.pk for row in recorded])
 
     def test_dropped_show_marks_existing_tv(self):
         """Dropped shows set DROPPED on the TV row built during the import."""
@@ -657,6 +701,47 @@ class ImportMDBList(TestCase):
         self.assertEqual(season.status, Status.COMPLETED.value)
         self.assertEqual(tv.status, Status.IN_PROGRESS.value)
         self.assertEqual(Episode.objects.filter(item__media_id="12345").count(), 2)
+
+    def test_new_season_of_a_dropped_or_paused_show_does_not_reopen_it(self):
+        """History for a season the user hasn't tracked keeps the show's status (#1133)."""
+        for status in (Status.DROPPED.value, Status.PAUSED.value):
+            with self.subTest(status=status):
+                TV.objects.filter(user=self.user).delete()
+                tv_item, _ = Item.objects.get_or_create(
+                    media_id="12345",
+                    source=Sources.TMDB.value,
+                    media_type=MediaTypes.TV.value,
+                    defaults={"title": "Test Show", "image": "image.jpg"},
+                )
+                tv = TV.objects.create(item=tv_item, user=self.user, status=status)
+
+                self._run_import(
+                    {
+                        "/sync/watched": {
+                            "episodes": [
+                                {
+                                    "watched_at": "2023-01-01T00:00:00Z",
+                                    "episode": {
+                                        "season": 1,
+                                        "number": 1,
+                                        "show": {
+                                            "title": "Test Show",
+                                            "ids": {"tmdb": 12345},
+                                        },
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                )
+
+                tv.refresh_from_db()
+                self.assertEqual(tv.status, status)
+                self.assertEqual(
+                    list(tv.seasons.values_list("status", flat=True)),
+                    [status],
+                )
+                self.assertEqual(Episode.objects.filter(related_season__related_tv=tv).count(), 1)
 
     def test_completion_rollup_preserves_dropped_status(self):
         """Completing an episode set does not replace dropped state."""
@@ -890,6 +975,64 @@ class ImportMDBList(TestCase):
         tv = TV.objects.get(item__media_id="12345", user=self.user)
         self.assertEqual(season.status, Status.IN_PROGRESS.value)
         self.assertEqual(tv.status, Status.IN_PROGRESS.value)
+
+    def _single_purpose_responses(self):
+        """One watched movie that is also collected, plus a separate watchlist movie."""
+        return {
+            "/sync/watched": {
+                "movies": [
+                    {
+                        "watched_at": "2023-01-02T00:00:00Z",
+                        "movie": {"title": "Test Movie", "ids": {"tmdb": 67890}},
+                    },
+                ],
+            },
+            "/watchlist/items": [
+                {"title": "WL Movie", "mediatype": "movie", "ids": {"tmdb": 999}},
+                {"title": "Test Movie", "mediatype": "movie", "ids": {"tmdb": 67890}},
+            ],
+            "/sync/collection": {
+                "movies": [
+                    {
+                        "collected_at": "2023-01-04T00:00:00Z",
+                        "movie": {"title": "Test Movie", "ids": {"tmdb": 67890}},
+                    },
+                ],
+            },
+        }
+
+    def test_watchlist_mode_only_adds_planned_titles(self):
+        """Watchlist only skips history and collection and keeps tracked titles."""
+        existing = Movie.objects.create(
+            item=Item.objects.create(
+                media_id="67890",
+                source=Sources.TMDB.value,
+                media_type=MediaTypes.MOVIE.value,
+                title="Test Movie",
+            ),
+            user=self.user,
+            status=Status.COMPLETED.value,
+        )
+
+        self._run_import(self._single_purpose_responses(), mode="watchlist")
+
+        self.assertEqual(
+            list(Movie.objects.filter(user=self.user).order_by("item__media_id").values_list("item__media_id", "status")),
+            [("67890", Status.COMPLETED.value), ("999", Status.PLANNING.value)],
+        )
+        existing.refresh_from_db()
+        self.assertEqual(existing.status, Status.COMPLETED.value)
+        self.assertFalse(CollectionEntry.objects.filter(user=self.user).exists())
+
+    def test_update_collection_mode_only_touches_collection(self):
+        """Collection only records owned copies and imports no history or watchlist."""
+        self._run_import(self._single_purpose_responses(), mode="update_collection")
+
+        self.assertEqual(
+            list(CollectionEntry.objects.filter(user=self.user).values_list("item__media_id", flat=True)),
+            ["67890"],
+        )
+        self.assertFalse(Movie.objects.filter(user=self.user).exists())
 
     def test_watchlist_uses_offset_pagination(self):
         """Watchlist retrieval follows the same offset contract as sync."""

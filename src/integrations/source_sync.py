@@ -1,10 +1,11 @@
 """Helpers for reconciling collection metadata across multiple sources."""
 
+from django.db import transaction
 from django.utils import timezone
 
 from app.models import CollectionEntry
 from integrations.imports.helpers import retry_on_lock
-from integrations.models import CollectionSourceState
+from integrations.models import CollectionSourceState, SourcePage
 
 QUALITY_RANKS = {
     "480p": 1,
@@ -96,10 +97,12 @@ def _reconcile_collection_entry(*, user, item):
     if entry is None:
         entry = CollectionEntry.objects.create(user=user, item=item)
 
-    best_state = _get_best_state(states)
-    resolved_quality = (best_state.quality_label if best_state else "") or ""
-    if entry.resolution != resolved_quality:
-        entry.resolution = resolved_quality
+    # An empty quality label means unknown (Jellyfin webhooks, Mylar3,
+    # Kapowarr): it neither blanks nor outranks a resolution set by hand,
+    # through the API or by another source.
+    best_state = _get_best_state([state for state in states if state.quality_label])
+    if best_state and entry.resolution != best_state.quality_label:
+        entry.resolution = best_state.quality_label
         entry.save(update_fields=["resolution", "updated_at"])
 
     return entry
@@ -115,23 +118,100 @@ def upsert_collection_source_state(
     source_instance_id: int | None = None,
 ):
     """Persist a source snapshot and reconcile the durable collection entry."""
-    if source_updated_at is None:
-        source_updated_at = timezone.now()
+    entry, _changed = sync_collection_source_state(
+        user=user,
+        item=item,
+        source=source,
+        quality_label=quality_label,
+        source_updated_at=source_updated_at,
+        source_instance_id=source_instance_id,
+    )
+    return entry
+
+
+def sync_collection_source_state(
+    *,
+    user,
+    item,
+    source: str,
+    quality_label: str = "",
+    source_updated_at=None,
+    source_instance_id: int | None = None,
+):
+    """Persist a source snapshot; return ``(entry, changed)``.
+
+    ``source_updated_at`` is the source's own timestamp for the copy, or None
+    when it sends none. A snapshot the source reports exactly as before is
+    left alone, so a scheduled sync of an unchanged library writes nothing;
+    the collection entry is still reconciled, which repairs drift and writes
+    only what differs.
+    """
+    quality_label = quality_label or ""
 
     def _upsert_state():
-        CollectionSourceState.objects.update_or_create(
+        state = CollectionSourceState.objects.filter(
             user=user,
             item=item,
             source=source,
             source_instance_id=source_instance_id,
-            defaults={
-                "quality_label": quality_label or "",
-                "last_source_updated_at": source_updated_at,
-            },
+        ).first()
+        changed = state is None or state.quality_label != quality_label or (
+            source_updated_at is not None
+            and state.last_source_updated_at != source_updated_at
         )
-        return _reconcile_collection_entry(user=user, item=item)
+        if changed:
+            CollectionSourceState.objects.update_or_create(
+                user=user,
+                item=item,
+                source=source,
+                source_instance_id=source_instance_id,
+                defaults={
+                    "quality_label": quality_label,
+                    # No source timestamp: first seen now, then kept.
+                    "last_source_updated_at": source_updated_at
+                    or (state.last_source_updated_at if state else None)
+                    or timezone.now(),
+                },
+            )
+        return _reconcile_collection_entry(user=user, item=item), changed
 
     return retry_on_lock(_upsert_state)
+
+
+def prune_collection_source_states(
+    *,
+    user,
+    source: str,
+    source_instance_id: int | None,
+    keep_item_ids,
+) -> int:
+    """Drop this instance's states for items it no longer reports as owned.
+
+    Scoped to the caller's ``source`` and ``source_instance_id``: a Radarr run
+    can never prune another source's snapshots, another instance's snapshots,
+    or a collection entry that has no source snapshot behind it. Call only
+    after a complete read of the instance; an item missing from a partial or
+    failed run is not proof that the server deleted it.
+    """
+    stale = (
+        CollectionSourceState.objects.filter(
+            user=user,
+            source=source,
+            source_instance_id=source_instance_id,
+        )
+        .exclude(item_id__in=keep_item_ids)
+        .select_related("item")
+    )
+    removed = 0
+    for state in stale:
+        remove_collection_source_state(
+            user=user,
+            item=state.item,
+            source=source,
+            source_instance_id=source_instance_id,
+        )
+        removed += 1
+    return removed
 
 
 def remove_collection_source_state(
@@ -155,3 +235,66 @@ def remove_collection_source_state(
         return _reconcile_collection_entry(user=user, item=item)
 
     return retry_on_lock(_remove_state)
+
+
+def replace_source_pages(*, user, source, source_instance_id, pages):
+    """Make one server's saved pages match ``pages``; return rows written.
+
+    ``pages`` maps ``(provider, media_type, media_id)`` to a path and must be
+    the server's complete list: anything not in it is deleted. Unchanged rows
+    are left alone, so a scheduled sync of an unchanged library writes nothing.
+    """
+    scope = SourcePage.objects.filter(
+        user=user, source=source, source_instance_id=source_instance_id
+    )
+    existing = {
+        (row.provider, row.media_type, row.media_id): row
+        for row in scope.only("id", "provider", "media_type", "media_id", "path")
+    }
+    stale = [row.pk for key, row in existing.items() if key not in pages]
+    changed = [
+        row
+        for key, row in existing.items()
+        if key in pages and row.path != pages[key]
+    ]
+    now = timezone.now()
+    for row in changed:
+        row.path = pages[(row.provider, row.media_type, row.media_id)]
+        row.updated_at = now
+    new = [
+        SourcePage(
+            user=user,
+            source=source,
+            source_instance_id=source_instance_id,
+            provider=provider,
+            media_type=media_type,
+            media_id=media_id,
+            path=path,
+        )
+        for (provider, media_type, media_id), path in pages.items()
+        if (provider, media_type, media_id) not in existing
+    ]
+    with transaction.atomic():
+        if stale:
+            scope.filter(pk__in=stale).delete()
+        if changed:
+            SourcePage.objects.bulk_update(changed, ["path", "updated_at"])
+        if new:
+            SourcePage.objects.bulk_create(new, ignore_conflicts=True)
+    return len(stale) + len(changed) + len(new)
+
+
+def set_source_page(*, user, source, provider, media_type, media_id, path):
+    """Save (or with an empty ``path``, drop) one page of a single-account source."""
+    key = {
+        "user": user,
+        "source": source,
+        "source_instance_id": 0,
+        "provider": provider,
+        "media_type": media_type,
+        "media_id": str(media_id),
+    }
+    if not path:
+        SourcePage.objects.filter(**key).delete()
+        return
+    SourcePage.objects.update_or_create(**key, defaults={"path": path})

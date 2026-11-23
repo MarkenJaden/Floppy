@@ -216,6 +216,7 @@ class TestForcedAudiobookLibrary(PlexAudiobookImportTestCase):
         book = Book.objects.get(user=self.user, item=item)
         self.assertEqual(book.progress, 60)
         self.assertEqual(book.status, Status.IN_PROGRESS.value)
+        self.assertEqual(book.entry_source, "plex")
         self.assertFalse(Music.objects.filter(user=self.user).exists())
 
     def test_finished_book_completes_at_full_runtime(self):
@@ -431,13 +432,13 @@ class PlexCoverStoredCopyTests(TestCase):
             "/library/metadata/1/thumb/1",
         )
         connection = patch(
-            "integrations.views.plex_api.connection_for_machine",
+            "integrations.cover_proxy_views.plex_api.connection_for_machine",
             return_value=("http://plex.local:32400", "server-token"),
         )
         connection.start()
         self.addCleanup(connection.stop)
 
-    @patch("integrations.views.requests.get")
+    @patch("integrations.cover_proxy_views.requests.get")
     def test_stored_cover_is_served_while_plex_is_down(self, mock_get):
         upstream = Mock(status_code=200, headers={"Content-Type": "image/jpeg"})
         upstream.iter_content = lambda chunk_size: iter([b"plex-cover"])
@@ -452,7 +453,7 @@ class PlexCoverStoredCopyTests(TestCase):
         self.assertEqual(response.content, b"plex-cover")
         self.assertEqual(mock_get.call_count, 2)
 
-    @patch("integrations.views.requests.get")
+    @patch("integrations.cover_proxy_views.requests.get")
     def test_missing_cover_is_still_a_404(self, mock_get):
         mock_get.side_effect = requests.ReadTimeout("Read timed out.")
 

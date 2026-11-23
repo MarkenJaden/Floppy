@@ -14,6 +14,7 @@ from django.views.decorators.http import require_GET
 from app.models import Item, MediaManager, MediaTypes, Sources
 from app.providers import tmdb
 from app.templatetags.app_tags import media_url
+from lists import tasks as list_tasks
 from lists.models import CustomList, CustomListItem
 
 
@@ -210,6 +211,8 @@ class PublicListFeed(Feed):
         if custom_list is None:
             msg = "List not found"
             raise Http404(msg)
+        # Answer from the stored rows; refresh a smart list in the background.
+        list_tasks.schedule_smart_list_sync(custom_list)
         self.request = request
         return custom_list
 
@@ -322,6 +325,7 @@ def list_json(request, list_reference):
     if custom_list is None:
         msg = "List not found"
         raise Http404(msg)
+    list_tasks.schedule_smart_list_sync(custom_list)
 
     arr_type = request.GET.get("arr", "").lower()
     if arr_type not in ("radarr", "sonarr"):

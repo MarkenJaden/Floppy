@@ -13,8 +13,13 @@ import logging
 import re
 import zipfile
 
-from integrations.imports.helpers import MediaImportError, MediaImportUnexpectedError
-from integrations.imports.trakt import TraktImporter
+from integrations.imports.helpers import (
+    TRAKT_EXPORT_MODES,
+    TRAKT_EXPORT_UNSUPPORTED_MODE_MESSAGE,
+    MediaImportError,
+    MediaImportUnexpectedError,
+)
+from integrations.imports.trakt import TRAKT_API_BASE_URL, TraktImporter
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +174,10 @@ class TraktExportImporter(TraktImporter):
 
     def _get_paginated_data(self, endpoint, item_type="items"):
         """Read the export files standing in for ``endpoint``."""
-        path = endpoint.removeprefix(self.user_base_url)
+        # Hidden sections live under /users/hidden/, not the per-user base URL.
+        path = endpoint.removeprefix(self.user_base_url).removeprefix(
+            f"{TRAKT_API_BASE_URL}/users"
+        )
         prefixes = ENDPOINT_FILES.get(path)
         if prefixes is None:
             logger.warning("No Trakt export file mapped for endpoint %s", endpoint)
@@ -196,6 +204,9 @@ class TraktExportImporter(TraktImporter):
 
 def importer(file, user, mode):
     """Import media and custom lists from a Trakt data export archive."""
+    if mode not in TRAKT_EXPORT_MODES:
+        raise MediaImportError(TRAKT_EXPORT_UNSUPPORTED_MODE_MESSAGE)
+
     # Imported here to keep the integrations -> lists dependency at call time.
     from lists.imports.trakt import import_trakt_lists_from_export
 
@@ -203,7 +214,6 @@ def importer(file, user, mode):
 
     export_importer = TraktExportImporter(archive, user, mode)
     imported_counts, messages = export_importer.import_data()
-
     lists_created, list_warnings = import_trakt_lists_from_export(user, archive)
     if lists_created:
         imported_counts["lists"] = lists_created

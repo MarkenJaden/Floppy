@@ -19,9 +19,9 @@ images, progress) is the calling surface's job, and it only ever sees a page.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
-from itertools import islice
+from itertools import batched, islice
 from typing import TYPE_CHECKING
 
 from django.db.models import Exists, F, OuterRef, Q
@@ -31,14 +31,22 @@ from django.utils import timezone
 from app.library_query import filters as filter_registry
 from app.library_query import sorts as sort_registry
 from app.library_query.spec import ROUTING_MODEL, STATUS_MATCH_LATEST
-from app.library_query.trackers import tracker_sources
+from app.library_query.trackers import episode_media_for_items, tracker_sources
 from app.models.choices import MediaTypes, Sources
 from app.models.item import Item
+
+# Only grouped shows (anime/seasons stored on TV rows) set library_media_type
+# to another type; every other library matches on media_type alone, which a
+# covering index answers without reading wide item rows.
+_LIBRARY_BUCKET_TYPES = frozenset(
+    (MediaTypes.TV.value, MediaTypes.ANIME.value, MediaTypes.SEASON.value),
+)
 
 if TYPE_CHECKING:
     from app.library_query.spec import LibraryQuery
 
 DEFAULT_BATCH_SIZE = 256
+ASC = "asc"
 DESC = "desc"
 
 
@@ -62,11 +70,24 @@ class Page:
 class LibraryQueryExecutor:
     """Evaluate one ``LibraryQuery`` for one user."""
 
-    def __init__(self, user, query: LibraryQuery, *, batch_size: int = DEFAULT_BATCH_SIZE):
-        """Prepare ``query`` for ``user``; nothing runs until it is asked for."""
+    def __init__(
+        self,
+        user,
+        query: LibraryQuery,
+        *,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        share_shows: bool = False,
+    ):
+        """Prepare ``query`` for ``user``; nothing runs until it is asked for.
+
+        ``share_shows`` lets a scan that reads show facts reuse, and add to,
+        the records other shelves of the user's Home computed
+        (``app.tv_show_facts.SharedShows``). Only Home asks for it.
+        """
         self.user = user
         self.query = query
         self.batch_size = batch_size
+        self.share_shows = share_shows
         self.today = timezone.localdate()
 
     # -- compilation ----------------------------------------------------------
@@ -78,7 +99,11 @@ class LibraryQueryExecutor:
             filter_registry.TypeContext(
                 user=self.user,
                 media_type=media_type,
-                sources=tuple(tracker_sources(self.user, media_type, self.query.routing)),
+                sources=tuple(tracker_sources(
+                    self.user, media_type, self.query.routing,
+                    include_podcast_shows=self.query.include_podcast_shows,
+                    include_albums=self.query.sort_list_id is not None,
+                )),
                 today=self.today,
                 provider_region=self.query.provider_region,
                 pinned_providers=self.query.pinned_providers,
@@ -113,7 +138,10 @@ class LibraryQueryExecutor:
 
     def _type_q(self, ctx) -> Q:
         """Return: the item itself belongs to this type's library."""
-        if self.query.routing == ROUTING_MODEL:
+        if (
+            self.query.routing == ROUTING_MODEL
+            or ctx.media_type not in _LIBRARY_BUCKET_TYPES
+        ):
             return Q(media_type=ctx.media_type)
         return Q(media_type=ctx.media_type) | Q(library_media_type=ctx.media_type)
 
@@ -166,8 +194,10 @@ class LibraryQueryExecutor:
         """Return collected or tagged items of this type that have no tracker row."""
         from app.models.discovery import CollectionEntry, ItemTag
 
-        collected = Q(
-            pk__in=CollectionEntry.objects.filter(user=self.user).values("item_id"),
+        # Exists keeps the plan item-driven: a user can hold 100k+ collection
+        # rows, and walking them into wide item rows costs seconds cold.
+        collected = Exists(
+            CollectionEntry.objects.filter(user=self.user, item_id=OuterRef("pk")),
         ) & ~Q(media_type=MediaTypes.EPISODE.value)
         if ctx.media_type in (MediaTypes.TV.value, MediaTypes.ANIME.value):
             collected |= Q(
@@ -253,6 +283,17 @@ class LibraryQueryExecutor:
         )
 
     @cached_property
+    def tie_descending(self) -> bool:
+        """Game group lists keep the web manager's ascending title ties."""
+        grouped_games = self.query.media_types == (MediaTypes.GAME.value,) and self.query.filters.game_group_by != "item"
+        ascending_group_ties = grouped_games and self.query.sort.key in {
+            "score", "status", "release_date", "critic_rating", "popularity",
+            "last_watched", "start_date", "end_date", "date_added", "updated", "progressed_at",
+            "id", "itemid", "mediaid", "source", "type",
+        }
+        return self.direction == DESC and not ascending_group_ties
+
+    @cached_property
     def uses_sql(self) -> bool:
         """Return whether filters and sort all compile to SQL."""
         sortable = self._sort_expressions is not None or self._sql_order_keys is not None
@@ -296,7 +337,7 @@ class LibraryQueryExecutor:
         value = F("_library_sort")
         return queryset.order_by(
             value.desc(nulls_last=True) if descending else value.asc(nulls_last=True),
-            *tie_breakers(descending=descending),
+            *tie_breakers(descending=self.tie_descending),
         )
 
     # -- cross-provider aliases -----------------------------------------------
@@ -355,6 +396,27 @@ class LibraryQueryExecutor:
             return list(self._ordered(self.filtered).values_list("pk", flat=True))
         return [row[-1] for row in self._scan_ranked]
 
+    def ranked_ids_both_directions(self) -> dict[str, list[int]]:
+        """Return the ranked ids for both directions from one scan.
+
+        The scan is the expensive part of a Python-ordered shelf; ordering its
+        rows either way is cheap, so flipping a shelf's direction can be served
+        from the order cached with the first one.
+        """
+        rows = self._scan(self.filtered, with_sort=True)
+        return {
+            direction: [row[-1] for row in order_rows(rows, descending=direction == DESC)]
+            for direction in (ASC, DESC)
+        }
+
+    def rank_rows(self) -> list[tuple]:
+        """Return compact sort values and item identities for a composed shelf.
+
+        Uses the same SQL values or batched scan as page(), without decorating
+        cards or retaining hydrated candidates.
+        """
+        return self._scan(self.filtered, with_sort=True)
+
     def matches(self):
         """Return the matches as a scope for another query's ``within``.
 
@@ -371,6 +433,21 @@ class LibraryQueryExecutor:
         if not self._needs_scan:
             return candidates.exists()
         return bool(self._scan(candidates, with_sort=False))
+
+    def matching_among(self, item_ids, *, chunk_size: int) -> set[int]:
+        """Return which of ``item_ids`` match, asking once per ``chunk_size`` ids.
+
+        The set form of ``contains``: the same conditions, Python filters and
+        cross-provider hiding, so each id gets the answer ``contains`` gives.
+        """
+        matched = set()
+        for chunk in batched(dict.fromkeys(item_ids), max(1, chunk_size)):
+            candidates = self.filtered.filter(pk__in=chunk)
+            if not self._needs_scan:
+                matched.update(candidates.values_list("pk", flat=True))
+            else:
+                matched.update(row[-1] for row in self._scan(candidates, with_sort=False))
+        return matched
 
     def page(
         self,
@@ -390,13 +467,108 @@ class LibraryQueryExecutor:
             ordered = self._ordered(self.filtered)
             if total is None:
                 total = ordered.count()
-            items = list(ordered.defer(*defer)[offset : offset + limit])
-            return Page(items, total, used_sql=True)
+            # Sort on ids alone, then load the window: ordering a library
+            # would otherwise drag every candidate's wide row through the sort.
+            window = list(ordered.values_list("pk", flat=True)[offset : offset + limit])
+            by_id = Item.objects.defer(*defer).in_bulk(window)
+            return Page([by_id[i] for i in window if i in by_id], total, used_sql=True)
 
         ranked = self._scan_ranked
         selected_ids = [pk for *_rest, pk in ranked[offset : offset + limit]]
         by_id = Item.objects.defer(*defer).in_bulk(selected_ids)
         return Page([by_id[i] for i in selected_ids if i in by_id], len(ranked), False)
+
+    def entry_page(self, offset: int, limit: int | None):
+        """Page individual tracker rows, retaining compact ranks between batches.
+
+        Item predicates use the same registry as grouped lists. Status, rating
+        and dates apply to the *same entry*, rather than its latest sibling.
+        Only the returned window keeps hydrated tracker and Item instances.
+        """
+        from app.media_list_filters import MediaListEntry
+        from app.models import BasicMedia
+
+        values = self.query.filters
+        item_values = replace(values, statuses=(), rating="all", rating_min="", rating_max="",
+                              date_added_from="", date_added_to="", completed_date_from="", completed_date_to="")
+        narrowed = LibraryQueryExecutor(self.user, replace(self.query, filters=item_values))
+        ranked = []
+        sources = []
+        needs = set(self.sort.needs)
+        for ctx in self.contexts:
+            for definition in self._predicates(ctx):
+                needs |= definition.needs
+        value_for = sort_registry.python_key(self.query.sort.key)
+        for ctx in self.contexts:
+            for source in ctx.sources:
+                source_index = len(sources)
+                sources.append(source)
+                item_ids = narrowed.filtered.filter(source.item_q).values("pk")
+                queryset = source.rows(self.user).filter(item_id__in=item_ids)
+                condition = self._row_conditions(ctx, self._active(ctx), scoped=False).get(source)
+                if condition is not None:
+                    queryset = queryset.filter(condition)
+                if values.rating == "not_rated":
+                    queryset = queryset.filter(score__isnull=True)
+                else:
+                    if values.rating == "rated":
+                        queryset = queryset.filter(score__isnull=False)
+                    if values.rating_min:
+                        queryset = queryset.filter(score__gte=values.rating_min)
+                    if values.rating_max:
+                        queryset = queryset.filter(score__lte=values.rating_max)
+                queryset = queryset.select_related("item")
+                if filter_registry.NEEDS_WATCH_PROVIDERS not in needs:
+                    queryset = queryset.defer("item__watch_providers")
+                queryset = BasicMedia.objects._apply_prefetch_related(
+                    queryset, source.model._meta.model_name, list_mode=True,
+                    compact_episodes=True, light_rows=True,
+                )
+                iterator = queryset.order_by("pk").iterator(chunk_size=self.batch_size)
+                while batch := list(islice(iterator, self.batch_size)):
+                    if filter_registry.NEEDS_MAX_PROGRESS in needs:
+                        BasicMedia.objects.annotate_max_progress(batch, source.model._meta.model_name)
+                    if filter_registry.NEEDS_RUNTIME in needs:
+                        from app.models import prefill_episode_runtime_index
+
+                        prefill_episode_runtime_index(batch)
+                    candidates = [Candidate(row.item, row) for row in batch]
+                    for definition in self._predicates(ctx):
+                        if definition.prepare:
+                            definition.prepare(candidates, values, ctx)
+                    candidates = [candidate for candidate in candidates if all(
+                        definition.predicate(candidate, values, ctx) for definition in self._predicates(ctx)
+                    )]
+                    batch_values = self.sort.batch_values
+                    if batch_values:
+                        sort_values = batch_values(self.user, candidates, self.query.sort.direction)
+                    elif self.query.sort.key == "random":
+                        sort_values = [sort_registry.random_rank(candidate.item.pk, self.query.sort.seed) for candidate in candidates]
+                    else:
+                        sort_values = [value_for(candidate) for candidate in candidates]
+                    ranked.extend(
+                        (*rank_row(value, candidate.item), source_index, candidate.media.pk)
+                        for candidate, value in zip(candidates, sort_values, strict=True)
+                    )
+        if self.query.include_collection_only:
+            untracked = self.filtered.exclude(filter_registry.any_q([
+                filter_registry.any_row(ctx) for ctx in self.contexts
+            ]))
+            ranked.extend((*row, -1, row[-1]) for row in self._scan(untracked, with_sort=True))
+        ranked = order_rows(ranked, descending=self.direction == DESC, ties_descending=self.tie_descending)
+        window = ranked[max(0, offset):None if limit is None else max(0, offset) + limit]
+        hydrated = {}
+        for index, source in enumerate(sources):
+            ids = [row[-1] for row in window if row[-2] == index]
+            rows = source.rows(self.user).filter(pk__in=ids).select_related("item")
+            rows = BasicMedia.objects._apply_prefetch_related(rows, source.model._meta.model_name, list_mode=True, compact_episodes=True, light_rows=True)
+            hydrated.update({(index, row.pk): row for row in rows})
+        untracked_items = Item.objects.in_bulk(row[-1] for row in window if row[-2] == -1)
+        return [
+            MediaListEntry(item=untracked_items[row[-1]]) if row[-2] == -1
+            else MediaListEntry(item=hydrated[row[-2:]].item, media=hydrated[row[-2:]])
+            for row in window
+        ], len(ranked)
 
     @cached_property
     def _scan_ranked(self) -> list[tuple]:
@@ -404,6 +576,7 @@ class LibraryQueryExecutor:
         return order_rows(
             self._scan(self.filtered, with_sort=True),
             descending=self.direction == DESC,
+            ties_descending=self.tie_descending,
         )
 
     def _scan(self, queryset, *, with_sort: bool) -> list[tuple]:
@@ -427,9 +600,35 @@ class LibraryQueryExecutor:
         batch_values = self.sort.batch_values if with_sort and not sql_sort else None
         if with_sort and not sql_sort and batch_values is None:
             python_key = sort_registry.python_key(self.query.sort.key)
-            # A tracker value computed in Python reads the aggregated row.
-            needs.add(filter_registry.NEEDS_MEDIA)
+            if not self.sort.item_only:
+                # A tracker value computed in Python reads the aggregated row.
+                needs.add(filter_registry.NEEDS_MEDIA)
         requested_direction = self.query.sort.direction
+        # Shows are attached as facts, not as hydrated trackers, when every
+        # reader of the tracker row in this scan says facts are all it reads.
+        show_facts = (sql_sort or not with_sort or self.sort.tv_facts) and all(
+            definition.tv_facts
+            for ctx in self.contexts
+            for definition in self._predicates(ctx)
+            if filter_registry.NEEDS_MEDIA in definition.needs
+        )
+        # Movies are attached as light rows when only the sort reads them.
+        light_movies = (
+            with_sort
+            and not sql_sort
+            and self.sort.movie_rows
+            and not any(
+                filter_registry.NEEDS_MEDIA in definition.needs
+                for ctx in self.contexts
+                for definition in self._predicates(ctx)
+            )
+        )
+
+        shared = None
+        if show_facts and self.share_shows:
+            from app.tv_show_facts import SharedShows
+
+            shared = SharedShows(self.user)
 
         rows = []
         iterator = queryset.iterator(chunk_size=self.batch_size)
@@ -438,7 +637,15 @@ class LibraryQueryExecutor:
             if not batch:
                 break
             if filter_registry.NEEDS_MEDIA in needs:
-                _attach_media(self.user, batch, needs)
+                _attach_media(
+                    self.user,
+                    batch,
+                    needs,
+                    show_facts=show_facts,
+                    light_movies=light_movies,
+                    shared=shared,
+                    include_albums=self.query.sort_list_id is not None,
+                )
             for ctx in self.contexts:
                 for definition in self._predicates(ctx):
                     if definition.prepare is not None:
@@ -472,6 +679,8 @@ class LibraryQueryExecutor:
                 else:
                     value = python_key(candidate)
                 rows.append(rank_row(value, candidate.item))
+        if shared is not None:
+            shared.save()
         return rows
 
 
@@ -503,12 +712,14 @@ def rank_row(value, item) -> tuple:
     return (value, (item.title or "").lower(), season, episode, item.pk)
 
 
-def order_rows(rows: list[tuple], *, descending: bool) -> list[tuple]:
+def order_rows(rows: list[tuple], *, descending: bool, ties_descending: bool | None = None) -> list[tuple]:
     """Order ``rank_row`` rows like the SQL path: value (nulls last), then ties."""
     present = [row for row in rows if row[0] is not None]
     missing = [row for row in rows if row[0] is None]
-    present.sort(reverse=descending)
-    missing.sort(key=lambda row: row[1:], reverse=descending)
+    ties_descending = descending if ties_descending is None else ties_descending
+    present.sort(key=lambda row: row[1:], reverse=ties_descending)
+    present.sort(key=lambda row: row[0], reverse=descending)
+    missing.sort(key=lambda row: row[1:], reverse=ties_descending)
     return present + missing
 
 
@@ -520,33 +731,110 @@ def _context_for(item, contexts_by_type):
     return None
 
 
-def _attach_media(user, batch: list[Candidate], needs: set[str]) -> None:
-    """Load each candidate's aggregated tracker row, for this batch only."""
+def _attach_media(
+    user,
+    batch: list[Candidate],
+    needs: set[str],
+    *,
+    show_facts: bool = False,
+    light_movies: bool = False,
+    include_albums: bool = False,
+    shared=None,
+) -> None:
+    """Load each candidate's aggregated tracker row, for this batch only.
+
+    With ``show_facts``, a show gets an ``app.tv_show_facts.TrackedShow``
+    instead: its numbers come from grouped rows, so no season, play or event
+    is loaded for it. Only a scan whose sort and filters all declare
+    ``tv_facts`` may ask for that. With ``light_movies``, a movie gets an
+    ``app.movie_rows.MovieRow`` (its columns, no model); only a scan whose
+    sort declares ``movie_rows`` and whose filters read no tracker may.
+    """
     from django.apps import apps
 
     from app.models import BasicMedia
 
     by_type: dict[str, list[Candidate]] = {}
     for candidate in batch:
-        if candidate.item.media_type == MediaTypes.EPISODE.value:
-            continue
         by_type.setdefault(candidate.item.media_type, []).append(candidate)
 
     for media_type, candidates in by_type.items():
         model = apps.get_model("app", media_type)
+        if media_type == MediaTypes.EPISODE.value:
+            latest = episode_media_for_items(user, [candidate.item.pk for candidate in candidates])
+            for candidate in candidates:
+                candidate.media = latest.get(candidate.item.pk)
+            continue
+        if show_facts and media_type == MediaTypes.TV.value:
+            from app.tv_show_facts import annotate_released_progress, tracked_shows
+
+            items = [candidate.item for candidate in candidates]
+            released = filter_registry.NEEDS_MAX_PROGRESS in needs
+            if shared is not None:
+                shows = shared.tracked(items, released=released)
+            else:
+                shows = tracked_shows(user, items)
+                if released:
+                    annotate_released_progress(list(shows.values()))
+            if filter_registry.NEEDS_RUNTIME in needs:
+                from app.models import prefill_episode_runtime_index
+
+                prefill_episode_runtime_index(list(shows.values()))
+            for candidate in candidates:
+                candidate.media = shows.get(candidate.item.pk)
+            continue
+        if light_movies and media_type == MediaTypes.MOVIE.value:
+            from app.movie_rows import movie_rows
+
+            movies = movie_rows(user, [candidate.item for candidate in candidates])
+            if filter_registry.NEEDS_MAX_PROGRESS in needs:
+                BasicMedia.objects.annotate_max_progress(list(movies.values()), media_type)
+            for candidate in candidates:
+                candidate.media = movies.get(candidate.item.pk)
+            continue
         rows = model.objects.filter(
             user=user,
             item_id__in=[candidate.item.pk for candidate in candidates],
         ).select_related("item")
+        if filter_registry.NEEDS_WATCH_PROVIDERS not in needs:
+            # The scan's candidate queryset defers this blob; the tracker rows
+            # must not bring it back through their own select_related.
+            rows = rows.defer("item__watch_providers")
+        if media_type == MediaTypes.SEASON.value:
+            # The season graph joins each row's show item, and with it a copy
+            # of the show's provider blob per season. Ranking never reads the
+            # show's providers (the provider filter reads the season's own),
+            # so leave it in the database, as episode rows already do.
+            rows = rows.defer("related_tv__item__watch_providers")
         # Progress and derived status read episodes and seasons; fetch them
-        # once for the batch instead of once per row.
-        rows = BasicMedia.objects._apply_prefetch_related(rows, media_type, compact_episodes=True)
+        # once for the batch instead of once per row. Ranking only reads the
+        # compact episode fields: runtime comes from the bulk runtime index
+        # below, not from the prefetched episode items.
+        rows = BasicMedia.objects._apply_prefetch_related(
+            rows,
+            media_type,
+            list_mode=True,
+            compact_episodes=True,
+            light_rows=True,
+        )
         aggregated = BasicMedia.objects._aggregate_duplicate_data(rows, user, media_type)
+        # The newest row by creation, the higher id on a tie (bulk imports
+        # share timestamps), as the "updated" sort's SQL form reads it.
         latest = {}
         for media in aggregated:
             current = latest.get(media.item_id)
-            if current is None or media.created_at > current.created_at:
+            if current is None or (media.created_at, media.pk) > (current.created_at, current.pk):
                 latest[media.item_id] = media
+        if media_type == MediaTypes.PODCAST.value:
+            from app.services.podcast_list_tracking import (
+                podcast_show_trackers_for_items,
+            )
+
+            latest.update(podcast_show_trackers_for_items(user, [candidate.item for candidate in candidates]))
+        if include_albums and media_type == MediaTypes.MUSIC.value:
+            from app.services.music import album_trackers_for_list_items
+
+            latest.update(album_trackers_for_list_items(user, [candidate.item for candidate in candidates]))
         tracked = []
         for candidate in candidates:
             candidate.media = latest.get(candidate.item.pk)

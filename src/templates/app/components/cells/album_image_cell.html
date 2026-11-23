@@ -1,9 +1,8 @@
 {% load app_tags %}
 {% if media.album.image and media.album.image != IMG_NONE %}
-  <img alt="{{ media.album.title }}"
-       class="lazyload min-w-10 w-10 h-10 object-cover rounded-md parent-hover-tap:hidden"
-       data-src="{{ media.album.image|image_url }}"
-       src="{{ IMG_NONE }}">
+  <img data-media-artwork loading="lazy" decoding="sync" alt="{{ media.album.title }}"
+       class="min-w-10 w-10 h-10 object-cover rounded-md parent-hover-tap:hidden"
+       src="{{ media.album.image|image_url }}">
 {% else %}
   <div class="min-w-10 w-10 h-10 bg-[var(--color-surface-alt)] rounded-md flex items-center justify-center parent-hover-tap:hidden">
     {% icon 'music' is_active=False extra_classes="w-5 h-5 text-gray-600" %}
@@ -19,6 +18,7 @@
 </button>
 
 {# Track Modal #}
+<template x-teleport="body">
 <div x-show="trackOpen"
      @mousedown.self="trackOpen = false"
      x-cloak
@@ -28,3 +28,4 @@
     <div id="album-track-modal-{{ media.album.id }}"></div>
   </div>
 </div>
+</template>

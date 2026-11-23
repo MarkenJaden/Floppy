@@ -19,13 +19,31 @@ the others (#1248), and their semantics drifted apart.
 Surfaces whose unit is not one item keep their own pipeline:
 
 - separate-entry mode, which shows one card per tracker row;
-- TV's "time left" order, which is grouped and caches its own order;
+- TV's "time left" order, which is grouped and caches its own order. It ranks
+  the filtered library from grouped rows (`app.tv_show_facts`,
+  `app.tv_sort.build_time_left_records`), not from hydrated seasons and plays,
+  and hydrates one page. Its groups put a caught-up show after the shows
+  still in progress, where the API and Home (episodes left) put it first.
+  Shows with nothing known stay last in both directions;
 - the podcast show view;
 - the music artist and album views;
 - Home's "recently unrated" shelf, which is bounded by its time window.
 
 ## Contract
 
+- **Alphabet selection is web view state.** The optional `initial` URL parameter
+  selects an ASCII letter, `0-9`, or `other`; empty/invalid values mean All. SQL
+  reads the viewer's preferred displayed title with its existing fallback order,
+  before counting and pagination. Separate-entry/time-left orders and named
+  artist/album/podcast trackers apply the same buckets before their own paging;
+  cached variants include the initial and title preference. List pages narrow
+  their authorized, resolved membership (including smart-list unions) without
+  changing saved rules. It is not an API parameter or a persisted smart rule.
+  The numeric control displays `#` before A, while submitting the existing `0-9`
+  value. The other control displays the first actual glyph from its authorized
+  title scope while submitting `other`; its representative title is read as one
+  narrow value, with no library-wide model hydration. List scopes retain viewer
+  title preferences independently of the owner's tracking data.
 - **Candidates are `Item` rows.** Tracker state (status, score, dates) is read
   through subqueries, so an item is one candidate however many tracker rows
   (repeat viewings) it has.
@@ -34,6 +52,12 @@ Surfaces whose unit is not one item keep their own pipeline:
 - **Membership is an uncorrelated `pk IN (…)`.** A correlated `EXISTS` makes
   SQLite walk every user's items; on the real library that took 35 s instead
   of 0.05 s.
+  - Search supplies an owner-scoped set of tracked and collected item ids,
+    including shows with collected episodes, before matching titles. Typeahead
+    reads those items without hydrating tracker, season or episode graphs.
+  - Collected-episode lookup starts at the owner's collection index. Its
+    media-type expression prevents SQLite from scanning the entire episode
+    catalogue and probing ownership once per episode.
 - **Per-item subqueries go through the item's own rows.** Examples are latest
   status, score and "newest row" sorts. `TrackerSource.item_rows` compares the
   owner as `owner + 0`. Without that, SQLite (which has no statistics here)
@@ -45,12 +69,25 @@ Surfaces whose unit is not one item keep their own pipeline:
 - **`ids()`, `contains()` and `matches()` serve smart-list membership.**
   `matches()` returns a `pk` subquery when every filter is SQL, so a scope can
   be passed on without loading it.
+  Membership is stored as `CustomListItem` rows, and every reader of a smart
+  list (list page, Home shelf, lists API, CSV export, RSS and arr feeds)
+  calls `lists.tasks.schedule_smart_list_sync` before answering from them.
+  That queues one debounced full sync per list per minute on the default
+  queue, so readers other than the app's own pages converge too, including
+  date-relative rules that change with no write. A list nobody reads is not
+  refreshed; there is no periodic job.
 - **One ordering everywhere.** The sort value comes first, with nulls last.
   Ties then go to the lower-cased title, season, episode and id, all in the
   requested direction (`executor.tie_breakers`). Equal values cannot move
   between pages.
   - `random` is a seeded hash of the id. Home carries the seed through
     load-more.
+  - **"Last Watched" is activity; "End Date" is completion.** The media list
+    and Home map their `end_date` choice to the `last_watched` key, which uses
+    `end_date` when set and `progressed_at` otherwise, so an in-progress item
+    sorts by when it was last played. Custom list detail keeps `end_date` as
+    the literal completion date because its label says "End Date". The API
+    accepts both: `end_date` is unchanged, `last_watched` is opt-in.
 
 ## Two paths, derived rather than listed
 
@@ -67,11 +104,54 @@ needs Python. A sort's SQL form is either `sql` (one value) or `sql_order`
     come one batch at a time, with the same prefetches and aggregation Home
     and the list use.
   - Filters can declare a per-batch `prepare` step for bulk annotation.
+  - A show's tracker row is attached as grouped facts
+    (`app.tv_show_facts.TrackedShow`: four value queries a batch, no season,
+    play or event model) when every Python sort and filter of the query
+    declares `tv_facts`. Home's Up Next, upcoming, recent, completion and
+    episodes-left orders, the caught-up filter, and the library's progress,
+    plays, start date, end date, last watched, runtime, time watched and
+    (API) time-left orders do: a show has one tracker row, and those values
+    are its `TV` properties. Runtime and time watched also prefill the
+    episode runtime index for the batch. Any other reader of the tracker row
+    keeps the hydrated graph for the whole scan.
+  - A movie's tracker rows are attached as `app.movie_rows.MovieRow` (one
+    value query a batch, no model) when the sort declares `movie_rows`
+    (runtime, time watched) and no filter reads the tracker.
+  - A sort whose Python value reads only the item (`item_only`: time to
+    beat, author) loads no tracker row at all.
   - Memory is bounded by the batch and the page. Computing values in Python is
     still one pass over the narrowed candidates.
 
-Home caches a Python-ordered shelf's id order for the row-cache lifetime, so
-"load more" costs one page.
+Home caches a Python-ordered shelf's id order for longer than the rendered
+section, so "load more" and a warm revisit cost one page. A random shelf keeps
+the short row lifetime: each new seed is a different order.
+
+### Display levels on mixed Home shelves
+
+An All Media library row stores selected families in `filters.media_types` and
+one display level per hierarchical family in `filters.media_subviews`. TV can
+show shows, seasons or episodes; music can show artists, albums or tracks;
+podcasts can show shows or episodes. Missing selections preserve the original
+mixed-row defaults: TV shows, music tracks and podcast episodes. The dedicated
+music and podcast row defaults are independent.
+
+Ordinary mixed shelves retain the normal executor path. A shelf with another
+display level uses `users.home_mixed_rows`: item sources contribute the engine's
+compact `rank_rows()` values, and Home's existing album, artist and podcast-show
+adapters contribute equivalent ranks from batches of their trackers. One global
+order uses nulls last, stable entity identities and the row's random seed. Only
+the requested page is decorated; only its projected cards persist shell Items.
+The combined identity order uses the existing Home cache registry and tracker
+invalidation, including the row's display choices in its cache key.
+
+Status and rating refer to the displayed entity, not its parent. TV child
+membership is scoped through the viewer's TV library, including anime routing;
+episode state comes from active episode plays and excludes archived/rating-only
+rows. Collection and tags refer to the displayed Item (the existing shell for
+projected entities). Release filtering uses the album's release date, a podcast
+show's first publication date, or an unknown date for artists. Unknown dates
+follow the shared Released/Not Released rule. Caught-up filters apply to shows
+and seasons, as on other engine queries.
 
 ## Where filters come from
 
@@ -118,9 +198,30 @@ ranges are part of their cache keys.
   - Give it a `sql` expression, or `sql_order` plus `batch_values`. The two
     must order identically; see `users.tests.test_home_row_paging`.
   - `tracker=True` marks values derived from tracker rows.
+  - Set `tv_facts=True` (on a `SortDef` or a `FilterDef`) only if, for a
+    show, the Python code reads nothing beyond what `TrackedShow` defines:
+    status, creation date, progress, first and last play, completed episodes,
+    the released counts, the runtime members and the seasons' number, status
+    and progress. It reads through `getattr` with a default in places, so a
+    missing attribute would not fail; it would reorder. Add the sort to
+    `users.tests.test_home_row_show_facts`, which compares it with the
+    hydrated order in both directions.
+  - Set `movie_rows=True` only if, for a movie, the value reads the item and
+    the row's status, progress, end date and creation date (`MovieRow`);
+    `app.tests.test_library_query.MovieRowOrderTests` compares the orders.
+  - Set `item_only=True` on a Python sort whose value reads nothing but the
+    candidate item; the scan then loads no tracker row for it.
 
 `app.tests.test_library_query` checks that every SQL sort orders the same way
 on the scan path. A new sort is covered automatically.
+
+`app.tests.test_list_semantics` checks what each sort and filter means, on a
+library larger than one page: the web list, the media API the Expo library
+reads and a Home shelf must show the same order, and the list, the API and
+"select all" on both must keep the same titles. State the order in the table
+(`ORDERS`, or a `FilterCase` for a filter); the test fails until a new key has
+a row. A surface that differs on purpose goes in its `EXEMPT` table with the
+reason.
 
 ## Semantics that surfaces choose
 
@@ -158,7 +259,8 @@ switched over. They are intentional:
   platform. Items listing several platforms sort last. The API previously
   sorted by the first listed platform.
 - **Runtime, time watched and time to beat sort a zero value last,** as
-  unmeasured. Nulls sort last in both directions everywhere. A list page's
+  unmeasured, and a title with no author sorts last by author. Nulls sort
+  last in both directions everywhere. A list page's
   rating sort used to put unrated items first when ascending.
 - **Filters the media list ignored on types whose UI does not show them now
   apply to every type,** for example author on the movie API.
@@ -168,8 +270,30 @@ switched over. They are intentional:
 
 - Python predicates: provider availability, author, progress, and a season's
   effective status where it has to be derived.
-- Python sorts: time to beat, next episode air date, time left, and Home's
+- Python sorts: time to beat, author, runtime, time watched, next episode air
+  date, time left, a show's dates, progress and plays, and Home's Up Next,
   upcoming, completion and episodes-left orders. These scan the SQL-narrowed
   candidates.
+  - Time to beat and author read only the candidate items; movies' runtime
+    and time watched read light rows; shows' runtime and time watched read
+    facts.
+  - Other types' runtime and time watched (anime, books) and TV's next
+    episode air date still hydrate each candidate's tracker graph.
+  - For shows, Home's orders and the caught-up filter are O(n) in value rows,
+    not in models: one item per candidate is all a scan builds.
+  - Home's shelves share their shows' facts and released-episode counts
+    (`app.tv_show_facts.SharedShows`, opted into with
+    `LibraryQueryExecutor(share_shows=True)`). Records are kept per
+    candidate show, not for the whole library: the first shelf computes the
+    shows it ranks, later shelves read them and add only shows they have not
+    seen. Plain values, one cache entry per user under the Home registry
+    (any tracker write clears it), lifetime `HOME_ROW_RELEASED_CACHE_TTL`
+    because released counts move with air dates. Measured on a cold Home of
+    10,000 shows: each later TV shelf asks 14 queries instead of 62, the
+    whole Home 618 instead of 797, and a shelf built alone costs what it did.
+    An earlier whole-library copy was rejected for making a lone shelf
+    several times slower; computing only the candidates avoids that.
+  - Season shelves and the TV `next_episode_air_date` order still hydrate
+    each candidate; on that Home they are about two thirds of the cold CPU.
 - `ids()` for smart-list sync is O(n) by definition and runs in the
   background.

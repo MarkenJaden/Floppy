@@ -16,6 +16,7 @@ from app.models import (
     Album,
     Anime,
     Artist,
+    BoardGame,
     Book,
     Comic,
     ComicIssue,
@@ -836,7 +837,11 @@ class CreateMedia(TestCase):
             count=2,
             html=False,
         )
-        self.assertContains(response, '-list" hx-swap-oob="true"', html=False)
+        # An additional data attribute now separates the id and OOB marker.
+        self.assertRegex(
+            response.content.decode(),
+            r'id="episode-track-button-\d+-list"[^>]*\bhx-swap-oob="true"',
+        )
         latest_episode = Episode.objects.filter(
             item__media_id="1668",
             related_season__user=self.user,
@@ -850,7 +855,7 @@ class CreateMedia(TestCase):
         )
         self.assertContains(response, 'id="episode-history-', html=False)
         self.assertContains(response, 'hx-swap-oob="true"', html=False)
-        self.assertContains(response, "Watched 2 times")
+        self.assertContains(response, "2\u00d7 watched")
         self.assertContains(response, "season-progress-mobile-", html=False)
         self.assertContains(response, "season-progress-desktop-", html=False)
         trigger = json.loads(response["HX-Trigger"])
@@ -1338,6 +1343,22 @@ class EditMedia(TestCase):
         self.user = get_user_model().objects.create_user(**self.credentials)
         self.client.login(**self.credentials)
 
+    def test_edit_boardgame_htmx_keeps_all_tracking_actions(self):
+        item = Item.objects.create(
+            media_id="42", source=Sources.IGDB.value,
+            media_type=MediaTypes.BOARDGAME.value, title="Board game",
+        )
+        entry = BoardGame.objects.create(item=item, user=self.user, progress=1)
+        response = self.client.post(reverse("media_save"), {
+            "instance_id": entry.id, "media_id": "42", "source": item.source,
+            "media_type": item.media_type, "status": Status.COMPLETED.value,
+            "progress": 2,
+        }, HTTP_HX_REQUEST="true")
+        self.assertEqual(response.status_code, 200)
+        for action in ("log_play", "start", "edit"):
+            self.assertContains(response, f'data-track-action-key="{action}"', html=False)
+        self.assertContains(response, 'hx-swap-oob="outerHTML"', html=False)
+
     def test_edit_movie_score(self):
         """Test the editing of a movie score."""
         item = Item.objects.create(
@@ -1471,6 +1492,63 @@ class EditMedia(TestCase):
         self.assertEqual(new_entry.end_date.date().isoformat(), "2025-01-03")
         self.assertEqual(new_entry.watch_operation_id, operation_id)
 
+    @patch("app.models.providers.services.get_media_metadata")
+    def test_adding_watch_date_to_open_episode_play_completes_it(self, metadata_mock):
+        """A paused check-in's open play edited with a watch date is a finished watch.
+
+        The track modal edits the latest play, so marking an episode watched
+        while a check-in left it open submits the prefilled In Progress status.
+        """
+        metadata_mock.return_value = {"season/1": {"episodes": []}}
+        season_item = Item.objects.create(
+            media_id="episode-open-1",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.SEASON.value,
+            title="Open Play",
+            season_number=1,
+        )
+        season = Season.objects.create(
+            item=season_item,
+            user=self.user,
+            status=Status.IN_PROGRESS.value,
+        )
+        episode_item = Item.objects.create(
+            media_id="episode-open-1",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.EPISODE.value,
+            title="Episode One",
+            season_number=1,
+            episode_number=1,
+        )
+        episode = Episode.objects.create(
+            item=episode_item,
+            related_season=season,
+            status=Status.IN_PROGRESS.value,
+            start_date=datetime.datetime(2025, 1, 2, 20, 0, tzinfo=datetime.UTC),
+            entry_source="check-in",
+        )
+
+        response = self.client.post(
+            reverse("episode_save"),
+            {
+                "instance_id": episode.id,
+                "media_id": episode_item.media_id,
+                "source": episode_item.source,
+                "media_type": MediaTypes.EPISODE.value,
+                "season_number": 1,
+                "episode_number": 1,
+                "status": Status.IN_PROGRESS.value,
+                "start_date": "2025-01-02T20:00",
+                "end_date": "2025-01-02T20:25",
+                "entry_source": "check-in",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        episode.refresh_from_db()
+        self.assertEqual(episode.status, Status.COMPLETED.value)
+        self.assertIsNotNone(episode.end_date)
+
     def test_edit_movie_htmx_returns_inline_detail_update(self):
         """HTMX saves should update the detail tracker in place."""
         item = Item.objects.create(
@@ -1515,7 +1593,9 @@ class EditMedia(TestCase):
         self.assertContains(response, 'hx-swap-oob="outerHTML"', html=False)
         self.assertContains(response, f'id="detail-score-chip-{movie.id}"', html=False)
         self.assertContains(response, "Edit rating")
-        self.assertContains(response, "Completed")
+        # A completed movie offers another entry beside Check-in.
+        self.assertContains(response, "Check-in</span>", html=False)
+        self.assertContains(response, "Add new entry")
         trigger = json.loads(response["HX-Trigger"])
         self.assertEqual(trigger["closeModal"]["formId"], "track-form-test")
         self.assertEqual(trigger["showToast"]["type"], "success")
@@ -1738,7 +1818,7 @@ class EditMedia(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "data-track-action-root", html=False)
-        self.assertContains(response, "trackOpen: true", html=False)
+        self.assertContains(response, "editTrackOpen: true", html=False)
         self.assertContains(response, "track-form-test")
         self.assertContains(response, "data-track-modal-root", html=False)
         self.assertContains(
@@ -1752,6 +1832,48 @@ class EditMedia(TestCase):
             Movie.objects.get(item__media_id="10494").status,
             initial_status,
         )
+
+    @patch("app.save_views.ensure_item_metadata")
+    def test_add_movie_entry_htmx_validation_error_reopens_create_modal(
+        self, ensure_item_metadata_mock,
+    ):
+        """A failed Add new entry reopens its own modal on the split button."""
+        item = Item.objects.create(
+            media_id="10494",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.MOVIE.value,
+            title="Perfect Blue",
+            image="http://example.com/image.jpg",
+        )
+        Movie.objects.create(
+            item=item,
+            user=self.user,
+            progress=1,
+            status=Status.COMPLETED.value,
+        )
+        ensure_item_metadata_mock.return_value = SimpleNamespace(item=item)
+
+        response = self.client.post(
+            f"{reverse('media_save')}?next=/details/tmdb/movie/10494/perfect-blue",
+            {
+                "track_form_id": "track-form-test",
+                "media_id": "10494",
+                "source": Sources.TMDB.value,
+                "media_type": MediaTypes.MOVIE.value,
+                "progress": 1,
+                "status": "bogus",
+            },
+            HTTP_HX_REQUEST="true",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Check-in</span>", html=False)
+        self.assertContains(response, "createTrackOpen: true", html=False)
+        self.assertContains(response, "editTrackOpen: false", html=False)
+        self.assertContains(response, "track-form-test")
+        self.assertContains(response, "data-track-modal-root", html=False)
+        self.assertContains(response, 'hx-swap-oob="outerHTML"', html=False)
+        self.assertEqual(Movie.objects.filter(item=item).count(), 1)
 
     def test_edit_movie_image_url(self):
         """Test overriding a movie image URL from the edit form."""

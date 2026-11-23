@@ -5,7 +5,7 @@ from django.templatetags.static import static
 from django.utils.text import slugify
 
 from app import helpers
-from app.models import MediaTypes, Sources
+from app.models import Item, MediaTypes, Sources
 from app.services import game_lengths as game_length_services
 from app.services import trakt_popularity as trakt_popularity_service
 from app.templatetags import app_tags
@@ -863,6 +863,27 @@ _DETAIL_LINK_BRANDS = {
         "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
         "fallback_text": "STM",
     },
+    "steamdb": {
+        "logo_src": static("img/steamdb-logo.svg"),
+        "chip_classes": "border-slate-400/18 bg-slate-500/[0.07]",
+        "badge_classes": "border-slate-400/28 bg-slate-500/14",
+        "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
+        "fallback_text": "SDB",
+    },
+    "protondb": {
+        "logo_src": static("img/protondb-logo.png"),
+        "chip_classes": "border-slate-400/18 bg-slate-500/[0.07]",
+        "badge_classes": "border-slate-400/28 bg-slate-500/14",
+        "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
+        "fallback_text": "PDB",
+    },
+    "pcgamingwiki": {
+        "logo_src": static("img/pcgamingwiki-logo.svg"),
+        "chip_classes": "border-slate-400/18 bg-slate-500/[0.07]",
+        "badge_classes": "border-slate-400/28 bg-slate-500/14",
+        "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
+        "fallback_text": "PCGW",
+    },
     "xbox": {
         "logo_src": static("img/xbox-logo.svg"),
         "chip_classes": "border-green-400/18 bg-green-500/[0.07]",
@@ -930,6 +951,34 @@ _DETAIL_LINK_BRANDS = {
         "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
         "fallback_text": "YT",
     },
+    "radarr": {
+        "logo_src": static("img/radarr-logo.svg"),
+        "chip_classes": "border-amber-400/18 bg-amber-500/[0.07]",
+        "badge_classes": "border-amber-400/28 bg-amber-500/14",
+        "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
+        "fallback_text": "RAD",
+    },
+    "sonarr": {
+        "logo_src": static("img/sonarr-logo.svg"),
+        "chip_classes": "border-sky-400/18 bg-sky-500/[0.07]",
+        "badge_classes": "border-sky-400/28 bg-sky-500/14",
+        "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
+        "fallback_text": "SON",
+    },
+    "seerr": {
+        "logo_src": static("img/seerr-logo.svg"),
+        "chip_classes": "border-violet-400/18 bg-violet-500/[0.07]",
+        "badge_classes": "border-violet-400/28 bg-violet-500/14",
+        "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
+        "fallback_text": "SRR",
+    },
+    "jellyfin": {
+        "logo_src": static("img/jellyfin-logo.svg"),
+        "chip_classes": "border-indigo-400/18 bg-indigo-500/[0.07]",
+        "badge_classes": "border-indigo-400/28 bg-indigo-500/14",
+        "accent_classes": _DETAIL_LINK_ACCENT_CLASSES,
+        "fallback_text": "JF",
+    },
     "howlongtobeat": {
         "logo_src": static("img/hltb-logo.png"),
         "chip_classes": "border-amber-400/18 bg-amber-500/[0.07]",
@@ -957,8 +1006,14 @@ def _build_detail_link_entry(label, url, brand_key):
     if not url:
         return None
 
+    normalized_brand_key = _normalize_detail_link_brand_key(brand_key)
+    brand_lookup_key = (
+        "imdb"
+        if normalized_brand_key == "imdbparentsguide"
+        else normalized_brand_key
+    )
     brand = _DETAIL_LINK_BRANDS.get(
-        _normalize_detail_link_brand_key(brand_key),
+        brand_lookup_key,
         _DEFAULT_DETAIL_LINK_BRAND,
     )
     fallback_text = (
@@ -978,10 +1033,27 @@ def _build_detail_link_entry(label, url, brand_key):
     }
 
 
-def _build_detail_link_sections(
-    media_metadata, media_type, identity_provider, display_provider, item=None
+_DETAIL_LINK_GROUP_LABELS = {
+    "Steam": "PC gaming",
+    "SteamDB": "PC gaming",
+    "ProtonDB": "PC gaming",
+    "PCGamingWiki": "PC gaming",
+    "IMDb Parent's Guide": "Guides",
+}
+
+
+def build_detail_link_sections(
+    media_metadata,
+    media_type,
+    identity_provider,
+    display_provider,
+    item=None,
+    viewer=None,
 ):
-    """Return grouped source and external link chips for the media detail action row."""
+    """Return grouped source and external link chips for the media detail action row.
+
+    Shared by the media, season and music detail pages and the detail API.
+    """
     if not isinstance(media_metadata, dict):
         return []
 
@@ -1045,6 +1117,20 @@ def _build_detail_link_sections(
         for name, url in external_links.items():
             append_entry(external_entries, name, url, name)
 
+    if media_type == MediaTypes.GAME.value:
+        external_ids = media_metadata.get("external_ids")
+        external_ids = external_ids if isinstance(external_ids, dict) else {}
+        steam_app_id = external_ids.get("steam_app_id")
+        if not steam_app_id and item is not None:
+            steam_app_id = (item.provider_external_ids or {}).get("steam_app_id")
+        if steam_app_id:
+            from app.providers.igdb import get_steam_links_for_app_id
+
+            existing_labels = {entry["label"] for entry in external_entries}
+            for name, url in get_steam_links_for_app_id(steam_app_id).items():
+                if name not in existing_labels:
+                    append_entry(external_entries, name, url, name)
+
     is_anime = media_type == MediaTypes.ANIME.value or (
         media_type == MediaTypes.TV.value
         and item is not None
@@ -1097,8 +1183,31 @@ def _build_detail_link_sections(
                 "entries": tracking_source_entries,
             }
         )
-    if external_entries:
-        sections.append({"title": "External links", "entries": external_entries})
+    # Game-page and guide links get their own groups, like Players and
+    # Downloads, so "External links" stays the general reference sites.
+    grouped = {title: [] for title in _DETAIL_LINK_GROUP_LABELS.values()}
+    other_entries = []
+    for entry in external_entries:
+        title = _DETAIL_LINK_GROUP_LABELS.get(entry["label"])
+        (grouped[title] if title else other_entries).append(entry)
+    if other_entries:
+        sections.append({"title": "External links", "entries": other_entries})
+    sections.extend(
+        {"title": title, "entries": entries}
+        for title, entries in grouped.items()
+        if entries
+    )
+    if viewer is not None:
+        from integrations.arr_library import server_link_groups
+
+        for title, links in server_link_groups(
+            viewer, identity_provider, media_type, media_metadata.get("media_id")
+        ):
+            entries = []
+            for label, url, brand in links:
+                append_entry(entries, label, url, brand)
+            if entries:
+                sections.append({"title": title, "entries": entries})
     return sections
 
 
@@ -1202,12 +1311,113 @@ def _build_detail_person_rows(media_metadata, item=None):
             cast[:20],
             view_all_url=view_all_url,
             view_all_text=view_all_text,
+            card_width_class="w-44",
         ),
-        "crew_row": _build_static_row("detail-crew", "Crew", crew[:20]),
-        "recommendations_row": _build_static_row(
+        "crew_row": _build_static_row(
+            "detail-crew", "Crew", crew[:20], card_width_class="w-44"
+        ),
+        "seasons_row": _build_static_row(
+            "detail-seasons", "Seasons", (media_metadata.get("related") or {}).get("seasons") or [],
+            card_width_class="w-44",
+        ),
+        "recommendations_row": {**_build_static_row(
             "detail-recommendations",
             "Recommendations",
             recommendations,
-            card_width_class="w-36",
-        ),
+            card_width_class="w-44",
+        ), "card_surface": "detail_recommendations"},
     }
+
+
+_BOOK_FORMAT_LABELS = {
+    "audiobook": "Audiobook",
+    "ebook": "eBook",
+    "hardcover": "Hardcover",
+    "paperback": "Paperback",
+}
+
+
+def _book_isbns(item):
+    return {
+        "".join(ch for ch in str(value) if ch.isalnum()).upper()
+        for value in item.isbn or []
+        if value
+    } - {""}
+
+
+def _book_author_keys(item):
+    return {
+        key
+        for key in (Item._title_comparison_key(a) for a in item.authors or [])
+        if key
+    }
+
+
+def _other_book_items(user, item):
+    """Return the viewer's other tracked Items that are the same book."""
+    if (
+        item is None
+        or item.media_type != MediaTypes.BOOK.value
+        or not getattr(user, "is_authenticated", False)
+    ):
+        return []
+
+    title_key = Item._title_comparison_key(item.title)
+    isbns = _book_isbns(item)
+    authors = _book_author_keys(item)
+    if not title_key and not isbns:
+        return []
+
+    candidates = Item.objects.filter(
+        media_type=MediaTypes.BOOK.value,
+        book__user=user,
+    ).exclude(pk=item.pk)
+    matches = []
+    for other in candidates.distinct():
+        same_isbn = bool(isbns & _book_isbns(other))
+        same_work = (
+            bool(title_key)
+            and title_key == Item._title_comparison_key(other.title)
+            and bool(authors & _book_author_keys(other))
+        )
+        if same_isbn or same_work:
+            matches.append(other)
+    return matches
+
+
+def _book_format_label(book_item):
+    return _BOOK_FORMAT_LABELS.get((book_item.format or "").lower(), "Book")
+
+
+def build_book_formats(user, item):
+    """Return the formats of this book the viewer tracks, or [] if only one.
+
+    An audiobook and an ebook are separate Items on purpose (their progress
+    units differ), so this only lists and links them. Two Items match when
+    they share an ISBN, or share a title and at least one author. The current
+    Item has no link. Audiobooks sort last, and when several audiobooks are
+    tracked each is labelled with its narrator so they can be told apart.
+    """
+    others = _other_book_items(user, item)
+    if not others:
+        return []
+
+    items = sorted(
+        [item, *others],
+        key=lambda book: (_book_format_label(book) == "Audiobook", book.pk),
+    )
+    audiobook_count = sum(_book_format_label(book) == "Audiobook" for book in items)
+    formats = []
+    for book in items:
+        label = _book_format_label(book)
+        narrators = ", ".join(book.narrators or [])
+        if label == "Audiobook" and audiobook_count > 1 and narrators:
+            label = f"{label} ({narrators})"
+        formats.append(
+            {
+                "label": label,
+                "href": None if book.pk == item.pk else app_tags.media_url(book),
+            },
+        )
+    return formats
+

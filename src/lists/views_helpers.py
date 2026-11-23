@@ -7,6 +7,7 @@ pure helpers called by views in views.py (and its submodules).
 
 import contextlib
 import logging
+from dataclasses import replace
 
 from django.apps import apps
 from django.conf import settings
@@ -26,6 +27,7 @@ from app.models import (
     Status,
 )
 from app.providers import services
+from app.services import metadata_resolution
 from integrations.imports import helpers as import_helpers
 from integrations.models import TraktAccount
 from lists.models import CustomList, CustomListItem
@@ -119,9 +121,11 @@ def get_public_list_for_item(list_reference, item):
 
 
 def _get_completed_item_ids(user, item_ids):
-    """Return the subset of item_ids that the user has marked Completed in any media type."""
-    if not item_ids:
-        return set()
+    """Return the subset of item_ids that the user has marked Completed in any media type.
+
+    ``item_ids`` may be a subquery of ids (``values("item_id")``), which keeps
+    the queries the same size however long the list is.
+    """
     completed = set()
     for media_type in MediaTypes.values:
         if media_type == MediaTypes.EPISODE.value:
@@ -141,6 +145,7 @@ def _get_completed_item_ids(user, item_ids):
         )
     with contextlib.suppress(Exception):
         from app.models import Episode
+
         completed.update(
             Episode.objects.filter(
                 item_id__in=item_ids,
@@ -150,6 +155,17 @@ def _get_completed_item_ids(user, item_ids):
             .values_list("item_id", flat=True)
             .distinct()
         )
+    from app.library_query.spec import ROUTING_MODEL
+    from app.library_query.trackers import tracker_sources
+
+    source = tracker_sources(
+        user, MediaTypes.MUSIC.value, ROUTING_MODEL, include_albums=True
+    )[0]
+    completed.update(
+        Item.objects.filter(pk__in=item_ids)
+        .filter(pk__in=source.item_ids(user, Q(status=Status.COMPLETED.value)))
+        .values_list("pk", flat=True)
+    )
     return completed
 
 
@@ -313,6 +329,24 @@ def _get_list_completed_counts(user, list_ids):
                 status=Status.COMPLETED.value,
             ).values("item_id"),
         )
+    from django.db.models import Exists, OuterRef
+
+    from app.models import PodcastShowTracker
+
+    show_tracker = PodcastShowTracker.objects.filter(
+        user=user,
+        status=Status.COMPLETED.value,
+        show__podcast_uuid=OuterRef("media_id"),
+        show__source=OuterRef("source"),
+    )
+    completed |= Q(item_id__in=Item.objects.filter(
+        media_type=MediaTypes.PODCAST.value,
+    ).filter(Exists(show_tracker)).values("pk"))
+    from app.library_query.spec import ROUTING_MODEL
+    from app.library_query.trackers import tracker_sources
+
+    source = tracker_sources(user, MediaTypes.MUSIC.value, ROUTING_MODEL, include_albums=True)[0]
+    completed |= Q(item_id__in=source.item_ids(user, Q(status=Status.COMPLETED.value)))
     return dict(
         CustomListItem.objects.filter(completed, custom_list_id__in=list_ids)
         .order_by()
@@ -476,8 +510,19 @@ def _episode_title_fields_from_season_metadata(item, season_metadata):
     return None
 
 
+def list_metadata_language(user, fallback_user=None):
+    """Return the metadata language list search and add flows should request.
+
+    Anonymous visitors (public recommendations) fall back to the list owner's
+    language so titles match what the list owner sees.
+    """
+    if user is not None and getattr(user, "is_authenticated", False):
+        return metadata_resolution.metadata_language_default(user)
+    return metadata_resolution.metadata_language_default(fallback_user)
+
+
 def _maybe_backfill_episode_title(
-    item, *, season_item=None, season_metadata=None, force=False
+    item, *, season_item=None, season_metadata=None, force=False, language=None
 ):
     """Resolve malformed episode item titles that still store the show title."""
     if not force and not _episode_title_needs_backfill(item, season_item=season_item):
@@ -492,6 +537,7 @@ def _maybe_backfill_episode_title(
                 item.media_id,
                 item.source,
                 [item.season_number],
+                language=language,
             )
         except Exception as exc:
             logger.debug(
@@ -512,6 +558,7 @@ def _maybe_backfill_episode_title(
                 item.source,
                 [item.season_number],
                 item.episode_number,
+                language=language,
             )
         except Exception as exc:
             logger.debug(
@@ -737,6 +784,10 @@ def paginate_list_items(
     direction,
     page,
     page_size=16,
+    media_types=None,
+    initial="",
+    title_user=None,
+    include_alphabet=False,
     completed_placement="normal",
 ):
     """Order and paginate a list's items with the library-query engine.
@@ -744,17 +795,23 @@ def paginate_list_items(
     ``candidates`` are the items the list shows (its members, or a smart
     list's live matches) as an ``Item`` id queryset or ids. Tracking values -
     status, rating, progress - are read for ``media_user``. Only the requested
-    page is loaded and decorated. Returns ``(items_page, filtered_count)``.
+    page is loaded and decorated. ``media_types`` is the candidates' distinct
+    media types when the caller already read them, which saves re-evaluating
+    ``candidates``. Returns ``(items_page, filtered_count)``.
     """
     from app.library_query import LibraryQuery, LibraryQueryExecutor, SortSpec
+    from app.library_query.alphabet import (
+        initial_condition,
+        normalize_initial,
+        query_other_initial,
+    )
     from app.library_query.spec import ROUTING_MODEL
 
-    media_types = tuple(
-        Item.objects.filter(pk__in=candidates)
-        .order_by()
-        .values_list("media_type", flat=True)
-        .distinct(),
-    )
+    if media_types is None:
+        media_types = Item.objects.filter(pk__in=candidates).order_by().values_list(
+            "media_type", flat=True
+        ).distinct()
+    media_types = tuple(media_types)
     if sort_by == ListDetailSortChoices.CUSTOM:
         direction = "asc"  # The list's own order has no direction.
 
@@ -770,6 +827,24 @@ def paginate_list_items(
         if candidate_ids and media_user and getattr(media_user, "is_authenticated", False)
         else set()
     )
+    base_query = LibraryQuery(
+        media_types=media_types,
+        filters=filters,
+        sort=SortSpec(key=LIST_SORT_KEYS.get(sort_by, "list_added"), direction=direction),
+        within=candidates,
+        sort_list_id=custom_list.id,
+        routing=ROUTING_MODEL,
+        dedupe_cross_provider=False,
+        provider_region=str(getattr(media_user, "watch_provider_region", "") or ""),
+        pinned_providers=tuple(getattr(media_user, "pinned_watch_providers", None) or ()),
+    )
+    other_initial = (
+        query_other_initial(media_user, base_query, display_user=title_user)
+        if include_alphabet
+        else None
+    )
+    has_initial = bool(normalize_initial(initial))
+    initial_cond = initial_condition(initial, title_user or media_user) if has_initial else None
 
     if (
         completed_placement == "bottom"
@@ -778,29 +853,15 @@ def paginate_list_items(
     ):
         uncompleted_candidates = [pk for pk in candidate_ids if pk not in completed_ids]
         completed_candidates = [pk for pk in candidate_ids if pk in completed_ids]
+        if has_initial:
+            uncompleted_within = Item.objects.filter(pk__in=uncompleted_candidates).filter(initial_cond).values("pk")
+            completed_within = Item.objects.filter(pk__in=completed_candidates).filter(initial_cond).values("pk")
+        else:
+            uncompleted_within = uncompleted_candidates
+            completed_within = completed_candidates
 
-        query_uncompleted = LibraryQuery(
-            media_types=media_types,
-            filters=filters,
-            sort=SortSpec(key=LIST_SORT_KEYS.get(sort_by, "list_added"), direction=direction),
-            within=uncompleted_candidates,
-            sort_list_id=custom_list.id,
-            routing=ROUTING_MODEL,
-            dedupe_cross_provider=False,
-            provider_region=str(getattr(media_user, "watch_provider_region", "") or ""),
-            pinned_providers=tuple(getattr(media_user, "pinned_watch_providers", None) or ()),
-        )
-        query_completed = LibraryQuery(
-            media_types=media_types,
-            filters=filters,
-            sort=SortSpec(key=LIST_SORT_KEYS.get(sort_by, "list_added"), direction=direction),
-            within=completed_candidates,
-            sort_list_id=custom_list.id,
-            routing=ROUTING_MODEL,
-            dedupe_cross_provider=False,
-            provider_region=str(getattr(media_user, "watch_provider_region", "") or ""),
-            pinned_providers=tuple(getattr(media_user, "pinned_watch_providers", None) or ()),
-        )
+        query_uncompleted = replace(base_query, within=uncompleted_within)
+        query_completed = replace(base_query, within=completed_within)
         executor_uncompleted = LibraryQueryExecutor(media_user, query_uncompleted)
         executor_completed = LibraryQueryExecutor(media_user, query_completed)
         total_uncompleted = executor_uncompleted.count()
@@ -820,16 +881,13 @@ def paginate_list_items(
             completed_offset = offset - total_uncompleted
             items = list(executor_completed.page(completed_offset, page_size, total=total_completed).items)
     else:
-        query = LibraryQuery(
-            media_types=media_types,
-            filters=filters,
-            sort=SortSpec(key=LIST_SORT_KEYS.get(sort_by, "list_added"), direction=direction),
-            within=candidates,
-            sort_list_id=custom_list.id,
-            routing=ROUTING_MODEL,
-            dedupe_cross_provider=False,
-            provider_region=str(getattr(media_user, "watch_provider_region", "") or ""),
-            pinned_providers=tuple(getattr(media_user, "pinned_watch_providers", None) or ()),
+        query = (
+            replace(
+                base_query,
+                within=Item.objects.filter(pk__in=candidates).filter(initial_cond).values("pk"),
+            )
+            if has_initial
+            else base_query
         )
         executor = LibraryQueryExecutor(media_user, query)
         total = executor.count()
@@ -837,15 +895,17 @@ def paginate_list_items(
         offset = (items_page.number - 1) * page_size
         items = executor.page(offset, page_size, total=total).items
 
-    added = dict(
-        CustomListItem.objects.filter(
+    added = {
+        item_id: (date_added, rank)
+        for item_id, date_added, rank in CustomListItem.objects.filter(
             custom_list=custom_list,
             item_id__in=[item.pk for item in items],
-        ).values_list("item_id", "date_added"),
-    )
+        ).values_list("item_id", "date_added", "rank")
+    }
     for item in items:
-        item.list_date_added = added.get(item.pk)
+        item.list_date_added, item.list_rank = added.get(item.pk, (None, None))
     items_page.object_list = items
+    items_page.alphabet_other_initial = other_initial
     _attach_media_with_aggregation(items_page, media_user)
     return items_page, total
 
@@ -944,8 +1004,17 @@ def _attach_media_with_aggregation(item_list, media_user):
                 media_manager._aggregate_item_data(display_media, entries)
             media_by_item_id[item_id] = display_media
 
+    from app.services.podcast_list_tracking import podcast_show_trackers_for_items
+
+    media_by_item_id.update(podcast_show_trackers_for_items(media_user, item_list))
+    from app.services.music import album_trackers_for_list_items
+
+    media_by_item_id.update(album_trackers_for_list_items(media_user, item_list))
     for item in item_list:
         item.media = media_by_item_id.get(item.id)
+    from app.media_list_filters import attach_card_collection_platforms
+
+    attach_card_collection_platforms(media_user, item_list)
     _attach_list_card_overrides(item_list)
 
 

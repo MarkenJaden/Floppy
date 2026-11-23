@@ -17,6 +17,7 @@ from app import (
     view_constants,
 )
 from app import statistics as stats
+from app.helpers import coerce_list as _coerce_list
 from app.models import (
     Album,
     Artist,
@@ -32,6 +33,7 @@ from app.providers import pocketcasts, services
 from app.services.metadata_resolution import (
     get_library_media_type,
     get_tracking_media_type,
+    metadata_language_default,
     upsert_provider_links,
 )
 from app.tasks_backfill_state import (
@@ -59,14 +61,6 @@ def _coerce_text(value) -> str:
     if isinstance(value, str):
         return value
     return str(value)
-
-
-def _coerce_list(value) -> list:
-    if isinstance(value, list):
-        return value
-    if value in (None, ""):
-        return []
-    return [value]
 
 
 def _parse_release_date_str(release_date_value):
@@ -289,6 +283,27 @@ def ensure_item_metadata(
     provider response without making network calls inside their transaction.
     """
     season_numbers = [season_number]
+    existing_item = None
+    if (
+        prefetched_metadata is None
+        and user
+        and getattr(user, "is_authenticated", False)
+    ):
+        existing_item = (
+            Item.objects.filter(
+                media_id=media_id,
+                source=source,
+                media_type=get_tracking_media_type(
+                    media_type,
+                    source=source,
+                    identity_media_type=identity_media_type,
+                ),
+                season_number=season_number,
+                episode_number=episode_number,
+            )
+            .only("id")
+            .first()
+        )
     metadata = (
         services.get_media_metadata(
             media_type,
@@ -297,6 +312,7 @@ def ensure_item_metadata(
             season_numbers,
             episode_number,
             edition_id=edition_id,
+            language=metadata_language_default(user, existing_item),
         )
         if prefetched_metadata is None
         else dict(prefetched_metadata)

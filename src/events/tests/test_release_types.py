@@ -1,3 +1,5 @@
+import json
+import re
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -7,13 +9,12 @@ from django.template.loader import render_to_string
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.html import escapejs
 
 from app.models import Item, MediaTypes, Movie, Sources, Status
 from app.providers import tmdb
 from app.track_modal_views import (
-    _track_modal_date_suggestion,
     _track_modal_other_release_dates,
+    track_modal_date_suggestion,
 )
 from events.calendar.helpers import date_parser
 from events.calendar.main import cleanup_invalid_events, save_events
@@ -361,7 +362,7 @@ class TrackModalReleaseDatesTests(ReleaseTypeEventsMixin, TestCase):
             self.item,
             self.user,
         )
-        suggestion = _track_modal_date_suggestion(
+        suggestion = track_modal_date_suggestion(
             "Theatrical release",
             "2026-12-12",
             extras=extras,
@@ -378,10 +379,20 @@ class TrackModalReleaseDatesTests(ReleaseTypeEventsMixin, TestCase):
             },
         )
 
-        self.assertIn(f"applySuggestion('{escapejs('2027-01-20')}')", html)
-        self.assertIn(f"applySuggestion('{escapejs('2027-02-14')}')", html)
-        self.assertIn("Digital release", html)
-        self.assertIn("Physical release", html)
+        props = json.loads(
+            re.search(
+                r'type="application/json">(.*?)</script>',
+                html,
+                re.DOTALL,
+            ).group(1),
+        )
+        self.assertEqual(
+            [(extra["date"], extra["label"]) for extra in props["suggestionExtras"]],
+            [
+                ("2027-01-20", "Digital release"),
+                ("2027-02-14", "Physical release"),
+            ],
+        )
 
     def test_other_media_and_unset_region_have_none(self):
         """Nothing to show outside movies or without a region."""

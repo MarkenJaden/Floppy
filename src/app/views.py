@@ -15,7 +15,6 @@ from uuid import uuid4
 
 import requests
 from dateutil.relativedelta import relativedelta
-from django.apps import apps
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_not_required, login_required
@@ -23,10 +22,11 @@ from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.paginator import EmptyPage, Paginator
 from django.db import IntegrityError
-from django.db.models import F, Max, Min, Q
+from django.db.models import F, Max, Min
 from django.db.models.functions import ExtractDay, ExtractMonth, TruncDate
 from django.db.utils import OperationalError
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.templatetags.static import static
@@ -41,7 +41,6 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from app import (
-    cache_utils,
     config,
     credits,  # noqa: A004  # app.credits module, not the site builtin
     custom_metadata,
@@ -74,7 +73,12 @@ from app.activity_builders import (
     _queue_game_lengths_refresh,
     _should_queue_game_lengths_refresh,
 )
-from app.bulk_action_views import bulk_collection_quick_add, bulk_status_update
+from app.bulk_action_views import (
+    bulk_collection_quick_add,
+    bulk_show_plays_start,
+    bulk_show_plays_status,
+    bulk_status_update,
+)
 from app.collection_views import (
     _build_collection_episode_audit_entries,
     _build_collection_season_audit_entries,
@@ -95,6 +99,7 @@ from app.collection_views import (
     collection_remove_season,
     collection_status_api,
     collection_update,
+    collection_update_season,
 )
 from app.columns import (
     resolve_column_config,
@@ -106,7 +111,7 @@ from app.db_retry import run_retryable_db_operation
 from app.detail_builders import (
     _apply_cached_hltb_link,
     _build_detail_link_entry,
-    _build_detail_link_sections,
+    _build_detail_person_rows,
     _build_game_length_card,
     _build_game_lengths_context,
     _build_imdb_rating_context,
@@ -133,7 +138,6 @@ from app.discover_views import (
     _discover_response_rows,
     _discover_rows_context,
     _get_or_create_discover_item,
-    _invalidate_discover_after_action,
     _mark_discover_stale_without_refresh,
     _render_discover_row_fragment,
     _render_discover_rows_fragment,
@@ -150,6 +154,7 @@ from app.forms import (
     CollectionEntryForm,
     EpisodeForm,
     ManualItemForm,
+    PodcastShowTrackerForm,
     get_form_class,
 )
 from app.history_views import (
@@ -163,6 +168,15 @@ from app.history_views import (
     history,
     history_day_fragment,
     history_genres,
+)
+from app.home_artwork import (
+    queue_missing_cover_prefetch,
+    refresh_home_artwork,
+)
+from app.home_presentation import (
+    deferred_groups_presentation,
+    groups_presentation,
+    home_labels,
 )
 from app.log_safety import exception_summary, safe_url
 from app.media_details_views import _get_tv_runtime_display_fallback, media_details
@@ -260,13 +274,17 @@ from app.music_views import (
     album_detail,
     artist_delete,
     artist_detail,
+    artist_discography_more,
     artist_save,
     artist_track_modal,
     create_album_from_search,
     create_artist_from_search,
     music_album_details,
+    music_album_track_rows,
     music_artist_details,
+    music_repair_status,
     music_track_details,
+    music_track_notes,
     prefetch_artist_covers,
     prefetch_artist_relation_images,
     sync_artist_discography_view,
@@ -274,7 +292,11 @@ from app.music_views import (
 )
 from app.people_views import person_detail, studio_detail
 from app.podcast_views import (
+    podcast_episode_add,
+    podcast_episode_delete,
+    podcast_episode_edit,
     podcast_episodes_api,
+    podcast_episodes_manage,
     podcast_mark_all_played,
     podcast_save,
     podcast_show_delete,
@@ -308,12 +330,14 @@ from app.score_views import (
     update_artist_score,
     update_episode_score,
     update_media_score,
+    update_podcast_show_score,
     update_track_score,
 )
 from app.search_views import (
     _mark_grouped_anime_route,
     media_search,
     media_search_group,
+    search_results_json,
     search_suggestions,
 )
 from app.season_details_views import season_details
@@ -361,12 +385,12 @@ from app.statistics_views import (
     statistics_talent_fragment,
     update_genre_sort,
     update_statistics_compare_mode,
+    update_statistics_media_types,
     update_statistics_preferences,
     update_studio_sort,
     update_top_talent_sort,
 )
 from app.tag_views import (
-    _build_detail_tag_sections,
     _detail_request_url,
     _parse_detail_tag_preview_genres,
     _render_tag_modal_response,
@@ -381,13 +405,10 @@ from app.tag_views import (
 )
 from app.templatetags import app_tags
 from app.track_modal_views import (
-    _bulk_episode_form_initial_data,
+    _bulk_episode_presentation,
     _DummyPodcastWrapper,
-    _episode_domain_template_payload,
     _render_podcast_show_track_modal,
     _render_standard_track_modal,
-    _track_modal_date_suggestion,
-    _track_modal_field_groups,
     _track_modal_release_date_shortcut,
     _track_modal_release_runtime_minutes,
     track_modal,
@@ -401,7 +422,12 @@ from integrations import anime_mapping
 from integrations.models import CollectionSourceState
 from lists.models import CustomList
 from lists.views_helpers import get_public_list_for_item
-from users.home_screen import build_home_page_groups
+from users.home_screen import (
+    build_home_page_groups,
+    build_home_page_manifest,
+    build_home_row,
+    warm_first_group_split,
+)
 from users.models import (
     HomeSortChoices,
     MediaSortChoices,
@@ -442,19 +468,51 @@ def home(request):
         except (TypeError, ValueError):
             load_row_seed = None
 
-        # First paint renders only the first group; the rest hydrates via
-        # home_rest_fragment. Row-append requests build only their target shelf.
+        # First paint renders only the first group; the rest arrive one row
+        # at a time via home_row_fragment. Row-append requests build only
+        # their target shelf.
         defer_remaining_groups = load_row_id is None
-        home_groups = build_home_page_groups(
-            request.user,
-            items_limit,
-            load_row_id=load_row_id,
-            load_row_offset=load_row_offset,
-            load_row_seed=load_row_seed,
-            append_only=bool(request.headers.get("HX-Request") and load_row_id),
-            only_row_id=load_row_id if request.headers.get("HX-Request") else None,
-            first_group_only=defer_remaining_groups,
+        manifest = (
+            build_home_page_manifest(request.user)
+            if defer_remaining_groups
+            else None
         )
+        deferred_source = []
+        if manifest is not None:
+            # The shell renders a group only if its shelves are already
+            # cached; cold shelves load as their own fragments.
+            inline_index, defer_from = warm_first_group_split(
+                request.user, manifest, items_limit
+            )
+            deferred_source = manifest[defer_from:]
+            groups = [manifest[inline_index]] if inline_index is not None else []
+        else:
+            groups = None
+        home_groups = (
+            build_home_page_groups(
+                request.user,
+                items_limit,
+                load_row_id=load_row_id,
+                load_row_offset=load_row_offset,
+                load_row_seed=load_row_seed,
+                append_only=bool(request.headers.get("HX-Request") and load_row_id),
+                only_row_id=load_row_id if request.headers.get("HX-Request") else None,
+                first_group_only=defer_remaining_groups,
+                groups=groups,
+            )
+            if groups != []
+            else []
+        )
+
+        deferred_groups = [
+            {
+                "media_type": group["media_type"],
+                "label": group["label"],
+                "icon_svg": group["icon_svg"],
+                "row_ids": [row.id for row in group["rows"]],
+            }
+            for group in deferred_source
+        ]
 
         if request.headers.get("HX-Request") and load_row_id:
             target_row = next(
@@ -491,18 +549,29 @@ def home(request):
             "user": request.user,
             "home_groups": home_groups,
             "items_limit": items_limit,
-            "active_playback_card": live_playback.build_home_playback_card(
+            "active_playback_cards": live_playback.build_home_playback_cards(
                 request.user
             ),
             "MediaTypes": MediaTypes,
             "IMG_NONE": settings.IMG_NONE,
-            "defer_remaining_groups": defer_remaining_groups and bool(home_groups),
-            "artwork_poll_row_ids": [
-                row["row_id"]
-                for group in home_groups
-                for row in group["rows"]
-                if row.get("poll_for_covers")
-            ],
+            "defer_remaining_groups": bool(deferred_groups),
+            "deferred_groups": deferred_groups,
+            "home_props": {
+                "groups": groups_presentation(
+                    home_groups,
+                    request.user,
+                    request,
+                ),
+                "deferredGroups": deferred_groups_presentation(deferred_groups),
+                "showMediaTypeHeaders": bool(
+                    request.user.home_show_media_type_headers
+                ),
+                "readOnly": not request.user.is_authenticated,
+                "itemsLimit": items_limit,
+                "settingsUrl": reverse("home_screen"),
+                "csrfToken": get_token(request),
+                "labels": home_labels(),
+            },
         }
         return render(request, "app/home.html", context)
     except OperationalError:
@@ -513,99 +582,47 @@ def home(request):
             "home_groups": [],
             "items_limit": 14,
             "database_error": True,
-            "active_playback_card": None,
+            "active_playback_cards": [],
             "MediaTypes": MediaTypes,
             "IMG_NONE": settings.IMG_NONE,
             "defer_remaining_groups": False,
-            "artwork_poll_row_ids": [],
+            "deferred_groups": [],
+            "home_props": {
+                "groups": [],
+                "deferredGroups": [],
+                "showMediaTypeHeaders": False,
+                "readOnly": not request.user.is_authenticated,
+                "itemsLimit": 14,
+                "settingsUrl": reverse("home_screen"),
+                "csrfToken": get_token(request),
+                "labels": home_labels(),
+            },
         }
         return render(request, "app/home.html", context)
 
 
 @require_GET
-def home_rest_fragment(request):
-    """Deferred home content: every group after the first.
-
-    The shell renders the first group synchronously; this fragment supplies
-    the rest (served from the per-row cache when warm) plus an out-of-band
-    update of the artwork poller covering all groups.
-    """
-    home_groups = build_home_page_groups(request.user, items_limit=14)
+def home_row_fragment(request, row_id: int):
+    """One deferred Home row, fetched independently as its data becomes ready."""
+    try:
+        row = build_home_row(request.user, row_id, items_limit=14)
+    except OperationalError:
+        logger.exception("Database error in deferred home row")
+        return HttpResponse(status=503)
+    if row is None:
+        return HttpResponse("")
     return render(
         request,
-        "app/components/home_rest_fragment.html",
+        "app/components/_scrollable_row.html",
         {
+            "row": row,
             "user": request.user,
-            "home_groups": home_groups[1:],
-            "artwork_poll_row_ids": [
-                row["row_id"]
-                for group in home_groups
-                for row in group["rows"]
-                if row.get("poll_for_covers")
-            ],
             "MediaTypes": MediaTypes,
             "IMG_NONE": settings.IMG_NONE,
             "return_url": reverse("home"),
+            "rails_mount": True,
         },
     )
-
-
-def _queue_missing_cover_prefetch(user):
-    """Queue album-cover prefetch tasks for any artists/albums missing art."""
-    from django.db.models import Q
-
-    from app.models import AlbumTracker, ArtistTracker
-    from app.tasks import prefetch_album_covers_batch
-
-    artist_ids: set[int] = set()
-    artist_ids.update(
-        ArtistTracker.objects.filter(user=user)
-        .filter(Q(artist__image="") | Q(artist__image=settings.IMG_NONE))
-        .values_list("artist_id", flat=True)
-        .distinct()
-    )
-    artist_ids.update(
-        AlbumTracker.objects.filter(user=user)
-        .filter(Q(album__image="") | Q(album__image=settings.IMG_NONE))
-        .exclude(album__artist__isnull=True)
-        .values_list("album__artist_id", flat=True)
-        .distinct()
-    )
-    for artist_id in artist_ids:
-        cache_key = f"music:cover-prefetch:{artist_id}"
-        if cache.add(cache_key, True, 60 * 10):
-            try:
-                prefetch_album_covers_batch.delay([artist_id], limit_per_artist=5)
-            except Exception:  # pragma: no cover - defensive
-                cache.delete(cache_key)
-
-
-def _artwork_cover_fingerprint(user):
-    """Cheap fingerprint of the user's missing-cover state.
-
-    The artwork poller only exists to pick up cover-art writes (Artist,
-    Album, PodcastShow images), which don't fire user-scoped row-cache
-    invalidation. Three indexed counts are enough to detect "a cover
-    arrived since the last poll" without rebuilding any rows.
-    """
-    from app.models import AlbumTracker, ArtistTracker, PodcastShowTracker
-
-    missing_artist = (
-        ArtistTracker.objects.filter(user=user)
-        .filter(Q(artist__image="") | Q(artist__image=settings.IMG_NONE))
-        .count()
-    )
-    missing_album = (
-        AlbumTracker.objects.filter(user=user)
-        .filter(Q(album__image="") | Q(album__image=settings.IMG_NONE))
-        .count()
-    )
-    missing_show = (
-        PodcastShowTracker.objects.filter(user=user)
-        .filter(Q(show__image="") | Q(show__image=settings.IMG_NONE))
-        .count()
-    )
-    return (missing_artist, missing_album, missing_show)
 
 
 @require_GET
@@ -626,36 +643,40 @@ def home_rows_artwork_refresh(request):
     """
     raw_ids = request.GET.get("ids", "")
     row_ids = {int(part) for part in raw_ids.split(",") if part.strip().isdigit()}
+    # Deferred rows can still be loading after the first poll. Keep polling
+    # cheaply until they settle instead of re-arming the poller from each
+    # row fragment (which would replace the poller and re-render rows).
+    raw_pending = request.GET.get("pending", "")
+    rows_pending = raw_pending.isdigit() and int(raw_pending) > 0
     if not row_ids:
         return render(
             request,
             "app/components/home_artwork_poller.html",
-            {"poll_row_ids": []},
+            {
+                "poll_row_ids": [],
+                "active": rows_pending,
+                "retry_soon": rows_pending,
+            },
         )
 
-    cover_state = _artwork_cover_fingerprint(request.user)
-    cover_state_key = f"home_artwork_cover_state_{request.user.id}"
-    if cache.get(cover_state_key) == cover_state:
+    rows, poll_row_ids, rows_pending = refresh_home_artwork(
+        request.user,
+        row_ids,
+        rows_pending,
+    )
+    if not rows:
         # No cover changed since the last poll: keep polling (and keep
         # retrying prefetch, it has its own cooldown) without paying the
         # row rebuild.
-        _queue_missing_cover_prefetch(request.user)
         return render(
             request,
             "app/components/home_artwork_poller.html",
-            {"poll_row_ids": sorted(row_ids)},
+            {
+                "poll_row_ids": poll_row_ids,
+                "active": rows_pending,
+                "retry_soon": rows_pending,
+            },
         )
-
-    home_groups = build_home_page_groups(
-        request.user,
-        items_limit=14,
-        only_row_ids=row_ids,
-        refresh_row_cache=True,
-    )
-    rows = [r for group in home_groups for r in group["rows"] if r["row_id"] in row_ids]
-
-    if any(row.get("poll_for_covers") for row in rows):
-        _queue_missing_cover_prefetch(request.user)
 
     row_fragments = [
         render_to_string(
@@ -667,6 +688,7 @@ def home_rows_artwork_refresh(request):
                 "IMG_NONE": settings.IMG_NONE,
                 "force_artwork_anchor": True,
                 "oob_swap": True,
+                "rails_mount": True,
             },
             request=request,
         )
@@ -675,13 +697,12 @@ def home_rows_artwork_refresh(request):
     poller = render_to_string(
         "app/components/home_artwork_poller.html",
         {
-            "poll_row_ids": sorted(
-                row["row_id"] for row in rows if row.get("poll_for_covers")
-            ),
+            "poll_row_ids": poll_row_ids,
+            "active": rows_pending,
+            "retry_soon": rows_pending,
         },
         request=request,
     )
-    cache.set(cover_state_key, cover_state, 60 * 60)
     return HttpResponse(poller + "".join(row_fragments))
 
 
@@ -706,7 +727,7 @@ def home_row_artwork_refresh(request, row_id: int):
         return HttpResponse("")
 
     if row.get("poll_for_covers"):
-        _queue_missing_cover_prefetch(request.user)
+        queue_missing_cover_prefetch(request.user)
 
     return render(
         request,
@@ -717,6 +738,7 @@ def home_row_artwork_refresh(request, row_id: int):
             "MediaTypes": MediaTypes,
             "IMG_NONE": settings.IMG_NONE,
             "force_artwork_anchor": True,
+            "rails_mount": True,
         },
     )
 
@@ -771,15 +793,15 @@ def trakt_series_graph_fragment(request, source, media_id):
 
 
 def active_playback_fragment(request):
-    """HTMX fragment: return the active playback card or empty response."""
-    card = live_playback.build_home_playback_card(request.user)
-    if not card:
+    """HTMX fragment: return the active playback cards or empty response."""
+    cards = live_playback.build_home_playback_cards(request.user)
+    if not cards:
         return HttpResponse("")
     return render(
         request,
-        "app/components/active_playback_card.html",
+        "app/components/active_playback_cards.html",
         {
-            "active_playback_card": card,
+            "active_playback_cards": cards,
         },
     )
 
@@ -845,11 +867,30 @@ def episode_details(
     public_list_view = request.GET.get("public_view") == "1"
     public_view = is_anonymous or public_list_view
 
+    # Match season/media detail pages: honor the user's metadata language
+    # (and any per-show override) instead of always using TMDB_LANG.
+    show_media_type = (
+        MediaTypes.ANIME.value
+        if parent_media_type == MediaTypes.ANIME.value
+        else MediaTypes.TV.value
+    )
+    show_item = Item.objects.filter(
+        media_id=media_id,
+        source=source,
+        media_type=show_media_type,
+    ).first()
+    metadata_language = metadata_resolution.metadata_language_default(
+        None if is_anonymous else request.user,
+        show_item,
+    )
+
     tv_with_seasons_metadata = services.get_media_metadata(
         "tv_with_seasons",
         media_id,
         source,
         [season_number],
+        language=metadata_language,
+        user=None if is_anonymous else request.user,
     )
     season_key = f"season/{season_number}"
     season_metadata = tv_with_seasons_metadata.get(season_key) or {}
@@ -920,7 +961,12 @@ def episode_details(
     episode_metadata = {}
     if source == Sources.TMDB.value:
         with contextlib.suppress(Exception):
-            episode_metadata = tmdb.episode(media_id, season_number, episode_number)
+            episode_metadata = tmdb.episode(
+                media_id,
+                season_number,
+                episode_number,
+                language=metadata_language,
+            )
 
     episode_item_qs = Item.objects.filter(
         media_id=media_id,
@@ -954,6 +1000,22 @@ def episode_details(
         episode_data["item"] = episode_item
 
     imdb_score = _build_imdb_rating_context(episode_item, MediaTypes.EPISODE.value)
+    # Score-chip source links. The TMDB episode URL is derivable from the route;
+    # the IMDb tconst is stored by imdb_ratings.sync_episode_ratings.
+    tmdb_episode_url = (
+        f"https://www.themoviedb.org/tv/{media_id}/season/{season_number}"
+        f"/episode/{episode_number}"
+        if source == Sources.TMDB.value
+        else ""
+    )
+    imdb_episode_id = (
+        (episode_item.provider_external_ids or {}).get("imdb_id")
+        if episode_item is not None
+        else None
+    )
+    imdb_episode_url = (
+        f"https://www.imdb.com/title/{imdb_episode_id}/" if imdb_episode_id else ""
+    )
 
     season_url = reverse(
         "anime_season_details"
@@ -1019,6 +1081,8 @@ def episode_details(
         "next_episode_number": next_episode_number,
         "episode_metadata": episode_metadata,
         "imdb_score": imdb_score,
+        "tmdb_episode_url": tmdb_episode_url,
+        "imdb_episode_url": imdb_episode_url,
         "season_metadata": season_metadata,
         "current_instance": current_season_instance,
         "public_view": public_view,
@@ -1037,6 +1101,7 @@ def episode_details(
         or (episode_data or {}).get("title")
         or f"Episode {episode_number}",
         "detail_return_url": request.build_absolute_uri(),
+        **_build_detail_person_rows(episode_metadata),
     }
     return render(request, "app/episode_details.html", context)
 
@@ -1157,7 +1222,7 @@ def music_bulk_save(request):
             )
             return response
         messages.error(request, gettext("Start and end dates are required."))
-        return redirect(request.POST.get("return_url") or "/")
+        return redirect(helpers.safe_return_url(request, request.POST.get("return_url")))
 
     try:
         first_season_number = int(request.POST["first_season_number"])
@@ -1177,7 +1242,7 @@ def music_bulk_save(request):
             )
             return response
         messages.error(request, gettext("Invalid track range."))
-        return redirect(request.POST.get("return_url") or "/")
+        return redirect(helpers.safe_return_url(request, request.POST.get("return_url")))
 
     track_count = max(int(request.POST.get("episode_count") or 0), 0)
     write_mode = request.POST.get("write_mode", "add")
@@ -1227,7 +1292,53 @@ def music_bulk_save(request):
         request,
         gettext("Adding plays to %(value_1)s tracks.") % {"value_1": track_count},
     )
-    return redirect(request.POST.get("return_url") or "/")
+    return redirect(helpers.safe_return_url(request, request.POST.get("return_url")))
+
+
+def _create_manual_podcast_show(request, form):
+    """Create a manual podcast as a show plus the user's show tracker.
+
+    Podcasts are tracked at the show level (PodcastShow/PodcastShowTracker), so
+    a custom entry has to create those instead of the legacy per-episode Item
+    and Podcast rows the generic manual path would otherwise produce.
+    """
+    updated_request = request.POST.copy()
+    updated_request["show_id"] = "0"
+    tracker_form = PodcastShowTrackerForm(updated_request, user=request.user)
+
+    if not tracker_form.is_valid():
+        logger.error(tracker_form.errors.as_json())
+        helpers.form_error_messages(tracker_form, request)
+        return redirect("create_entry")
+
+    item = form.save()
+    show = PodcastShow.objects.create(
+        podcast_uuid=item.media_id,
+        source=Sources.MANUAL.value,
+        title=item.title,
+        image=item.image or "",
+        description=item.synopsis or "",
+        rss_feed_url=form.cleaned_data.get("rss_feed_url") or "",
+    )
+
+    tracker = tracker_form.save(commit=False)
+    tracker.user = request.user
+    tracker.show = show
+    tracker.save()
+
+    if show.rss_feed_url:
+        try:
+            from app.tasks_podcast import refresh_podcast_show_from_rss_task
+
+            refresh_podcast_show_from_rss_task.delay(show.id)
+        except Exception:
+            logger.exception("Could not queue the RSS import for %s", show.title)
+
+    msg = gettext("%(value_1)s added successfully.") % {"value_1": item}
+    messages.success(request, msg)
+    logger.info(msg)
+
+    return redirect("create_entry")
 
 
 @require_http_methods(["GET", "POST"])
@@ -1251,6 +1362,9 @@ def create_entry(request):
         logger.error(form.errors.as_json())
         helpers.form_error_messages(form, request)
         return redirect("create_entry")
+
+    if form.cleaned_data["media_type"] == MediaTypes.PODCAST.value:
+        return _create_manual_podcast_show(request, form)
 
     # Try to save the item
     try:
@@ -1307,11 +1421,21 @@ def create_entry(request):
 
 
 @require_GET
+def _parent_picker_payload(request, query, rows):
+    """Return JSON rows for the shared parent picker."""
+    if request.GET.get("format") != "json":
+        return None
+    return JsonResponse({"query": query, "results": rows})
+
+
 def search_parent_tv(request):
     """Return the search results for parent TV shows."""
     query = request.GET.get("q", "").strip()
 
     if len(query) <= 1:
+        payload = _parent_picker_payload(request, query, [])
+        if payload is not None:
+            return payload
         return render(request, "app/components/search_parent_tv.html")
 
     logger.debug(
@@ -1327,6 +1451,21 @@ def search_parent_tv(request):
         item__title__icontains=query,
     )[:5]
 
+    payload = _parent_picker_payload(
+        request,
+        query,
+        [
+            {
+                "id": parent_tv.id,
+                "title": parent_tv.item.title,
+                "label": parent_tv.item.title,
+            }
+            for parent_tv in parent_tvs
+        ],
+    )
+    if payload is not None:
+        return payload
+
     return render(
         request,
         "app/components/search_parent_tv.html",
@@ -1340,6 +1479,9 @@ def search_parent_season(request):
     query = request.GET.get("q", "").strip()
 
     if len(query) <= 1:
+        payload = _parent_picker_payload(request, query, [])
+        if payload is not None:
+            return payload
         return render(request, "app/components/search_parent_tv.html")
 
     logger.debug(
@@ -1354,6 +1496,23 @@ def search_parent_season(request):
         item__media_type=MediaTypes.SEASON.value,
         item__title__icontains=query,
     )[:5]
+
+    payload = _parent_picker_payload(
+        request,
+        query,
+        [
+            {
+                "id": season.id,
+                "title": gettext("%(title)s - Season %(number)s")
+                % {"title": season.item.title, "number": season.item.season_number},
+                "label": gettext("Season %(number)s of %(title)s")
+                % {"title": season.item.title, "number": season.item.season_number},
+            }
+            for season in parent_seasons
+        ],
+    )
+    if payload is not None:
+        return payload
 
     return render(
         request,
@@ -1425,11 +1584,17 @@ def history_modal(
         total_medias = len(user_medias)
     timeline_entries = []
     for media_entry_number, media in enumerate(user_medias, start=1):
-        history = media.history.all()
         if media_type == MediaTypes.PODCAST.value:
-            # Pocket Casts sync writes a record for every partial listen; only
-            # records with an end date describe a listen.
-            history = history.filter(end_date__isnull=False)
+            # A podcast's timeline is its plays, one entry per listen.
+            timeline_entries.extend(
+                history_processor.process_podcast_plays(
+                    media.plays.order_by("-end_date", "-id"),
+                    media_entry_number,
+                    request.user,
+                ),
+            )
+            continue
+        history = media.history.all()
         timeline_entries.extend(
             history_processor.process_history_entries(
                 history,
@@ -1459,342 +1624,6 @@ def history_modal(
             "episode_number": episode_number,
         },
     )
-
-
-@require_http_methods(["DELETE"])
-def delete_history_record(request, media_type, history_id):
-    """Delete a specific history record."""
-    try:
-        historical_model = apps.get_model(
-            app_label="app",
-            model_name=f"historical{media_type.lower()}",
-        )
-
-        # Try to get the history record, checking both with and without history_user
-        # This handles cases where history_user might be null (e.g., from old imports)
-        try:
-            history_record = historical_model.objects.get(
-                history_id=history_id,
-                history_user=request.user,
-            )
-        except historical_model.DoesNotExist:
-            # If not found with history_user, check if history_user is null
-            # and verify the record belongs to the user via the actual model instance
-            history_record = historical_model.objects.get(
-                history_id=history_id,
-                history_user__isnull=True,
-            )
-            try:
-                BasicMedia.objects.get_media(
-                    request.user,
-                    media_type.lower(),
-                    history_record.id,
-                )
-            except ObjectDoesNotExist:
-                msg = f"History record {history_id} not found for user {request.user}"
-                raise historical_model.DoesNotExist(msg) from None
-
-        # Capture all needed data BEFORE deletion to ensure we have it for cache invalidation
-        # and verification, even if the object becomes invalid after deletion
-        media_instance_id = history_record.id
-        start_date = getattr(history_record, "start_date", None)
-        end_date = getattr(history_record, "end_date", None)
-        created_at = getattr(history_record, "created_at", None)
-        media_type_lower = media_type.lower()
-
-        # These media types store each play as a separate model instance.
-        # Deleting only the historical record leaves the live row behind.
-        instance_delete_types = {
-            MediaTypes.MOVIE.value,
-            MediaTypes.EPISODE.value,
-            MediaTypes.GAME.value,
-            MediaTypes.BOARDGAME.value,
-        }
-        delete_instance = media_type_lower in instance_delete_types
-
-        logger.info(
-            "Attempting to delete history record %s (media_type=%s, media_instance_id=%s, user=%s)",
-            str(history_id),
-            media_type_lower,
-            media_instance_id,
-            str(request.user),
-        )
-
-        # Get music_id or podcast_id from query params if provided (for updating count)
-        music_id = request.GET.get("music_id")
-        podcast_id = request.GET.get("podcast_id")
-
-        # Perform the deletion
-        if delete_instance:
-            try:
-                media_instance = BasicMedia.objects.get_media(
-                    request.user,
-                    media_type_lower,
-                    media_instance_id,
-                )
-            except (ObjectDoesNotExist, ValueError, TypeError):
-                logger.exception(
-                    "Media instance %s not found for history record %s (media_type=%s, user=%s)",
-                    str(media_instance_id),
-                    str(history_id),
-                    media_type_lower,
-                    str(request.user),
-                )
-                return HttpResponse("Record not found", status=404)
-
-            related_season = (
-                getattr(media_instance, "related_season", None)
-                if media_type_lower == MediaTypes.EPISODE.value
-                else None
-            )
-
-            try:
-                media_instance.delete()
-            except Exception as e:
-                logger.exception(
-                    "Failed to delete media instance %s for history record %s: %s",
-                    str(media_instance_id),
-                    str(history_id),
-                    str(e),  # noqa: TRY401  # exception_summary() is the project's sanitised rendering
-                )
-                return HttpResponse("Failed to delete record", status=500)
-
-            # Keep season/TV status in sync when deleting episode plays
-            if related_season:
-                related_season._sync_status_after_episode_change()
-                cache_utils.clear_time_left_cache_for_user(related_season.user_id)
-                cache_utils.clear_media_list_cache_for_user(related_season.user_id)
-
-            # Verify deletion succeeded by checking if the instance still exists
-            try:
-                model = apps.get_model(app_label="app", model_name=media_type_lower)
-                verification_query = model.objects.filter(id=media_instance_id)
-                if media_type_lower == MediaTypes.EPISODE.value:
-                    verification_query = verification_query.filter(
-                        related_season__user=request.user,
-                    )
-                else:
-                    verification_query = verification_query.filter(user=request.user)
-
-                if verification_query.exists():
-                    logger.error(
-                        "Deletion verification failed: media instance %s still exists after delete() call",
-                        str(media_instance_id),
-                    )
-                    return HttpResponse("Deletion failed", status=500)
-            except Exception as e:
-                logger.warning(
-                    "Could not verify deletion of media instance %s: %s",
-                    str(media_instance_id),
-                    str(e),
-                )
-                # Continue anyway as the delete() call may have succeeded
-        else:
-            try:
-                history_record.delete()
-            except Exception as e:
-                logger.exception(
-                    "Failed to delete history record %s: %s",
-                    str(history_id),
-                    str(e),  # noqa: TRY401  # exception_summary() is the project's sanitised rendering
-                )
-                return HttpResponse("Failed to delete record", status=500)
-
-            # Verify deletion succeeded by checking if the record still exists
-            try:
-                verification_query = historical_model.objects.filter(
-                    history_id=history_id
-                )
-                if verification_query.exists():
-                    logger.error(
-                        "Deletion verification failed: history record %s still exists after delete() call",
-                        str(history_id),
-                    )
-                    return HttpResponse("Deletion failed", status=500)
-            except Exception as e:
-                logger.warning(
-                    "Could not verify deletion of history record %s: %s",
-                    str(history_id),
-                    str(e),
-                )
-                # Continue anyway as the delete() call may have succeeded
-
-        logger.info(
-            "Successfully deleted %s %s (media_type=%s, media_instance_id=%s)",
-            "media instance" if delete_instance else "history record",
-            str(history_id),
-            media_type_lower,
-            media_instance_id,
-        )
-
-        # Invalidate caches since history changed.
-        # Use the captured data instead of accessing the deleted object.
-        logging_styles = ("sessions", "repeats")
-        if media_type_lower in ("game", "boardgame"):
-            start_dt = start_date or end_date
-            end_dt = end_date or start_date
-            history_day_keys = history_cache.history_day_keys_for_range(
-                start_dt, end_dt
-            )
-        else:
-            activity_dt = end_date or start_date or created_at
-            history_day_key = history_cache.history_day_key(activity_dt)
-            history_day_keys = [history_day_key] if history_day_key else []
-
-        # Evict the affected payload immediately; the targeted refresh remains
-        # asynchronous, and a cache miss is rebuilt inline by the history reader.
-        history_cache.invalidate_history_days(
-            request.user.id,
-            day_keys=history_day_keys,
-            logging_styles=logging_styles,
-            reason="history_delete",
-            force=True,
-        )
-        statistics_cache.invalidate_statistics_days(
-            request.user.id,
-            day_values=history_day_keys,
-            reason="history_delete",
-        )
-        statistics_cache.schedule_all_ranges_refresh(request.user.id)
-
-        # If music_id or podcast_id is provided, return updated count for out-of-band swap
-        if music_id and media_type.lower() == "music":
-            from app.models import Music
-            from users.templatetags.user_tags import user_date_format
-
-            try:
-                music = Music.objects.get(id=music_id, user=request.user)
-                # Get remaining history records (filtered by user or null)
-                remaining_history = list(
-                    music.history.filter(
-                        history_user=request.user,
-                    ).order_by("-end_date")
-                ) or list(
-                    music.history.filter(
-                        history_user__isnull=True,
-                    ).order_by("-end_date")
-                )
-
-                remaining_count = len(remaining_history)
-
-                if remaining_count > 0:
-                    # Get the last entry for date display
-                    last_entry = remaining_history[0]
-
-                    # Format the date using the same filter as the template
-                    last_date_formatted = (
-                        user_date_format(last_entry.end_date, request.user)
-                        if last_entry.end_date
-                        else "No date provided"
-                    )
-
-                    if remaining_count == 1:
-                        history_text = f"Last listened: {last_date_formatted}"
-                    else:
-                        history_text = f"Last listened: {last_date_formatted} • Listened {remaining_count} times"
-
-                    # Return response with out-of-band swaps for both album page and modal
-                    response = HttpResponse()
-                    # Update the count on the album detail page
-                    response.write(
-                        f'<p id="track-history-{music_id}" hx-swap-oob="true" class="text-xs text-gray-400 mt-2 px-4">{history_text}</p>'
-                    )
-                    # Update the count in the modal
-                    modal_text = (
-                        "Listened once"
-                        if remaining_count == 1
-                        else f"Listened {remaining_count} times"
-                    )
-                    response.write(
-                        f'<p id="modal-listen-count-{music_id}" hx-swap-oob="true" class="text-sm text-gray-400 mt-1">{modal_text}</p>'
-                    )
-                    return response
-                # No history left, hide the album page element and update modal
-                response = HttpResponse()
-                response.write(
-                    f'<p id="track-history-{music_id}" hx-swap-oob="true" class="text-xs text-gray-400 mt-2 px-4" style="display: none;"></p>'
-                )
-                response.write(
-                    f'<p id="modal-listen-count-{music_id}" hx-swap-oob="true" class="text-sm text-gray-400 mt-1">Not listened yet</p>'
-                )
-            except Music.DoesNotExist:
-                pass
-            else:
-                return response
-
-        # If podcast_id is provided, return updated count for out-of-band swap
-        if podcast_id and media_type.lower() == "podcast":
-            from app.models import Podcast
-            from users.templatetags.user_tags import user_date_format
-
-            try:
-                podcast = Podcast.objects.get(id=podcast_id, user=request.user)
-                # Get remaining history records (filtered by user or null)
-                remaining_history = list(
-                    podcast.history.filter(
-                        history_user=request.user,
-                    ).order_by("-end_date")
-                ) or list(
-                    podcast.history.filter(
-                        history_user__isnull=True,
-                    ).order_by("-end_date")
-                )
-
-                remaining_count = len(remaining_history)
-
-                if remaining_count > 0:
-                    # Get the last entry for date display
-                    last_entry = remaining_history[0]
-
-                    # Format the date using the same filter as the template
-                    last_date_formatted = (
-                        user_date_format(last_entry.end_date, request.user)
-                        if last_entry.end_date
-                        else "No date provided"
-                    )
-
-                    if remaining_count == 1:
-                        history_text = f"Last played: {last_date_formatted}"
-                    else:
-                        history_text = f"Last played: {last_date_formatted} • Played {remaining_count} times"
-
-                    # Return response with out-of-band swaps for both show page and modal
-                    response = HttpResponse()
-                    # Update the count in the modal
-                    modal_text = (
-                        "Played once"
-                        if remaining_count == 1
-                        else f"Played {remaining_count} times"
-                    )
-                    response.write(
-                        f'<p id="modal-listen-count-{podcast_id}" hx-swap-oob="true" class="text-sm text-gray-400 mt-1">{modal_text}</p>'
-                    )
-                    response["HX-Trigger"] = "history-refresh-start"
-                    return response
-                # No history left, update modal
-                response = HttpResponse()
-                response.write(
-                    f'<p id="modal-listen-count-{podcast_id}" hx-swap-oob="true" class="text-sm text-gray-400 mt-1">Not played yet</p>'
-                )
-                response["HX-Trigger"] = "history-refresh-start"
-            except Podcast.DoesNotExist:
-                pass
-            else:
-                return response
-
-        # Return empty 200 response - the element will be removed by HTMX
-        response = HttpResponse()
-        response["HX-Trigger"] = "history-refresh-start"
-
-    except historical_model.DoesNotExist:
-        logger.exception(
-            "History record %s not found for user %s",
-            str(history_id),
-            str(request.user),
-        )
-        return HttpResponse("Record not found", status=404)
-    else:
-        return response
 
 
 @require_GET
@@ -2059,8 +1888,6 @@ __all__ = [
     "_build_detail_activity_state",
     "_build_detail_activity_subtitle",
     "_build_detail_link_entry",
-    "_build_detail_link_sections",
-    "_build_detail_tag_sections",
     "_build_game_length_card",
     "_build_game_lengths_context",
     "_build_hours_per_media_type_comparison",
@@ -2074,7 +1901,7 @@ __all__ = [
     "_build_release_history_days",
     "_build_track_modal_discover_tab_context",
     "_build_trakt_popularity_context",
-    "_bulk_episode_form_initial_data",
+    "_bulk_episode_presentation",
     "_cached_history_entry_matches_filters",
     "_can_use_cached_month_history",
     "_coerce_discover_debug",
@@ -2097,7 +1924,6 @@ __all__ = [
     "_discover_response_rows",
     "_discover_rows_context",
     "_episode_collection_entries",
-    "_episode_domain_template_payload",
     "_filter_cached_history_days",
     "_filter_history_by_enabled_media_types",
     "_format_collection_progress",
@@ -2118,7 +1944,6 @@ __all__ = [
     "_get_statistics_minutes_by_type",
     "_get_tv_runtime_display_fallback",
     "_identify_predefined_range",
-    "_invalidate_discover_after_action",
     "_item_has_collection_source_state",
     "_mark_discover_stale_without_refresh",
     "_mark_grouped_anime_route",
@@ -2151,8 +1976,6 @@ __all__ = [
     "_should_queue_game_lengths_refresh",
     "_sort_tv_media_by_time_left",
     "_statistics_day_boundary",
-    "_track_modal_date_suggestion",
-    "_track_modal_field_groups",
     "_track_modal_release_date_shortcut",
     "_track_modal_release_runtime_minutes",
     "_tracked_media_entries",
@@ -2167,11 +1990,14 @@ __all__ = [
     "app_tags",
     "artist_delete",
     "artist_detail",
+    "artist_discography_more",
     "artist_save",
     "artist_track_modal",
     "bulk_collection_quick_add",
     "bulk_episode_tracking",
     "bulk_music_tracking",
+    "bulk_show_plays_start",
+    "bulk_show_plays_status",
     "bulk_status_update",
     "calendar",
     "collection_add",
@@ -2183,6 +2009,7 @@ __all__ = [
     "collection_remove_season",
     "collection_status_api",
     "collection_update",
+    "collection_update_season",
     "comicvine",
     "config",
     "create_album_from_search",
@@ -2233,12 +2060,19 @@ __all__ = [
     "migrate_grouped_anime",
     "move_library_item",
     "music_album_details",
+    "music_album_track_rows",
     "music_artist_details",
+    "music_repair_status",
     "music_track_details",
+    "music_track_notes",
     "openlibrary",
     "parse_date",
     "person_detail",
+    "podcast_episode_add",
+    "podcast_episode_delete",
+    "podcast_episode_edit",
     "podcast_episodes_api",
+    "podcast_episodes_manage",
     "podcast_mark_all_played",
     "podcast_save",
     "podcast_show_delete",
@@ -2263,6 +2097,7 @@ __all__ = [
     "sanitize_column_prefs",
     "search_library_move_candidates",
     "search_remap_candidates",
+    "search_results_json",
     "search_suggestions",
     "season_details",
     "select_featured_person",
@@ -2301,7 +2136,9 @@ __all__ = [
     "update_media_score",
     "update_metadata_language_preference",
     "update_metadata_provider_preference",
+    "update_podcast_show_score",
     "update_statistics_compare_mode",
+    "update_statistics_media_types",
     "update_statistics_preferences",
     "update_studio_sort",
     "update_table_columns",

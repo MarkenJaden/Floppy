@@ -17,6 +17,17 @@ from .settings import *  # noqa: F403
 if USING_SQLITE_DATABASE:  # noqa: F405
     connection_created.disconnect(configure_sqlite_connection)  # noqa: F405
 
+# Shards run by scripts/test.sh --shards are separate processes started at
+# once. On PostgreSQL they would all create and drop the same test database.
+if not USING_SQLITE_DATABASE:  # noqa: F405
+    from config.test_sharding import shard_database_name
+
+    _test_database = DATABASES["default"].setdefault("TEST", {})  # noqa: F405
+    _test_database["NAME"] = shard_database_name(
+        _test_database.get("NAME") or f"test_{DATABASES['default']['NAME']}",  # noqa: F405
+        os.environ.get("FLOPPY_TEST_SHARD"),
+    )
+
 # Ordinary tests must be deterministic and offline. An explicit network-tag run
 # opts out through FLOPPY_TEST_ALLOW_NETWORK before this settings module loads.
 install_test_network_guard()
@@ -39,6 +50,7 @@ CACHES = {
         "LOCATION": REDIS_CACHE_URL,  # noqa: F405
         "TIMEOUT": 18000,  # 5 hours
         "OPTIONS": {
+            "COMPRESSOR": "app.cache_safety.SizedZlibCompressor",
             "CONNECTION_POOL_KWARGS": {"connection_class": FakeConnection},
         },
     },
@@ -65,8 +77,11 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 # migration graph and skips RunPython data migrations. Use it for iterating;
 # let CI and any migration-sensitive run replay the real thing.
 if os.environ.get("FLOPPY_TEST_FAST_DB") == "1":
+    # PostgreSQL validates deferred user -> auth -> contenttypes foreign keys
+    # when syncdb finishes, before migrations for the remaining apps run.
+    # Build those referenced tables in the same syncdb pass.
     MIGRATION_MODULES = dict.fromkeys(
-        ("app", "users", "lists", "integrations", "events")
+        ("app", "users", "lists", "integrations", "events", "auth", "contenttypes")
     )
 
 # Django's parallel runner has been seen to lose worker results and then wait

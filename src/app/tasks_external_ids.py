@@ -16,8 +16,6 @@ import logging
 
 from celery import shared_task
 from django.conf import settings
-from django.db.models import Q
-from django.utils import timezone
 
 from app import backfill_queue, reconcile_state
 from app.interactive_requests import interactive_request_active
@@ -32,6 +30,7 @@ from app.tasks_backfill_state import (
     _normalize_item_ids,
     _record_backfill_failure,
     _record_backfill_success,
+    due_backfill_retry_item_ids,
 )
 
 logger = logging.getLogger(__name__)
@@ -192,21 +191,16 @@ def populate_external_ids_for_items(item_ids: list[int]):
 @shared_task(name="app.tasks.populate_external_ids_backfill_queue")
 def populate_external_ids_backfill_queue(batch_size: int = 50):
     """Drain the external-ID backfill queue and process items in small batches."""
-    batch, more_remaining = backfill_queue.take(
+    with backfill_queue.drain(
         EXTERNAL_IDS_BACKFILL_ITEMS_QUEUE_KEY,
         EXTERNAL_IDS_BACKFILL_ITEMS_SCHEDULED_KEY,
         batch_size,
-    )
-    if not batch:
-        return {"processed": 0, "message": "No queued external-ID items"}
+        drain_task=populate_external_ids_backfill_queue,
+    ) as batch:
+        if not batch:
+            return {"processed": 0, "message": "No queued external-ID items"}
 
-    if more_remaining:
-        backfill_queue.reschedule(
-            EXTERNAL_IDS_BACKFILL_ITEMS_SCHEDULED_KEY,
-            populate_external_ids_backfill_queue,
-        )
-
-    return populate_external_ids_for_items(batch)
+        return populate_external_ids_for_items(batch)
 
 
 def enqueue_due_external_ids_backfill_retries(
@@ -218,22 +212,13 @@ def enqueue_due_external_ids_backfill_retries(
     failures are this bounded queue's job and keep running after the
     whole-library sweep has been marked complete.
     """
-    from app.models import MetadataBackfillState
-
-    batch_size = max(int(batch_size), 1)
-    now = timezone.now()
-    due_ids = list(
-        MetadataBackfillState.objects.filter(
-            field=MetadataBackfillField.EXTERNAL_IDS,
-            give_up=False,
-            last_success_at__isnull=True,
-            item__media_type__in=EXTERNAL_IDS_MEDIA_TYPES,
-            item__source=Sources.TMDB.value,
-        )
-        .exclude(item__provider_external_ids__has_key="imdb_id")
-        .filter(Q(next_retry_at__isnull=True) | Q(next_retry_at__lte=now))
-        .order_by("next_retry_at", "item_id")
-        .values_list("item_id", flat=True)[:batch_size]
+    due_ids = due_backfill_retry_item_ids(
+        MetadataBackfillField.EXTERNAL_IDS,
+        Item.objects.filter(
+            media_type__in=EXTERNAL_IDS_MEDIA_TYPES,
+            source=Sources.TMDB.value,
+        ).exclude(provider_external_ids__has_key="imdb_id"),
+        max(int(batch_size), 1),
     )
     if not due_ids:
         return 0

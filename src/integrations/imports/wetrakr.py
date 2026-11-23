@@ -25,7 +25,12 @@ from datetime import datetime
 from app.models import Status
 from app.providers import services
 from integrations.imports.helpers import MediaImportError, MediaImportUnexpectedError
-from integrations.imports.trakt import TRAKT_UNKNOWN_DATE, TraktImporter
+from integrations.imports.trakt import (
+    MODE_STAGES,
+    TRAKT_API_BASE_URL,
+    TRAKT_UNKNOWN_DATE,
+    TraktImporter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -372,6 +377,9 @@ class WeTrakrExport:
 class WeTrakrImporter(TraktImporter):
     """Run the standard Trakt import over a WeTrakr export instead of the API."""
 
+    # Worst case ~16 MB: entries over METADATA_MEMO_MAX_BYTES are never kept.
+    metadata_memo_size = 128
+
     def __init__(self, export, user, mode):
         """Initialize from ``export``; the only network use is TMDB."""
         self.export = export
@@ -393,7 +401,10 @@ class WeTrakrImporter(TraktImporter):
 
     def _get_paginated_data(self, endpoint, item_type="items"):
         """Serve the export rows standing in for a Trakt ``endpoint``."""
-        path = endpoint.removeprefix(self.user_base_url)
+        # Hidden sections live under /users/hidden/, not the per-user base URL.
+        path = endpoint.removeprefix(self.user_base_url).removeprefix(
+            f"{TRAKT_API_BASE_URL}/users"
+        )
         sections = {
             "/history": self.export.history,
             "/watchlist": self.export.watchlist,
@@ -411,6 +422,9 @@ class WeTrakrImporter(TraktImporter):
         user can also discard a movie, or a show they never started.
         """
         super().process_watchlist()
+        if not self.full_import:
+            # Watchlist only adds what is planned, not what was discarded.
+            return
         for entry in self.export.dropped():
             self._process_generic_entry(
                 entry,
@@ -452,7 +466,7 @@ def importer(file, user, mode):
             ),
         )
 
-    if "lists" not in export.sections_found:
+    if "lists" not in export.sections_found or mode in MODE_STAGES:
         # Keep lists from an earlier import when this upload has no lists file.
         return imported_counts, messages
 

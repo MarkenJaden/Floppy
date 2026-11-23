@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import logging
 import re
+import time
 from collections.abc import Iterable, Mapping
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -28,6 +29,7 @@ _SECRET_NAME_KEYWORDS = (
     "api_key",
     "api-key",
     "sessionid",
+    "session_id",
 )
 # Match the keyword alone and let the name prefix stay where it is. The rules
 # below require a "=" or a ":" directly after the keyword, so the keyword must
@@ -36,6 +38,23 @@ _SECRET_NAME_KEYWORDS = (
 _SECRET_NAME_PATTERN = "|".join(re.escape(keyword) for keyword in _SECRET_NAME_KEYWORDS)
 
 _SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (
+        # These routes authenticate with a bearer value in the path. Django's
+        # request/error logs include that path even when no query is logged.
+        re.compile(
+            r"(?i)(/(?:webhook/(?:jellyfin|plex|emby|jellyseerr|kodi)|"
+            r"stremio-addon|import/(?:plex|audiobookshelf)/cover|"
+            r"calendar/download|rss|image-cache)/)"
+            r"[^/\s?\#\"'<>]+",
+        ),
+        r"\1[REDACTED]",
+    ),
+    (
+        # OAuth callbacks logged by Django's development server carry short
+        # lived authorization credentials in their query strings.
+        re.compile(r"(?i)([?&](?:code|state|device_code|user_code)=)[^&\s\"'<>]+"),
+        r"\1[REDACTED]",
+    ),
     (
         re.compile(r"(?i)\bBearer\s+[A-Za-z0-9\-_.~+/]+=*"),
         "Bearer [REDACTED]",
@@ -294,3 +313,64 @@ def stable_hmac(value: str, *, namespace: str, length: int | None = None) -> str
     if length is not None:
         return digest[:length]
     return digest
+
+
+# Routine chatter: Celery's per-task lines and the scheduler's wake-ups, plus
+# any line about the health/ping endpoints. Hidden from the console; the log
+# file always keeps them (#1831).
+_NOISY_LOGGER_PREFIXES = ("celery.app.trace", "celery.worker", "celery.beat")
+_NOISY_PATH_PATTERN = re.compile(r"/(?:health|ping)(?:/|\b)")
+
+
+class ConsoleNoiseFilter(logging.Filter):
+    """Drop routine below-WARNING records from the console handler only."""
+
+    def filter(self, record):
+        """Keep warnings and errors, and anything not routine."""
+        if record.levelno >= logging.WARNING:
+            return True
+        if record.name.startswith(_NOISY_LOGGER_PREFIXES):
+            return False
+        return not _NOISY_PATH_PATTERN.search(record.getMessage())
+
+
+_REJECTED_CONTROL_LOG_SECONDS = 3600
+_rejected_control_logged_at = 0.0
+
+
+class RejectedControlMessageFilter(logging.Filter):
+    """Turn kombu's CRITICAL traceback for a refused pickle message into one note.
+
+    Floppy accepts JSON only, so a worker refuses a pickled Celery control
+    command (``ping``) from an older or foreign process on the same broker. The
+    refusal is correct and harmless, but kombu logs it as CRITICAL with a
+    traceback and raw body on every attempt (#1963, #2050). Keep the refusal
+    visible as a single WARNING at most once an hour, saying what to check.
+    """
+
+    def filter(self, record):
+        """Replace the record for a refused control message; pass the rest."""
+        global _rejected_control_logged_at  # noqa: PLW0603 - per-process throttle
+
+        exc = record.exc_info[1] if record.exc_info else None
+        if type(exc).__name__ != "ContentDisallowed":
+            return True
+        now = time.monotonic()
+        if _rejected_control_logged_at and (
+            now - _rejected_control_logged_at < _REJECTED_CONTROL_LOG_SECONDS
+        ):
+            return False
+        _rejected_control_logged_at = now
+        record.levelno = logging.WARNING
+        record.levelname = "WARNING"
+        record.msg = (
+            "Refused a pickled broker message (usually a Celery control ping "
+            "from an old Floppy container or another Celery app on this Redis). "
+            "Floppy accepts JSON only, so nothing ran. Stop the old publisher or "
+            "give each deployment its own REDIS_PREFIX; see "
+            "docs/security-hardening.md. Shown once an hour."
+        )
+        record.args = ()
+        record.exc_info = None
+        record.exc_text = None
+        return True

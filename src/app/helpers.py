@@ -54,6 +54,14 @@ _ENCODED_NAVIGATION_SEPARATOR_PATTERNS = (
 )
 
 
+def get_page_number(request):
+    """Return the ``page`` query parameter as an int, or 1 when it is not numeric."""
+    try:
+        return int(request.GET.get("page", 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 def is_htmx_fragment(request):
     """Return whether this HTMX request expects a partial fragment response.
 
@@ -86,6 +94,72 @@ def seconds_to_hm(total_seconds):
     hours = total_seconds // 3600
     minutes = (total_seconds % 3600) // 60
     return f"{hours}h {minutes}m" if hours else f"{minutes}m"
+
+
+def minutes_to_hm(total_minutes):
+    """Return a duration in minutes as "1h 9m", or as "46m" under an hour.
+
+    Whole hours keep the minutes ("1h 0m"); 0 is "0m". A float is cut to
+    whole minutes (90.5 -> "1h 30m"). The caller decides what a missing
+    duration shows; ``None`` raises ``TypeError``.
+    """
+    hours = int(total_minutes // 60)
+    minutes = int(total_minutes % 60)
+    return f"{hours}h {minutes}m" if hours else f"{minutes}m"
+
+
+def seconds_to_clock(total_seconds):
+    """Return a duration in seconds as clock text: "4:05", or "1:02:03" from an hour.
+
+    0 is "0:00". The value is cut to whole seconds with ``int()``. The caller
+    decides what a missing duration shows; ``None`` raises ``TypeError``.
+    """
+    hours, remainder = divmod(int(total_seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
+def coerce_int(value, default=None):
+    """Return ``int(value)``, or ``default`` when it cannot be converted.
+
+    ``None``, "" and blank or non-numeric text give ``default``. Numeric text
+    may have spaces around it (" 7 " -> 7) but "7.5" gives ``default``.
+    Floats are cut toward zero (3.9 -> 3, -3.9 -> -3); ``True`` is 1. An
+    infinite float raises ``OverflowError``, as every copy this replaced did.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def coerce_list(value):
+    """Return a provider value that may be one item or a list, as a list.
+
+    A list comes back as the same object; ``None`` and "" give ``[]``; any
+    other value, falsy ones such as 0 or ``{}`` included, is wrapped in a
+    one-item list. Tuples are wrapped, not converted.
+    """
+    if isinstance(value, list):
+        return value
+    if value in (None, ""):
+        return []
+    return [value]
+
+
+def wants_json(request):
+    """Return whether the browser adapter asked for an in-place JSON result.
+
+    True for ``X-Requested-With: XMLHttpRequest`` or an ``Accept`` header that
+    mentions ``application/json``. A ``?format=json`` parameter does not count.
+    """
+    accept = request.headers.get("Accept", "")
+    return (
+        request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        or "application/json" in accept
+    )
 
 
 def has_real_image(image):
@@ -123,16 +197,24 @@ def get_tmdb_backdrop_image(media_type, media_id):
         return None
 
     try:
-        from lists.models import CustomList
-    except Exception:
-        return None
+        from app.backdrops import get_tmdb_backdrop
 
-    try:
-        backdrop = CustomList()._get_tmdb_backdrop(media_type, media_id)
+        backdrop = get_tmdb_backdrop(media_type, media_id)
     except Exception:
         return None
 
     return backdrop if has_real_image(backdrop) else None
+
+
+def safe_return_url(request, destination, fallback="/"):
+    """Keep user-supplied navigation on this host and preserve HTTPS."""
+    if url_has_allowed_host_and_scheme(
+        destination,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return destination
+    return fallback
 
 
 def redirect_back(request):
@@ -294,7 +376,12 @@ def build_provider_ids(item):
 
 
 def enrich_items_with_user_data(
-    request, items, section_name=None, user=None, library_media_type=None
+    request,
+    items,
+    section_name=None,
+    user=None,
+    library_media_type=None,
+    preloaded_seasons=None,
 ):
     """Enrich a list of items with user tracking data.
 
@@ -302,6 +389,10 @@ def enrich_items_with_user_data(
         library_media_type: When provided and media_type is SEASON, only return
             Season tracking objects whose Item has this library_media_type. Used
             to isolate anime season tracking from TV season tracking.
+        preloaded_seasons: For SEASON items, the target user's season rows the
+            caller already loaded with their episodes (a show page's seasons).
+            They are used instead of loading every season and its episodes
+            again, when they are exactly the rows the lookup would find.
     """
     if not items:
         return []
@@ -342,13 +433,26 @@ def enrich_items_with_user_data(
     if media_type == MediaTypes.SEASON.value and library_media_type is not None:
         q_objects &= Q(item__library_media_type=library_media_type)
 
-    # Bulk fetch all media with prefetch
     model = apps.get_model(app_label="app", model_name=media_type)
-    media_queryset = model.objects.filter(q_objects).select_related("item")
-    media_queryset = BasicMedia.objects._apply_prefetch_related(
-        media_queryset,
-        media_type,
-    )
+    media_queryset = None
+    if media_type == MediaTypes.SEASON.value and preloaded_seasons is not None:
+        # Reuse the caller's rows only when they are exactly the rows the
+        # query below would find (one id-only query checks), so a season
+        # tracked under another show row or library still comes through.
+        preloaded_by_id = {season.pk: season for season in preloaded_seasons}
+        # In the query's own order, so duplicates resolve as they did.
+        matching_ids = list(
+            model.objects.filter(q_objects).values_list("pk", flat=True),
+        )
+        if all(pk in preloaded_by_id for pk in matching_ids):
+            media_queryset = [preloaded_by_id[pk] for pk in matching_ids]
+    if media_queryset is None:
+        # Bulk fetch all media with prefetch
+        media_queryset = model.objects.filter(q_objects).select_related("item")
+        media_queryset = BasicMedia.objects._apply_prefetch_related(
+            media_queryset,
+            media_type,
+        )
     BasicMedia.objects.annotate_max_progress(media_queryset, media_type)
 
     # For podcasts, order by created_at descending to get most recent entry when multiple exist
@@ -654,57 +758,46 @@ def get_artist_collection_stats(user, artist):
     """
     from app.models import Album, Music
 
-    # Get all albums for this artist
     albums = Album.objects.filter(artist=artist)
     total_albums = albums.count()
-
-    # Get all music entries (tracks) for these albums
-    music_entries = Music.objects.filter(
-        user=user,
-        album__in=albums,
-    ).select_related("item", "album")
-
-    # Count total tracks (all tracks from all albums for this artist)
+    # Every query below is the same size however many albums and plays the
+    # artist has: counts and ids in SQL, never a model per play.
+    music_entries = Music.objects.filter(user=user, album__in=albums)
     total_tracks = music_entries.count()
+    no_collection = {
+        "collected_albums": 0,
+        "total_albums": total_albums,
+        "collected_tracks": 0,
+        "total_tracks": total_tracks,
+    }
+    if not total_tracks:
+        return no_collection
 
-    # Get collection entries for all items from this artist
-    item_ids = [m.item_id for m in music_entries if m.item_id]
-    if not item_ids:
-        return {
-            "collected_albums": 0,
-            "total_albums": total_albums,
-            "collected_tracks": 0,
-            "total_tracks": total_tracks,
-        }
+    # One id per collection entry: a track collected twice counts twice.
+    collected_item_ids = list(
+        CollectionEntry.objects.filter(
+            user=user,
+            item_id__in=music_entries.filter(item__isnull=False).values("item_id"),
+        ).values_list("item_id", flat=True),
+    )
+    if not collected_item_ids:
+        return no_collection
 
-    collection_entries = CollectionEntry.objects.filter(
-        user=user,
-        item_id__in=item_ids,
-    ).select_related("item")
-
-    if not collection_entries.exists():
-        return {
-            "collected_albums": 0,
-            "total_albums": total_albums,
-            "collected_tracks": 0,
-            "total_tracks": total_tracks,
-        }
-
-    # Count distinct albums that have at least one collected track
-    collected_album_ids = set()
-    collected_track_count = 0
-
-    for entry in collection_entries:
-        # Find which album this track belongs to
-        music_entry = music_entries.filter(item_id=entry.item_id).first()
-        if music_entry and music_entry.album_id:
-            collected_album_ids.add(music_entry.album_id)
-        collected_track_count += 1
+    # A collected track belongs to the album of its first entry, in the
+    # model's default order (what ``.first()`` per track used to return).
+    album_by_item_id = {}
+    for item_id, album_id in music_entries.filter(
+        item_id__in=set(collected_item_ids),
+    ).values_list("item_id", "album_id"):
+        album_by_item_id.setdefault(item_id, album_id)
+    collected_album_ids = {
+        album_by_item_id.get(item_id) for item_id in collected_item_ids
+    } - {None}
 
     return {
         "collected_albums": len(collected_album_ids),
         "total_albums": total_albums,
-        "collected_tracks": collected_track_count,
+        "collected_tracks": len(collected_item_ids),
         "total_tracks": total_tracks,
     }
 
@@ -747,7 +840,8 @@ def get_tv_show_collection_stats(user, tv_item, metadata_episode_count=None):
         ).exclude(season_number=0)
     )
 
-    # Use metadata episode count if provided (matches Details pane), otherwise count from Items
+    # Provider totals can lag the episode records used by the season audit.
+    # Never use a total smaller than that same locally known episode set.
     # Guard against providers handing back an episode list instead of a count:
     # a non-numeric value would be rendered verbatim by the Collection panel.
     if isinstance(metadata_episode_count, bool) or not isinstance(
@@ -755,10 +849,7 @@ def get_tv_show_collection_stats(user, tv_item, metadata_episode_count=None):
         int,
     ):
         metadata_episode_count = None
-    if metadata_episode_count is not None:
-        total_episodes = metadata_episode_count
-    else:
-        total_episodes = len(all_episode_items)
+    total_episodes = max(metadata_episode_count or 0, len(all_episode_items))
 
     # Get collection entries for all seasons and episodes
     season_item_ids = [item.id for item in all_season_items]
@@ -910,7 +1001,8 @@ def get_season_collection_stats(user, season_item):
         item_id__in=episode_item_ids,
     )
 
-    collected_count = episode_collection_entries.count()
+    # Count episodes, not copies: a Blu-ray and a digital copy are one episode.
+    collected_count = episode_collection_entries.values("item_id").distinct().count()
 
     # If no episode-level entries exist, fall back to broader collection rows.
     # A manual season-level entry represents the whole season in the current UI.
@@ -1338,3 +1430,25 @@ def split_pass_history(tracked_plays, season):
     return [
         play for play in tracked_plays if season.play_counts_for_pass(play)
     ], tracked_plays
+
+
+def entry_activity_key(entry):
+    """Sort key that puts the most recently active tracked entry last."""
+    dates = [d for d in (entry.end_date, entry.start_date) if d]
+    primary_date = max(dates) if dates else entry.created_at
+    return (
+        primary_date,
+        entry.start_date or entry.created_at,
+        entry.created_at,
+    )
+
+
+def progress_activity(media):
+    """Return when an entry last progressed, for the Last Watched fallback.
+
+    A completed entry without a watch date has none: its progress time only
+    records when it was logged, so it must not rank as just watched.
+    """
+    if getattr(media, "status", None) == Status.COMPLETED.value:
+        return None
+    return getattr(media, "progressed_at", None)

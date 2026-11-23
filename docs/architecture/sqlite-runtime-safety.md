@@ -62,6 +62,14 @@ Upgrade the SQLite library used by Python to a fixed release to restore WAL auto
 
 CI should not benchmark normal SQLite behavior on the rollback fallback. Controlled CI uses a fixed SQLite so concurrency and lock behavior are closer to a supported production runtime.
 
+## A read page does not wait for the writer
+
+SQLite has one writer, and Floppy takes the write lock when a transaction starts (`transaction_mode=IMMEDIATE`). A GET that issues any write, or opens `transaction.atomic()` even to read, queues behind an import or background job for up to the busy timeout. So a page load issues no write. `app.tests.test_read_pages_do_not_write` requests the read pages and API endpoints and fails on a write that is not in its allowlist; each allowlist entry carries its reason. Where a page has just computed something worth keeping (a Discover row or taste profile), it wraps the save in `app.db_retry.optional_save()`: on a GET or HEAD request the save waits 50 ms at most, once per request, and is otherwise skipped and left to the next refresh task. Tasks, commands and every non-GET request keep the full wait. `app.tests.test_page_loads_with_writer_busy` holds the lock and checks the page still answers. Both tests run in WAL; on the rollback fallback a committing writer can also block readers.
+
+A sort, layout or tab choice carried by a GET (`User.update_preference`) is applied to the page in memory and saved after the response has been sent (`app.db_retry.after_response`, run when the response closes). If the writer is still busy then, the choice is not remembered and a `preference_save_dropped` warning is logged. A provider response saved to the Discover cache (`cache_repo.set_api_cache`) never costs the fetched payload: a lock error on the save is logged and skipped. A lock error in a view is handled once, in `DatabaseRetryMiddleware.process_exception` (503 with `Retry-After`); there is no retry loop around the view, because Django turns the exception into a response before it reaches the middleware's `__call__`. API clients get `code: DATABASE_BUSY, retryable: true`, and the native transport (`expo/app/data/authTransportCore.js`) retries a safe request up to twice, waiting `Retry-After` (at most 5 s). Not covered: rollback-journal mode (the fallback on SQLite builds with the WAL-reset bug), where a committing writer can also block readers; the guard and busy-writer tests run in WAL only.
+
+Music pages follow the same rule and also make no MusicBrainz call. An artist, album or track page draws stored rows and reads MusicBrainz answers from the cache only (`musicbrainz.cached_*`). What used to run inline (merging duplicate albums, healing a placeholder album, a discography or member sync, fetching tracks, credits, genres or artist metadata) is asked for by the read-only checks in `app.music_page_repair` and done by one task per artist, album or track on the default queue (`repair_music_*_page`), queued at most once per cool-down. When something the reader can see is missing (no tracks, no biography), the page shows a poller that reloads it once the task finishes, and a merged album or artist redirects to the survivor; the Expo app gets the same through `pending` and `repair_pending` in the music API. `app.tests.test_read_pages_do_not_write` covers the healthy, no-tracks and duplicate-album states and fails on a write or a provider call.
+
 ## Configuration validation
 
 Floppy accepts these crash-recoverable SQLite journal modes:
@@ -86,3 +94,11 @@ Sources: [SQLite PRAGMA documentation](https://www.sqlite.org/pragma.html#pragma
 This guard prevents the known WAL-reset condition. It does not replace the startup integrity check, verified backups, or SQLite recovery tools. Those controls remain separate because an existing database can already contain damage from an older run, storage failure, or another cause.
 
 No schema migration is required for this runtime policy.
+
+## Planner statistics
+
+A database that has never been `ANALYZE`d has no `sqlite_stat1`, and SQLite then chooses indexes by heuristic: a lookup such as "this user's season for this show" walks every season the user tracks by `user_id` and probes each item, instead of seeking by item. On a 2 GB database on a spinning array disk one such query took 3.65 s for 1,126 rows (ledger: `USER-REPORTED/episode-page`).
+
+The `Optimize database planner statistics` Celery task runs `PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002` once a day, and on the first beat start. It analyses only tables without statistics or that changed substantially, on a row sample, so steady-state runs are nearly free. SQLite only; disable with `DB_OPTIMIZE_ENABLED=false`, tune the sample with `DB_OPTIMIZE_ANALYSIS_LIMIT`. Its log line is `optimize_database_statistics stat_rows_before=… stat_rows_after=… duration_ms=…`.
+
+`app.tests.test_tasks_db_optimize` asserts the plan moves from `app_season_user_id` to `app_item_media_lookup_idx`.

@@ -1,13 +1,15 @@
 import hashlib
+import logging
 import secrets
 from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from itertools import islice
 
 from celery import states
 from celery.result import AsyncResult
 from django.contrib.auth.models import AbstractUser
 from django.contrib.auth.models import UserManager as DjangoUserManager
-from django.db import models
+from django.db import OperationalError, models
 from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
@@ -15,9 +17,12 @@ from django.utils.translation import gettext_lazy as _
 from django_celery_beat.models import PeriodicTask
 from django_celery_results.models import TaskResult
 
+from app import db_retry
 from app.models import Item, MediaTypes, Sources, Status
 from integrations import import_progress
-from users import helpers
+from users import currency, helpers
+
+logger = logging.getLogger(__name__)
 
 # Longest playback webhook secret accepted on input. The column itself is
 # unbounded because it holds ciphertext, so the cap has to be enforced where
@@ -145,6 +150,16 @@ def relabel_end_date_sort_choice(media_type, choices):
     ]
 
 
+def relabel_author_sort_choice(media_type, choices):
+    """Call a video's author sort Channel, since its channel is stored as the author."""
+    if media_type != MediaTypes.VIDEO.value:
+        return choices
+    return [
+        (value, _("Channel")) if value == MediaSortChoices.AUTHOR else (value, label)
+        for value, label in choices
+    ]
+
+
 class MediaStatusChoices(models.TextChoices):
     """Choices for media list status options."""
 
@@ -252,6 +267,7 @@ class UiLanguageChoices(models.TextChoices):
     DE = "de", "Deutsch"
     ES = "es", "Español"
     FR = "fr", "Français"
+    IT = "it", "Italiano"
 
 
 class LogoStyleChoices(models.TextChoices):
@@ -446,6 +462,7 @@ class PlannedHomeDisplayChoices(models.TextChoices):
 class HomeScreenRowTypeChoices(models.TextChoices):
     """Supported row sources for the configurable home screen."""
 
+    UP_NEXT = "up_next", _("Up Next")
     LIBRARY_QUERY = "library_query", _("Library Row")
     CUSTOM_LIST = "custom_list", _("List / Smart List")
     RECENTLY_UNRATED = "recently_unrated", _("Recently Played - Not Rated")
@@ -1121,6 +1138,13 @@ class User(AbstractUser):
         default=False,
         help_text="Process Jellyfin MarkUnplayed webhook events",
     )
+    group_scrobbled_anime = models.BooleanField(
+        default=False,
+        help_text=(
+            "Convert a flat MAL anime entry to per-episode tracking when a "
+            "media server reports one of its episodes"
+        ),
+    )
 
     jellyseerr_enabled = models.BooleanField(
         default=False,
@@ -1260,6 +1284,13 @@ class User(AbstractUser):
         choices=TimeFormatChoices.choices,
     )
 
+    currency = models.CharField(
+        max_length=4,
+        default=currency.AUTO,
+        choices=[(currency.AUTO, _("Auto (browser region)")), *currency.choices()],
+        help_text="Currency shown next to collection prices; auto follows the browser",
+    )
+
     week_start_day = models.CharField(
         max_length=10,
         default=WeekStartDayChoices.MONDAY,
@@ -1280,6 +1311,10 @@ class User(AbstractUser):
         default=ImportModeChoices.NEW,
         choices=ImportModeChoices.choices,
     )
+    watchlist_import_status = models.CharField(max_length=20, choices=Status.choices, default=Status.PLANNING)
+    watchlist_import_tag = models.ForeignKey("app.Tag", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    clz_wishlist_status = models.CharField(max_length=20, choices=Status.choices, default=Status.PLANNING.value, blank=True)
+    clz_wishlist_tag = models.CharField(max_length=50, default="", blank=True)
 
     onboarding_status = models.CharField(
         max_length=20,
@@ -1329,6 +1364,12 @@ class User(AbstractUser):
         default=StatisticsRangeChoices.LAST_12_MONTHS,
         choices=StatisticsRangeChoices.choices,
         help_text="Default predefined range for the Statistics page",
+    )
+    statistics_default_media_types = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text="Default media types selected in the Statistics page filter",
     )
     statistics_compare_mode = models.CharField(
         max_length=20,
@@ -1436,6 +1477,16 @@ class User(AbstractUser):
         default=list,
         blank=True,
         help_text="Watch-provider names pinned/favorited by the user, promoted out of 'More'",
+    )
+    pinned_settings_providers = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Provider settings pinned by the user",
+    )
+    sidebar_pins = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Sidebar pins: {'nav': [link keys], 'lists': [{'id', 'name', 'url'}]}",
     )
     book_comic_manga_progress_percentage = models.BooleanField(
         default=False,
@@ -1662,7 +1713,9 @@ class User(AbstractUser):
             ),
             models.CheckConstraint(
                 name="list_detail_layout_valid",
-                condition=models.Q(list_detail_layout__in=ListDetailLayoutChoices.values),
+                condition=models.Q(
+                    list_detail_layout__in=ListDetailLayoutChoices.values
+                ),
             ),
             models.CheckConstraint(
                 name="music_layout_valid",
@@ -1714,6 +1767,31 @@ class User(AbstractUser):
             ),
         ]
 
+    def _save_preference(self, field_name):
+        """Save one preference; on a page load, after the response is sent.
+
+        The page already renders from the in-memory value, so nobody waits for
+        SQLite's writer. If the writer is still busy afterwards the choice is
+        not remembered and a warning is logged.
+        """
+        if not db_retry.in_read_request():
+            self.save(update_fields=[field_name])
+            return
+        value = getattr(self, field_name)
+
+        def save_later():
+            try:
+                setattr(self, field_name, value)
+                self.save(update_fields=[field_name])
+            except OperationalError as error:
+                if not db_retry.is_lock_error(error):
+                    raise
+                logger.warning(
+                    "preference_save_dropped field=%s error=%s", field_name, error
+                )
+
+        db_retry.after_response(save_later)
+
     def update_preference(self, field_name, new_value):
         """
         Update user preference if the new value is valid and different from current.
@@ -1743,7 +1821,7 @@ class User(AbstractUser):
             current_value = getattr(self, field_name)
             if new_value != current_value:
                 setattr(self, field_name, new_value)
-                self.save(update_fields=[field_name])
+                self._save_preference(field_name)
             return new_value
 
         field = self._meta.get_field(field_name)
@@ -1762,7 +1840,7 @@ class User(AbstractUser):
         # Update if different
         if new_value != current_value:
             setattr(self, field_name, new_value)
-            self.save(update_fields=[field_name])
+            self._save_preference(field_name)
 
         return new_value
 
@@ -1986,8 +2064,8 @@ class User(AbstractUser):
             | Q(task_kwargs__contains=f'"user_id": {self.id}' + "}")
         )
 
-    def get_import_tasks(self):
-        """Return import tasks history and schedules for the user."""
+    def get_import_tasks(self, sources=None, result_limit=None, result_offset=0, refresh_results=True):
+        """Return scoped/paged activity; Overview disables result refresh writes."""
         result_task_names = {
             "trakt": [
                 "Import from Trakt",
@@ -2050,6 +2128,7 @@ class User(AbstractUser):
                 "Import from Hardcover Account",
             ],
             "storygraph": ["Import from StoryGraph"],
+            "youtube": ["Import from YouTube Takeout"],
             "koito": ["Import from Koito History"],
         }
         schedule_task_names = {
@@ -2072,6 +2151,10 @@ class User(AbstractUser):
             "koito": ["Poll Koito for user"],
         }
 
+        if sources is not None:
+            result_task_names = {key: value for key, value in result_task_names.items() if key in sources}
+            schedule_task_names = {key: value for key, value in schedule_task_names.items() if key in sources}
+
         # Reverse mapping to get source from task name
         result_task_to_source = {
             task_name: source
@@ -2086,7 +2169,9 @@ class User(AbstractUser):
         }
         schedule_import_task_names = list(schedule_task_to_source)
 
-        task_result_filters = self.task_result_filter()
+        task_result_filters = self.task_result_filter() if sources is None else Q(
+            task_kwargs__regex=rf"[\"']user_id[\"']:\s*{self.pk}\s*[,}}]",
+        )
 
         # Get all task results for this user (last 7 days only).
         # Exclude stale PENDING records (created >30 min ago and never updated)
@@ -2096,7 +2181,8 @@ class User(AbstractUser):
         task_results = (
             TaskResult.objects.filter(
                 task_result_filters,
-                task_name__in=result_import_task_names,
+                Q(task_name__startswith="Import ")
+                | Q(task_name__in=result_import_task_names),
                 date_created__gte=seven_days_ago,
             )
             .exclude(
@@ -2105,11 +2191,23 @@ class User(AbstractUser):
             )
             .order_by("-date_done", "-date_created")
         )
+        if sources is not None:
+            task_results = task_results.filter(task_name__in=result_import_task_names).order_by(
+                "-date_done", "-date_created", "-pk",
+            )
+        if result_limit is not None:
+            owned_ids = (
+                pk for pk, kwargs in task_results.values_list("pk", "task_kwargs").iterator()
+                if helpers.task_kwargs_belong_to_user(kwargs, self.pk)
+            )
+            task_results = task_results.filter(pk__in=list(islice(owned_ids, result_offset, result_offset + result_limit)))
 
         # Build results list
         results = []
         for task in task_results:
-            if task.status in {states.PENDING, states.STARTED}:
+            if not helpers.task_kwargs_belong_to_user(task.task_kwargs, self.pk):
+                continue
+            if refresh_results and task.status in {states.PENDING, states.STARTED}:
                 async_result = AsyncResult(task.task_id)
                 if async_result.status != task.status:
                     task.status = async_result.status
@@ -2119,13 +2217,16 @@ class User(AbstractUser):
                     task.save(
                         update_fields=["status", "result", "traceback", "date_done"]
                     )
-            elif task.status == states.FAILURE and not task.traceback:
+            elif refresh_results and task.status == states.FAILURE and not task.traceback:
                 async_result = AsyncResult(task.task_id)
                 if async_result.traceback:
                     task.traceback = async_result.traceback
                     task.save(update_fields=["traceback"])
 
-            source = result_task_to_source[task.task_name]
+            source = result_task_to_source.get(
+                task.task_name,
+                task.task_name.removeprefix("Import from ").removeprefix("Import "),
+            )
             processed_task = helpers.process_task_result(task)
 
             progress = None
@@ -2154,7 +2255,8 @@ class User(AbstractUser):
 
         # Synthetic history entry for Last.fm automatic polling (global task has no per-user result)
         if (
-            hasattr(self, "lastfm_account")
+            (sources is None or "lastfm" in sources)
+            and hasattr(self, "lastfm_account")
             and self.lastfm_account
             and self.lastfm_account.is_connected
             and self.lastfm_account.last_sync_at
@@ -2181,20 +2283,25 @@ class User(AbstractUser):
             | Q(kwargs__contains=f'"user_id": {self.id},')
             | Q(kwargs__contains=f'"user_id": {self.id}' + "}")
         )
+        if sources is not None:
+            periodic_tasks_filter = Q(kwargs__regex=rf"[\"']user_id[\"']:\s*{self.pk}\s*[,}}]")
         periodic_tasks = PeriodicTask.objects.filter(
             periodic_tasks_filter,
-            task__in=schedule_import_task_names,
+            Q(task__startswith="Import ") | Q(task__in=schedule_import_task_names),
             enabled=True,
         ).select_related("crontab", "interval")
+        if sources is not None:
+            periodic_tasks = periodic_tasks.filter(task__in=schedule_import_task_names)
 
         # Build schedules list
         schedules = []
         for periodic_task in periodic_tasks:
-            source = schedule_task_to_source.get(periodic_task.task, "unknown")
-
-            # Skip if source is unknown (task not in our mapping)
-            if source == "unknown":
+            if not helpers.task_kwargs_belong_to_user(periodic_task.kwargs, self.pk):
                 continue
+            source = schedule_task_to_source.get(
+                periodic_task.task,
+                periodic_task.task.removeprefix("Import from ").removeprefix("Import "),
+            )
 
             # Extract username from task name if available
             username = ""
@@ -2224,7 +2331,8 @@ class User(AbstractUser):
 
         # Check for global Last.fm task (uses IntervalSchedule, not user-specific)
         if (
-            hasattr(self, "lastfm_account")
+            (sources is None or "lastfm" in sources)
+            and hasattr(self, "lastfm_account")
             and self.lastfm_account
             and self.lastfm_account.is_connected
         ):

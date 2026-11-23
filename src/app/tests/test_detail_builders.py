@@ -1,10 +1,11 @@
 from django.test import TestCase
 
 from app.detail_builders import (
-    _build_detail_link_sections,
+    _build_detail_link_entry,
     _build_imdb_rating_context,
     _build_mal_rating_context,
     _build_series_graph_data,
+    build_detail_link_sections,
 )
 from app.models import Item, ItemProviderLink, MediaTypes, Sources
 
@@ -208,7 +209,7 @@ class DetailLinkSectionsMalTests(TestCase):
             title="Frieren",
         )
 
-        sections = _build_detail_link_sections(
+        sections = build_detail_link_sections(
             {
                 "source_url": "https://www.themoviedb.org/tv/52991",
                 "media_id": "52991",
@@ -241,7 +242,7 @@ class DetailLinkSectionsMalTests(TestCase):
             provider_media_id="4",
         )
 
-        sections = _build_detail_link_sections(
+        sections = build_detail_link_sections(
             {"source_url": "https://www.thetvdb.com/series/tv-1"},
             MediaTypes.ANIME.value,
             Sources.TVDB.value,
@@ -251,3 +252,229 @@ class DetailLinkSectionsMalTests(TestCase):
 
         self.assertEqual(len(sections), 1)
         self.assertEqual(sections[0]["title"], "Source")
+
+
+class DetailExternalLinkBrandTests(TestCase):
+    def test_imdb_parent_guide_reuses_imdb_logo(self):
+        imdb = _build_detail_link_entry(
+            "IMDb",
+            "https://www.imdb.com/title/tt0137523/",
+            "IMDb",
+        )
+        guide = _build_detail_link_entry(
+            "IMDb Parent's Guide",
+            "https://www.imdb.com/title/tt0137523/parentalguide/",
+            "IMDb Parent's Guide",
+        )
+
+        self.assertEqual(guide["logo_src"], imdb["logo_src"])
+        self.assertEqual(guide["logo_src"], "/static/img/imdb-logo.png")
+
+    def test_game_with_stored_imdb_id_gets_parent_guide_link(self):
+        item = Item.objects.create(
+            media_id="igdb-parent-guide",
+            source=Sources.IGDB.value,
+            media_type=MediaTypes.GAME.value,
+            title="A Game with an IMDb ID",
+            provider_external_ids={"imdb_id": "tt0137523"},
+        )
+
+        sections = build_detail_link_sections(
+            {},
+            MediaTypes.GAME.value,
+            Sources.IGDB.value,
+            Sources.IGDB.value,
+            item=item,
+        )
+        self.assertEqual(sections[-1]["title"], "Guides")
+        entries = sections[-1]["entries"]
+        guide = next(entry for entry in entries if entry["label"] == "IMDb Parent's Guide")
+
+        self.assertEqual(
+            guide["url"],
+            "https://www.imdb.com/title/tt0137523/parentalguide/",
+        )
+        self.assertEqual(guide["logo_src"], "/static/img/imdb-logo.png")
+
+    def test_cached_steam_app_id_rebuilds_game_links_with_identifiable_badges(self):
+        sections = build_detail_link_sections(
+            {
+                "external_ids": {"steam_app_id": "1116480"},
+                "external_links": {"HowLongToBeat": "https://howlongtobeat.com/"},
+            },
+            MediaTypes.GAME.value,
+            Sources.IGDB.value,
+            Sources.IGDB.value,
+        )
+        self.assertEqual(
+            [s["title"] for s in sections], ["External links", "PC gaming"]
+        )
+        entries = sections[-1]["entries"]
+        by_label = {entry["label"]: entry for entry in entries}
+
+        self.assertEqual(
+            {
+                name: by_label[name]["url"]
+                for name in ("Steam", "SteamDB", "ProtonDB", "PCGamingWiki")
+            },
+            {
+                "Steam": "https://store.steampowered.com/app/1116480/",
+                "SteamDB": "https://steamdb.info/app/1116480/",
+                "ProtonDB": "https://www.protondb.com/app/1116480",
+                "PCGamingWiki": (
+                    "https://www.pcgamingwiki.com/api/appid.php?appid=1116480"
+                ),
+            },
+        )
+        self.assertEqual(by_label["Steam"]["logo_src"], "/static/img/steam-logo.ico")
+        self.assertEqual(by_label["SteamDB"]["logo_src"], "/static/img/steamdb-logo.svg")
+        self.assertEqual(by_label["ProtonDB"]["logo_src"], "/static/img/protondb-logo.png")
+        self.assertEqual(
+            by_label["PCGamingWiki"]["logo_src"],
+            "/static/img/pcgamingwiki-logo.svg",
+        )
+
+    def test_item_steam_app_id_backfills_links_without_replacing_existing_ones(self):
+        item = Item.objects.create(
+            media_id="igdb-stored-steam-id",
+            source=Sources.IGDB.value,
+            media_type=MediaTypes.GAME.value,
+            title="A Game with a stored Steam ID",
+            provider_external_ids={"steam_app_id": "1116480"},
+        )
+
+        sections = build_detail_link_sections(
+            {
+                "external_links": {
+                    "Steam": "https://store.steampowered.com/app/620/",
+                },
+            },
+            MediaTypes.GAME.value,
+            Sources.IGDB.value,
+            Sources.IGDB.value,
+            item=item,
+        )
+        entries = sections[-1]["entries"]
+        by_label = {entry["label"]: entry for entry in entries}
+
+        self.assertEqual(
+            [entry["label"] for entry in entries].count("Steam"),
+            1,
+        )
+        self.assertEqual(
+            by_label["Steam"]["url"],
+            "https://store.steampowered.com/app/620/",
+        )
+        self.assertEqual(
+            by_label["SteamDB"]["url"],
+            "https://steamdb.info/app/1116480/",
+        )
+
+
+class OtherBookFormatsTests(TestCase):
+    """Cross-format links between a user's ebook and audiobook of one work."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from django.contrib.auth import get_user_model
+
+        cls.user = get_user_model().objects.create_user(username="reader", password="x")
+        cls.other_user = get_user_model().objects.create_user(
+            username="other", password="x",
+        )
+
+    def _book(self, media_id, source, fmt, user=None, **fields):
+        from app.models import Book
+
+        item = Item.objects.create(
+            media_id=media_id,
+            source=source,
+            media_type=MediaTypes.BOOK.value,
+            title=fields.pop("title", "Dune"),
+            authors=fields.pop("authors", ["Frank Herbert"]),
+            format=fmt,
+            **fields,
+        )
+        Book.objects.create(user=user or self.user, item=item, status="Planning")
+        return item
+
+    def test_links_ebook_and_audiobook_of_same_work(self):
+        from app.detail_builders import build_book_formats
+
+        ebook = self._book("OL1", Sources.OPENLIBRARY.value, "ebook")
+        audio = self._book("abs1", Sources.AUDIOBOOKSHELF.value, "audiobook")
+
+        chips = build_book_formats(self.user, ebook)
+
+        self.assertEqual([c["label"] for c in chips], ["eBook", "Audiobook"])
+        self.assertIsNone(chips[0]["href"])
+        self.assertIn("abs1", chips[1]["href"])
+        self.assertEqual(
+            [c["label"] for c in build_book_formats(self.user, audio)],
+            ["eBook", "Audiobook"],
+        )
+
+    def test_plain_book_and_audiobook_list_book_first(self):
+        from app.detail_builders import build_book_formats
+
+        audio = self._book("abs5", Sources.AUDIOBOOKSHELF.value, "audiobook")
+        self._book("OL5", Sources.OPENLIBRARY.value, "")
+
+        self.assertEqual(
+            [c["label"] for c in build_book_formats(self.user, audio)],
+            ["Book", "Audiobook"],
+        )
+
+    def test_several_audiobooks_are_labelled_by_narrator(self):
+        from app.detail_builders import build_book_formats
+
+        ebook = self._book("OL6", Sources.OPENLIBRARY.value, "")
+        self._book(
+            "abs6", Sources.AUDIOBOOKSHELF.value, "audiobook", narrators=["Ray Porter"],
+        )
+        self._book(
+            "abs7", Sources.AUDIOBOOKSHELF.value, "audiobook", narrators=["Andy Weir"],
+        )
+
+        self.assertEqual(
+            [c["label"] for c in build_book_formats(self.user, ebook)],
+            ["Book", "Audiobook (Ray Porter)", "Audiobook (Andy Weir)"],
+        )
+
+    def test_matches_on_isbn_despite_title_difference(self):
+        from app.detail_builders import build_book_formats
+
+        ebook = self._book(
+            "OL2", Sources.OPENLIBRARY.value, "ebook", isbn=["978-0-441-17271-9"],
+        )
+        self._book(
+            "abs2",
+            Sources.AUDIOBOOKSHELF.value,
+            "audiobook",
+            title="Dune (Unabridged)",
+            authors=[],
+            isbn=["9780441172719"],
+        )
+
+        self.assertEqual(len(build_book_formats(self.user, ebook)), 2)
+
+    def test_same_title_different_author_is_not_linked(self):
+        from app.detail_builders import build_book_formats
+
+        ebook = self._book("OL3", Sources.OPENLIBRARY.value, "ebook")
+        self._book(
+            "abs3", Sources.AUDIOBOOKSHELF.value, "audiobook", authors=["Someone Else"],
+        )
+
+        self.assertEqual(build_book_formats(self.user, ebook), [])
+
+    def test_ignores_other_users_books_and_never_merges_items(self):
+        from app.detail_builders import build_book_formats
+
+        ebook = self._book("OL4", Sources.OPENLIBRARY.value, "ebook")
+        self._book(
+            "abs4", Sources.AUDIOBOOKSHELF.value, "audiobook", user=self.other_user,
+        )
+
+        self.assertEqual(build_book_formats(self.user, ebook), [])
+        self.assertEqual(Item.objects.filter(title="Dune").count(), 2)

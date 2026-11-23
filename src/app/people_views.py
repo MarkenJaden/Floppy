@@ -2,7 +2,7 @@ from urllib.parse import quote
 
 from django.conf import settings
 from django.db.models import Q
-from django.http import HttpResponseBadRequest
+from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_GET
 
@@ -14,6 +14,7 @@ from app import (
 from app.media_list_filters import media_list_entries_for_items
 from app.media_list_views import build_filter_data_from_items
 from app.models import (
+    TV,
     BasicMedia,
     Book,
     Comic,
@@ -24,6 +25,7 @@ from app.models import (
     MediaTypes,
     Movie,
     Sources,
+    Status,
     Studio,
 )
 from app.providers import (
@@ -75,6 +77,208 @@ def attach_card_media(user, entries, source):
                 **entry,
                 "source": entry.get("source") or source,
             }
+
+
+def _people_credit_contract(entry, source, user):
+    """Shape one filmography entry for the shared native credit card."""
+    from django.urls import reverse
+    from django.utils.text import slugify
+
+    from app.templatetags.app_tags import image_url, media_type_readable, media_url
+
+    media_type = entry.get("media_type")
+    media_id = str(entry.get("media_id") or "")
+    title = entry.get("title") or "Unknown Title"
+    tracked_item = entry.get("tracked_item")
+    href = media_url(tracked_item) if tracked_item else ""
+    if not href:
+        href = reverse(
+            "media_details",
+            kwargs={
+                "source": entry.get("source") or source,
+                "media_type": media_type,
+                "media_id": media_id,
+                "title": slugify(title) or media_id or "item",
+            },
+        )
+    departments = entry.get("all_departments") or []
+    role = (
+        entry.get("role")
+        or ", ".join(department for department in departments if department)
+        or entry.get("department")
+        or ""
+    )
+    from app.card_surfaces import card_context
+    from app.icon_specs import file_icon
+
+    card_ctx = card_context(
+        {"user": user},
+        "credit",
+        {"item": entry.get("card_item"), "media": entry.get("media"),
+         "title": title, "card_media_type": media_type, "credit": entry},
+    )
+    card = card_ctx["react_props"]["model"]
+    card["hoverMetadata"] = card_ctx["card_display"] != "always"
+    status_icons = {
+        "Completed": "completed", "In progress": "in-progress", "Paused": "paused",
+        "Planning": "planning", "Dropped": "dropped",
+    }
+    chip = card.get("statusChip") or {}
+    if chip.get("kind") == "status" and chip.get("status") in status_icons:
+        chip["icon"] = file_icon(f"states/{status_icons[chip['status']]}")
+    return {
+        "id": f"{media_type}:{media_id}",
+        "title": title,
+        "mediaType": media_type,
+        "mediaTypeLabel": media_type_readable(media_type) if media_type else "",
+        "source": entry.get("source") or source,
+        "mediaId": media_id,
+        "year": entry.get("year"),
+        "role": role,
+        "imageUrl": image_url(entry.get("image") or ""),
+        "href": href,
+        "watched": bool(entry.get("is_watched")),
+        "watchedRuntimeLabel": entry.get("watched_person_runtime_display") or "",
+        "voteAverage": entry.get("vote_average"),
+        "card": card,
+    }
+
+
+def _people_filters_contract(context):
+    """Return the filmography toolbar state and options (what the web toolbar shows)."""
+    filter_data = context.get("filter_data") or {}
+    return {
+        "sort": context.get("current_sort"),
+        "direction": context.get("current_direction"),
+        "department": context.get("current_department") or "",
+        "year": context.get("current_year") or "",
+        "genre": context.get("current_genre") or "",
+        "rating": context.get("current_rating") or "all",
+        "collection": context.get("current_collection") or "all",
+        "sortChoices": [
+            {"value": str(value), "label": str(label)}
+            for value, label in context.get("sort_choices") or []
+        ],
+        "departments": [str(value) for value in filter_data.get("departments") or []],
+        "years": [
+            {"value": str(year["value"]), "label": str(year["label"])}
+            for year in filter_data.get("years") or []
+        ],
+        "genres": [str(value) for value in filter_data.get("genres") or []],
+    }
+
+
+def _people_person_contract(context):
+    """Return the person page values the native and browser adapters consume."""
+    from users.templatetags.ui_tags import _person_hero_props
+
+    hero = _person_hero_props(context)
+    person = context.get("person") or {}
+    return {
+        "kind": "person",
+        "person": hero["person"],
+        "counts": hero["counts"],
+        "labels": hero["labels"],
+        "historyUrl": hero["historyUrl"],
+        "canViewHistory": hero["canViewHistory"],
+        "showBiography": hero["showBiography"],
+        "isAuthor": bool(context.get("is_author")),
+        # The play totals are still building: ask again shortly.
+        "talentPending": bool(context.get("talent_pending")),
+        "source": context.get("source"),
+        "personId": str(person.get("person_id") or ""),
+        "sourceUrl": context.get("source_url") or "",
+        "filters": _people_filters_contract(context),
+        "watched": [
+            _people_credit_contract(entry, context.get("source"), context["user"])
+            for entry in context.get("watched_filmography") or []
+        ],
+        "filmography": [
+            _people_credit_contract(entry, context.get("source"), context["user"])
+            for entry in context.get("filmography") or []
+        ],
+        # Credits come a page at a time: totals for the headings, and the page
+        # to ask for next (watched_page / credits_page), or null at the end.
+        "watchedTotal": context.get("watched_total", 0),
+        "filmographyTotal": context.get("filmography_total", 0),
+        "watchedNextPage": context.get("watched_next_page"),
+        "filmographyNextPage": context.get("filmography_next_page"),
+    }
+
+
+def _people_studio_contract(context):
+    """Return the studio page values the native and browser adapters consume."""
+    from users.templatetags.ui_tags import _studio_hero_props
+
+    hero = _studio_hero_props(context)
+    studio = context.get("studio")
+    return {
+        "kind": "studio",
+        "studio": hero["studio"],
+        "counts": hero["counts"],
+        "labels": hero["labels"],
+        "source": context.get("source"),
+        "studioId": str(getattr(studio, "source_studio_id", "") or ""),
+        "sourceUrl": context.get("studio_source_url") or "",
+        "titles": [
+            _people_credit_contract(entry, context.get("source"), context["user"])
+            for entry in context.get("credited_titles") or []
+        ],
+    }
+
+
+# Credits are sent in pages: a person with a thousand credits would otherwise
+# send every card at once (about 11 MB of HTML). The web grid asks for the next
+# page as it scrolls into view; the app asks with "Show more".
+PERSON_CREDITS_PAGE_SIZE = 60
+PERSON_CREDIT_SECTIONS = {
+    # section -> (page parameter, "already shown" parameter)
+    "watched": ("watched_page", "watched_shown"),
+    "filmography": ("credits_page", "credits_shown"),
+}
+
+
+def _positive_int(value, default):
+    try:
+        return max(default, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _credit_window(request, entries, section, *, paged):
+    """Return (this page of entries, next page number or None).
+
+    ``*_shown`` keeps a refresh (the play-totals fill-in) from shrinking a grid
+    the viewer already scrolled: the first page grows to cover what is shown.
+    Without ``paged`` (a whole web page) the page number is ignored.
+    """
+    page_param, shown_param = PERSON_CREDIT_SECTIONS[section]
+    size = PERSON_CREDITS_PAGE_SIZE
+    page = _positive_int(request.GET.get(page_param), 1) if paged else 1
+    start = (page - 1) * size
+    end = start + size
+    shown = _positive_int(request.GET.get(shown_param), 0)
+    if page == 1 and shown > size:
+        end = -(-shown // size) * size
+    next_page = end // size + 1 if end < len(entries) else None
+    return entries[start:end], next_page
+
+
+# The web page asks every 3 s while totals build; after about two minutes it
+# stops and the numbers appear on the next visit.
+PERSON_TALENT_POLL_LIMIT = 40
+
+
+def _talent_poll_attempt(request, source_config):
+    """Return the poll attempt for a talent poll request, else None."""
+    if request.GET.get("talent") != "1" or not request.headers.get("HX-Request"):
+        return None
+    if source_config["is_author"] or not request.user.is_authenticated:
+        return None
+    try:
+        return max(1, int(request.GET.get("attempt", "1")))
+    except ValueError:
+        return 1
 
 
 @require_GET
@@ -154,6 +358,21 @@ def person_detail(request, source, person_id, name):
     source_config = source_dispatch.get(source)
     if not source_config:
         return HttpResponseBadRequest("Person pages are not available for this source.")
+
+    talent_poll = _talent_poll_attempt(request, source_config)
+    if talent_poll is not None:
+        _totals, pending = statistics_cache.get_ready_person_talent_totals(
+            request.user, source, str(person_id)
+        )
+        if pending:
+            # Cache reads only: no provider call, no library scan.
+            if talent_poll >= PERSON_TALENT_POLL_LIMIT:
+                return HttpResponse("")
+            return render(
+                request,
+                "app/components/person_talent_poller.html",
+                {"person_detail_url": request.path, "attempt": talent_poll + 1},
+            )
 
     # A viewer is waiting: a rate-limited provider fails fast instead of
     # holding the request through long retry waits.
@@ -290,7 +509,11 @@ def person_detail(request, source, person_id, name):
                     item__person_credits__person__source=source,
                     item__person_credits__person__source_person_id=person_id_str,
                 )
-                .filter(Q(start_date__isnull=False) | Q(end_date__isnull=False))
+                .filter(
+                    Q(start_date__isnull=False)
+                    | Q(end_date__isnull=False)
+                    | Q(status=Status.COMPLETED.value)
+                )
                 .select_related("item")
                 .distinct()
             )
@@ -307,11 +530,16 @@ def person_detail(request, source, person_id, name):
     watched_media_keys = set()
     watched_person_minutes_by_media_key = {}
     person_talent_totals = None
+    talent_pending = False
     if request.user.is_authenticated and not is_author:
-        person_talent_totals = statistics_cache.get_person_talent_totals(
-            request.user,
-            source,
-            person_id_str,
+        # Stored totals only. Building them scans every play in the library,
+        # which is background work (build_person_talent_context_task).
+        person_talent_totals, talent_pending = (
+            statistics_cache.get_ready_person_talent_totals(
+                request.user,
+                source,
+                person_id_str,
+            )
         )
         watched_person_minutes_by_media_key = (
             person_talent_totals.get("minutes_by_media_key", {})
@@ -355,7 +583,7 @@ def person_detail(request, source, person_id, name):
                 item__source=source,
                 item__media_type=MediaTypes.MOVIE.value,
                 item__media_id__in=watched_movie_media_ids,
-            ).exclude(start_date__isnull=True, end_date__isnull=True)
+            ).filter(Q(end_date__isnull=False) | Q(status=Status.COMPLETED.value))
             watched_media_keys.update(
                 (media_type, str(media_id))
                 for media_type, media_id in watched_movies.values_list(
@@ -367,16 +595,29 @@ def person_detail(request, source, person_id, name):
         if watched_tv_media_ids:
             watched_tv = Episode.all_objects.filter(
                 related_season__user=request.user,
-                end_date__isnull=False,
                 related_season__related_tv__item__source=source,
                 related_season__related_tv__item__media_type=MediaTypes.TV.value,
                 related_season__related_tv__item__media_id__in=watched_tv_media_ids,
-            )
+            ).filter(Q(end_date__isnull=False) | Q(status=Status.COMPLETED.value))
             watched_media_keys.update(
                 (media_type, str(media_id))
                 for media_type, media_id in watched_tv.values_list(
                     "related_season__related_tv__item__media_type",
                     "related_season__related_tv__item__media_id",
+                ).distinct()
+            )
+            completed_tv = TV.objects.filter(
+                user=request.user,
+                item__source=source,
+                item__media_type=MediaTypes.TV.value,
+                item__media_id__in=watched_tv_media_ids,
+                status=Status.COMPLETED.value,
+            )
+            watched_media_keys.update(
+                (media_type, str(media_id))
+                for media_type, media_id in completed_tv.values_list(
+                    "item__media_type",
+                    "item__media_id",
                 ).distinct()
             )
 
@@ -386,7 +627,11 @@ def person_detail(request, source, person_id, name):
                 item__source=source,
                 item__media_type=MediaTypes.BOOK.value,
                 item__media_id__in=watched_book_media_ids,
-            ).filter(Q(start_date__isnull=False) | Q(end_date__isnull=False))
+            ).filter(
+                Q(start_date__isnull=False)
+                | Q(end_date__isnull=False)
+                | Q(status=Status.COMPLETED.value)
+            )
             watched_media_keys.update(
                 (media_type, str(media_id))
                 for media_type, media_id in watched_books.values_list(
@@ -401,7 +646,11 @@ def person_detail(request, source, person_id, name):
                 item__source=source,
                 item__media_type=MediaTypes.COMIC.value,
                 item__media_id__in=watched_comic_media_ids,
-            ).filter(Q(start_date__isnull=False) | Q(end_date__isnull=False))
+            ).filter(
+                Q(start_date__isnull=False)
+                | Q(end_date__isnull=False)
+                | Q(status=Status.COMPLETED.value)
+            )
             watched_media_keys.update(
                 (media_type, str(media_id))
                 for media_type, media_id in watched_comics.values_list(
@@ -416,7 +665,11 @@ def person_detail(request, source, person_id, name):
                 item__source=source,
                 item__media_type=MediaTypes.MANGA.value,
                 item__media_id__in=watched_manga_media_ids,
-            ).filter(Q(start_date__isnull=False) | Q(end_date__isnull=False))
+            ).filter(
+                Q(start_date__isnull=False)
+                | Q(end_date__isnull=False)
+                | Q(status=Status.COMPLETED.value)
+            )
             watched_media_keys.update(
                 (media_type, str(media_id))
                 for media_type, media_id in watched_manga.values_list(
@@ -690,17 +943,43 @@ def person_detail(request, source, person_id, name):
     combined_years = sorted(watched_years | set(all_filmography_years), reverse=True)
     filter_data["years"] = [{"value": str(y), "label": str(y)} for y in combined_years]
 
-    attach_card_media(request.user, [*watched_filmography, *filmography], source)
+    # A "more" request (next page of one grid) shapes only that grid. A whole
+    # web page always starts at the top: card links return to the URL a card
+    # was loaded from, which for a later page is the "more" URL.
+    paged = request.GET.get("format") == "json" or bool(
+        request.headers.get("HX-Request")
+    )
+    section = request.GET.get("section", "") if paged else ""
+    if section not in PERSON_CREDIT_SECTIONS:
+        section = ""
+    watched_total = len(watched_filmography)
+    filmography_total = len(filmography)
+    watched_page, watched_next_page = _credit_window(
+        request, watched_filmography, "watched", paged=paged
+    )
+    filmography_page, filmography_next_page = _credit_window(
+        request, filmography, "filmography", paged=paged
+    )
+    if section == "watched":
+        filmography_page = []
+    elif section == "filmography":
+        watched_page = []
+    attach_card_media(request.user, [*watched_page, *filmography_page], source)
 
     context = {
         "user": request.user,
         "person": person_data,
         "is_author": is_author,
-        "watched_filmography": watched_filmography,
+        "watched_filmography": watched_page,
+        "watched_total": watched_total,
+        "watched_next_page": watched_next_page,
         "watched_movie_count": watched_movie_count,
         "watched_show_count": watched_show_count,
         "watched_book_count": watched_book_count,
-        "filmography": filmography,
+        "filmography": filmography_page,
+        "filmography_total": filmography_total,
+        "filmography_next_page": filmography_next_page,
+        "section": section,
         "history_filter_url": history_filter_url,
         "tracked_plays_count": tracked_plays_count,
         "tracked_hours_count": tracked_hours_count,
@@ -721,7 +1000,14 @@ def person_detail(request, source, person_id, name):
         "filter_data": filter_data,
         "supports_critic_rating_sort": not is_author,
         "person_detail_url": request.path,
+        "talent_pending": talent_pending,
     }
+    if request.GET.get("format") == "json":
+        return JsonResponse(_people_person_contract(context))
+    if talent_poll is not None:
+        return render(request, "app/components/person_talent_ready.html", context)
+    if section and request.headers.get("HX-Request"):
+        return render(request, "app/components/person_credit_cards.html", context)
     if request.headers.get("HX-Request"):
         return render(
             request, "app/components/person_filmography_fragment.html", context
@@ -853,4 +1139,6 @@ def studio_detail(request, source, studio_id, name):
         "studio_games_count": len(credited_titles),
         "IMG_NONE": settings.IMG_NONE,
     }
+    if request.GET.get("format") == "json":
+        return JsonResponse(_people_studio_contract(context))
     return render(request, "app/studio_detail.html", context)

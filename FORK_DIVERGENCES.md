@@ -42,8 +42,8 @@
 
 4. **Query Count Budgets (`src/app/tests/test_query_counts.py`)**
    - **`CUSTOM_LIST_DETAIL_MAX_QUERIES`**:
-     - **Pin Value**: `55` (Upstream pin was `39`).
-     - **Rationale**: Upstream added the Tiers board tab and tier sorting; the fork additionally renders list collaborator watch states, status tab counts, and collection platform lookups.
+     - **Pin Value**: `61` (Upstream pin is `44`).
+     - **Rationale**: Upstream added Tiers board, viewers prefetch, and alphabet lookup; the fork additionally renders list collaborator watch states, MAL status tab counts, and collection platform lookups.
 
 5. **Theme & Styling Contracts (`ThemeTokenContractTests`)**
    - Hardcoded color utilities (`text-indigo-400`, `text-gray-500`, `dark:`, etc.) are prohibited in template HTML.
@@ -56,7 +56,7 @@
 - **Fork-owned files (preserve across upstream merges)**:
   - `.github/workflows/upstream-sync.yml`, `.github/scripts/gemini_test_evaluator.py`, `FORK_DIVERGENCES.md`
   - `src/lists/collaborator_sync.py`, `src/lists/tests/test_collaborator_sync.py`, `src/lists/tests/test_list_collaboration_and_mal_tabs.py`
-  - `src/lists/migrations/0017_customlist_completed_placement_and_more.py`, `src/users/migrations/0150_remove_user_last_search_type_valid_and_more.py` (if upstream adds competing migrations with the same number or leaf, renumber/rebase fork migrations cleanly on top of upstream's leaf rather than dropping fork columns)
+  - `src/lists/migrations/0017_customlist_completed_placement_and_more.py`, `src/lists/migrations/0019_merge_20261123_0936.py`, `src/users/migrations/0150_remove_user_last_search_type_valid_and_more.py`, `src/users/migrations/0159_merge_20261123_0937.py` (preserve released fork migrations and add a Django merge migration if upstream adds competing leaf migrations)
   - `src/templates/app/components/search_group_results.html`, `src/templates/lists/components/_list_item_watched_button.html`, `src/templates/lists/components/list_item_watched_toggle.html`, `src/templates/lists/components/list_status_tabs.html`, `src/templates/lists/components/list_completion_stats.html`, `src/templates/lists/components/add_item_search_all.html`, `src/templates/lists/components/add_item_search_group.html`, `src/templates/lists/components/collection_add_modal.html`
 - **Shared files (accept upstream improvements while keeping fork hooks intact)**:
   - `.github/workflows/docker-image.yml`, `docker-compose.yml` (keep Coolify webhook trigger and fork image settings)

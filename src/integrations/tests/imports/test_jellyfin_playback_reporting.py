@@ -148,6 +148,7 @@ class PlaybackReportingImporterTests(TestCase):
             {
                 "Id": "jf-item",
                 "Type": "Movie",
+                "RunTimeTicks": 1_200_000_000,
                 "ProviderIds": {"Tmdb": "123"},
             },
         ]
@@ -204,6 +205,7 @@ class PlaybackReportingImporterTests(TestCase):
             {
                 "Id": "jf-episode",
                 "Type": "Episode",
+                "RunTimeTicks": 1_200_000_000,
                 "SeriesId": "jf-series",
                 "ParentIndexNumber": 2,
                 "IndexNumber": 7,
@@ -295,6 +297,7 @@ class PlaybackReportingImporterTests(TestCase):
             {
                 "Id": "jf-episode",
                 "Type": "Episode",
+                "RunTimeTicks": 1_200_000_000,
                 "SeriesId": "jf-series",
                 "ParentIndexNumber": 2,
                 "IndexNumber": 7,
@@ -348,6 +351,7 @@ class PlaybackReportingImporterTests(TestCase):
             {
                 "Id": "jf-item",
                 "Type": "Movie",
+                "RunTimeTicks": 1_200_000_000,
                 "ProviderIds": {"Tmdb": "123"},
             },
         ]
@@ -361,6 +365,91 @@ class PlaybackReportingImporterTests(TestCase):
         self.assertIn("duplicate of an existing play", warnings)
         self.assertEqual(MoviePlay.objects.filter(movie=movie).count(), 0)
 
+    @patch(
+        "integrations.imports.jellyfin_playback_reporting.decrypt_or_raise",
+        return_value="api-key",
+    )
+    @patch("integrations.jellyfin_client.JellyfinClient.iter_library_items")
+    def test_completion_threshold_for_api_and_tsv(self, mock_library, mock_decrypt):
+        for path in ("api", "tsv"):
+            for item_type in ("Movie", "Episode"):
+                for runtime, duration, accepted in (
+                    (14_400_000_000, 540, False),  # 9 of 24 minutes
+                    (14_400_000_000, 1151, False),
+                    (14_400_000_000, 1152, True),  # exactly 80%
+                    (14_400_000_000, 1440, True),
+                    (14_400_000_000, 1600, True),
+                    (None, 1440, False),
+                    (0, 1440, False),
+                    (-1, 1440, False),
+                    ("invalid", 1440, False),
+                ):
+                    with self.subTest(
+                        path=path,
+                        item_type=item_type,
+                        runtime=runtime,
+                        duration=duration,
+                    ):
+                        item = {
+                            "Id": "jf-item",
+                            "Type": item_type,
+                            "ProviderIds": {"Tmdb": "123"},
+                            "SeriesId": "jf-series",
+                            "ParentIndexNumber": 1,
+                            "IndexNumber": 1,
+                            # A previous completed watch must not turn this
+                            # historical partial session into another watch.
+                            "UserData": {"Played": True},
+                        }
+                        if runtime is not None:
+                            item["RunTimeTicks"] = runtime
+                        mock_library.return_value = [
+                            item,
+                            {
+                                "Id": "jf-series",
+                                "Type": "Series",
+                                "ProviderIds": {"Tmdb": "456"},
+                            },
+                        ]
+                        importer = JellyfinPlaybackReportingImporter(
+                            self.user, self.account
+                        )
+                        with (
+                            patch.object(importer, "_import_movie") as movie,
+                            patch.object(importer, "_import_episode") as episode,
+                        ):
+                            if path == "api":
+                                _, warnings, cursor = importer.import_activity_rows(
+                                    [
+                                        {
+                                            "rowid": 17,
+                                            "date_created": "2024-01-02 03:04:05",
+                                            "user_id": "jf-user",
+                                            "item_id": "jf-item",
+                                            "item_type": item_type,
+                                            "play_duration": duration,
+                                        }
+                                    ]
+                                )
+                                self.assertEqual(cursor, 17)
+                            else:
+                                _, warnings = importer.import_data(
+                                    playback_row(
+                                        item_type=item_type,
+                                        duration=str(duration),
+                                    )
+                                )
+                        self.assertEqual(
+                            movie.call_count, int(accepted and item_type == "Movie")
+                        )
+                        self.assertEqual(
+                            episode.call_count, int(accepted and item_type == "Episode")
+                        )
+                        self.assertEqual(importer.skipped_count, int(not accepted))
+                        if accepted:
+                            self.assertEqual(warnings, "")
+                        else:
+                            self.assertIn("runtime", warnings)
 
 class PlaybackActivityAPIImportTests(TestCase):
     """Cover the Playback Reporting REST API import path (no manual TSV)."""
@@ -399,7 +488,12 @@ class PlaybackActivityAPIImportTests(TestCase):
             notes="",
         )
         mock_library.return_value = [
-            {"Id": "jf-item", "Type": "Movie", "ProviderIds": {"Tmdb": "123"}},
+            {
+                "Id": "jf-item",
+                "Type": "Movie",
+                "RunTimeTicks": 1_200_000_000,
+                "ProviderIds": {"Tmdb": "123"},
+            },
         ]
 
         entries = [
@@ -515,3 +609,98 @@ class LibraryBackfillImportTests(TestCase):
         ).import_library_backfill()
         self.assertEqual(counts[MediaTypes.MOVIE.value], 0)
         self.assertEqual(movie.plays.count(), 1)
+
+
+class StartStampedDuplicateTests(TestCase):
+    """An import stamped at playback-start still matches a play stamped at stop."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(username="start-stamped")
+        self.account = JellyfinAccount.objects.create(
+            user=self.user,
+            base_url="https://jellyfin.example",
+            api_key="encrypted",
+            jellyfin_user_id="jf-user",
+        )
+        show = Item.objects.create(
+            media_id="series-42", source=Sources.TVDB.value,
+            media_type=MediaTypes.TV.value, title="Show",
+        )
+        tv = TV.objects.create(user=self.user, item=show, status=Status.IN_PROGRESS.value)
+        season = Season.objects.create(
+            user=self.user, related_tv=tv, status=Status.IN_PROGRESS.value,
+            item=Item.objects.create(
+                media_id="series-42", source=Sources.TVDB.value,
+                media_type=MediaTypes.SEASON.value, title="Show", season_number=5,
+            ),
+        )
+        # A 43-minute episode: the duplicate window is one runtime long.
+        episode = Item.objects.create(
+            media_id="series-42", source=Sources.TVDB.value,
+            media_type=MediaTypes.EPISODE.value, title="Show",
+            season_number=5, episode_number=1, runtime_minutes=43,
+        )
+        # Logged when playback stopped, 44 minutes after it started.
+        Episode.objects.create(
+            item=episode, related_season=season,
+            end_date=datetime(2026, 9, 17, 19, 11, tzinfo=UTC),
+        )
+        self.library = [
+            {"Id": "jf-series", "Type": "Series", "ProviderIds": {"Tvdb": "series-42"}},
+            {
+                "Id": "jf-episode", "Type": "Episode", "RunTimeTicks": 43 * 60 * 10_000_000,
+                "SeriesId": "jf-series", "ParentIndexNumber": 5, "IndexNumber": 1,
+                "UserData": {"Played": True, "LastPlayedDate": "2026-09-17T18:27:00Z"},
+            },
+        ]
+
+    @patch(
+        "integrations.imports.jellyfin_playback_reporting.decrypt_or_raise",
+        return_value="api-key",
+    )
+    @patch("integrations.jellyfin_client.JellyfinClient.iter_library_items")
+    def test_session_longer_than_the_window_is_still_a_duplicate(self, mock_library, _decrypt):
+        mock_library.return_value = self.library
+        counts, warnings = JellyfinPlaybackReportingImporter(self.user, self.account).import_data(
+            playback_row(
+                timestamp="2026-09-17 18:27:00.0000000",
+                item_id="jf-episode", item_type="Episode", duration=str(43 * 60),
+            ),
+        )
+        self.assertEqual(counts[MediaTypes.EPISODE.value], 0)
+        self.assertIn("duplicate of an existing play", warnings)
+        self.assertEqual(Episode.objects.count(), 1)
+
+    @patch(
+        "integrations.imports.jellyfin_playback_reporting.decrypt_or_raise",
+        return_value="api-key",
+    )
+    @patch("integrations.jellyfin_client.JellyfinClient.iter_library_items")
+    def test_library_backfill_measures_last_played_by_runtime(self, mock_library, _decrypt):
+        mock_library.return_value = self.library
+        counts, warnings = JellyfinPlaybackReportingImporter(
+            self.user, self.account,
+        ).import_library_backfill()
+        self.assertEqual(counts[MediaTypes.EPISODE.value], 0)
+        self.assertIn("duplicate of an existing play", warnings)
+        self.assertEqual(Episode.objects.count(), 1)
+
+    @patch(
+        "integrations.imports.jellyfin_playback_reporting.decrypt_or_raise",
+        return_value="api-key",
+    )
+    @patch(
+        "integrations.imports.jellyfin_playback_reporting.fork_services_episode.resolve_or_create_season",
+        return_value=SimpleNamespace(watch=lambda *args, **kwargs: SimpleNamespace(created=True)),
+    )
+    @patch("integrations.jellyfin_client.JellyfinClient.iter_library_items")
+    def test_a_later_separate_session_is_still_imported(self, mock_library, mock_season, _decrypt):
+        mock_library.return_value = self.library
+        counts, _warnings = JellyfinPlaybackReportingImporter(self.user, self.account).import_data(
+            playback_row(
+                timestamp="2026-09-17 21:00:00.0000000",
+                item_id="jf-episode", item_type="Episode", duration=str(43 * 60),
+            ),
+        )
+        self.assertEqual(counts[MediaTypes.EPISODE.value], 1)
+        mock_season.assert_called_once()

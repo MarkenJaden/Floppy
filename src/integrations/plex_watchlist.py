@@ -3,12 +3,13 @@
 import logging
 from collections import defaultdict
 from copy import deepcopy
+from datetime import timedelta
 
 from django.db import IntegrityError
 from django.utils import timezone
 
 from app.mixins import disable_fetch_releases
-from app.models import TV, Item, MediaTypes, Movie, Sources, Status
+from app.models import TV, Item, ItemTag, MediaTypes, Movie, Sources, Status
 from app.providers import services, tmdb
 from integrations import external_references
 from integrations import plex as plex_api
@@ -20,6 +21,10 @@ logger = logging.getLogger(__name__)
 WATCHLIST_SYNC_INTERVAL_MINUTES = 15
 WATCHLIST_TASK_NAME = "Sync Plex Watchlist"
 WATCHLIST_PAGE_SIZE = 100
+# The sync runs every 15 minutes. Re-stamping when an item was last seen on
+# every run rewrote each ledger row 96 times a day for no reader; it is now
+# refreshed with any other change, or once it is this old.
+LAST_SEEN_REFRESH = timedelta(days=1)
 
 
 class PlexWatchlistSyncService:
@@ -34,6 +39,7 @@ class PlexWatchlistSyncService:
         self.source_username = ""
         self.source_account_id = ""
         self.source_server_id = ""
+        self.watchlist_tag = user.tags.filter(pk=user.watchlist_import_tag_id).first() if user.watchlist_import_tag_id else None
 
     def sync(self) -> tuple[dict[str, int], str]:
         """Run the watchlist sync and return counts plus warning text."""
@@ -176,6 +182,8 @@ class PlexWatchlistSyncService:
             return item.id
 
         _media_obj, created_media = self._get_or_create_user_media(model_class, item)
+        if self.watchlist_tag:
+            ItemTag.objects.get_or_create(tag=self.watchlist_tag, item=item)
         if created_media:
             self.counts["created"] += 1
             self.counts[media_type] += 1
@@ -378,7 +386,7 @@ class PlexWatchlistSyncService:
             media_obj = model_class.objects.create(
                 user=self.user,
                 item=item,
-                status=Status.PLANNING.value,
+                status=self.user.watchlist_import_status if self.user.watchlist_import_status in Status.values else Status.PLANNING.value,
                 score=None,
                 notes="",
             )
@@ -442,7 +450,6 @@ class PlexWatchlistSyncService:
             "imdb_id": str(external_ids.get("imdb_id") or ""),
             "is_active": True,
             "removed_at": None,
-            "last_seen_at": now,
         }
         for field_name, desired_value in desired_values.items():
             if getattr(sync_item, field_name) != desired_value:
@@ -453,8 +460,12 @@ class PlexWatchlistSyncService:
             sync_item.created_by_sync = True
             updated_fields.append("created_by_sync")
 
-        if updated_fields:
-            sync_item.save(update_fields=updated_fields)
+        if updated_fields or (
+            not sync_item.last_seen_at
+            or now - sync_item.last_seen_at >= LAST_SEEN_REFRESH
+        ):
+            sync_item.last_seen_at = now
+            sync_item.save(update_fields=[*updated_fields, "last_seen_at"])
 
     def _reconcile_removals(self, seen_item_ids: set[int]) -> None:
         """Deactivate ledger rows that disappeared from the current watchlist."""

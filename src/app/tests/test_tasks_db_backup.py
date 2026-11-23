@@ -1,21 +1,14 @@
 import sqlite3
-import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
-from unittest import mock, skipUnless
+from unittest import mock
 
 from django.test import SimpleTestCase, override_settings
 
+from app import backup_status
 from app.tasks_db_backup import write_database_snapshot
-
-# The underlying snapshot writer stages through /proc/self/fd/<fd>/<name> to
-# avoid a TOCTOU race -- Linux-only, same as config.sqlite_integrity's other
-# backup paths. Skip the one test that exercises the real writer on other
-# platforms so a native macOS/BSD run doesn't report an unrelated failure.
-requires_proc_fd_backup = skipUnless(
-    sys.platform.startswith("linux"),
-    "verified-snapshot path requires /proc/self/fd (Linux-only)",
-)
+from config import sqlite_integrity
 
 
 class WriteDatabaseSnapshotTaskTests(SimpleTestCase):
@@ -40,26 +33,27 @@ class WriteDatabaseSnapshotTaskTests(SimpleTestCase):
         self.assertEqual(result, {"status": "skipped", "reason": "postgres"})
 
     @override_settings(USING_SQLITE_DATABASE=True, DB_SNAPSHOT_ENABLED=True)
-    def test_reports_error_without_raising_when_snapshot_fails(self):
+    def test_celery_reports_failure_when_snapshot_raises(self):
         with mock.patch(
             "app.tasks_db_backup.create_live_database_snapshot",
             side_effect=RuntimeError("boom"),
         ):
-            result = write_database_snapshot()
+            result = write_database_snapshot.apply(throw=False)
 
-        self.assertEqual(result["status"], "error")
+        self.assertEqual(result.state, "FAILURE")
+        self.assertIsInstance(result.result, RuntimeError)
 
     @override_settings(USING_SQLITE_DATABASE=True, DB_SNAPSHOT_ENABLED=True)
-    def test_reports_error_when_snapshot_returns_none(self):
+    def test_celery_reports_failure_when_snapshot_returns_none(self):
         with mock.patch(
             "app.tasks_db_backup.create_live_database_snapshot",
             return_value=None,
         ):
-            result = write_database_snapshot()
+            result = write_database_snapshot.apply(throw=False)
 
-        self.assertEqual(result["status"], "error")
+        self.assertEqual(result.state, "FAILURE")
+        self.assertIsInstance(result.result, RuntimeError)
 
-    @requires_proc_fd_backup
     def test_happy_path_writes_a_real_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             db_path = Path(tmp_dir) / "db.sqlite3"
@@ -82,3 +76,57 @@ class WriteDatabaseSnapshotTaskTests(SimpleTestCase):
             self.assertEqual(result["status"], "ok")
             snapshot_files = list((backup_dir / "database").glob("*.sqlite3"))
             self.assertEqual(len(snapshot_files), 1)
+
+    def make_database(self, tmp_dir):
+        db_path = Path(tmp_dir) / "db.sqlite3"
+        with closing(sqlite3.connect(db_path)) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+            conn.commit()
+        return db_path
+
+    def test_completion_line_says_how_the_copy_ran(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = self.make_database(tmp_dir)
+            with (
+                override_settings(
+                    USING_SQLITE_DATABASE=True,
+                    DB_SNAPSHOT_ENABLED=True,
+                    FLOPPY_DB_PATH=db_path,
+                    BACKUP_DIR=str(Path(tmp_dir) / "backups"),
+                    DB_SNAPSHOT_RETENTION_COUNT=7,
+                    SQLITE_BUSY_TIMEOUT_SECONDS=5,
+                ),
+                self.assertLogs("app.tasks_db_backup", level="INFO") as logs,
+            ):
+                self.assertEqual(write_database_snapshot()["status"], "ok")
+        line = next(entry for entry in logs.output if "db_snapshot name=" in entry)
+        self.assertIn("pinned=True", line)
+        self.assertIn("restarts=0", line)
+        self.assertRegex(line, r"steps=[1-9]")
+
+    def test_snapshot_that_cannot_converge_shows_as_failing(self):
+        error = sqlite_integrity._SnapshotNotConvergingError(
+            "snapshot copy restarted 4 times because the database kept changing"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = self.make_database(tmp_dir)
+            with (
+                override_settings(
+                    USING_SQLITE_DATABASE=True,
+                    DB_SNAPSHOT_ENABLED=True,
+                    FLOPPY_DB_PATH=db_path,
+                    BACKUP_DIR=str(Path(tmp_dir) / "backups"),
+                    DB_SNAPSHOT_RETENTION_COUNT=7,
+                    SQLITE_BUSY_TIMEOUT_SECONDS=5,
+                ),
+                mock.patch.object(sqlite_integrity, "_copy_source", side_effect=error),
+                mock.patch.object(sqlite_integrity, "_report_corruption") as report,
+            ):
+                result = write_database_snapshot.apply(throw=False)
+                status = backup_status.freshness(backup_status.SNAPSHOT)
+
+        self.assertEqual(result.state, "FAILURE")
+        self.assertTrue(status["failing"])
+        # The database is fine; it was only busy.
+        report.assert_not_called()

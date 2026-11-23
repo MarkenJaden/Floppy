@@ -1,14 +1,20 @@
 """Tasks consumed by the dedicated interactive Celery worker."""
 
+import logging
+import os
+import time
+
 from celery import shared_task
+
+logger = logging.getLogger(__name__)
 
 
 @shared_task(name="Resolve live playback image")
-def resolve_playback_image(user_id: int):
+def resolve_playback_image(user_id: int, slot: str | None = None):
     """Resolve artwork for a cached live playback state in the background."""
     from app import live_playback
 
-    live_playback.resolve_state_image(user_id)
+    live_playback.resolve_state_image(user_id, slot)
 
 
 @shared_task(name="app.tasks.statistics_sync_task")
@@ -44,16 +50,59 @@ def refresh_statistics_talent_fragment_task(
     )
 
 
-@shared_task(name="Reconcile statistics sync", ignore_result=True)
+# A full scan of the viewer's plays. Pages queue it once per history version
+# and never wait for it; the hard limit frees the slot if SQLite is wedged.
+@shared_task(
+    name="Build person talent context",
+    ignore_result=True,
+    soft_time_limit=600,
+    time_limit=660,
+)
+def build_person_talent_context_task(user_id: int):
+    """Store the all-time watched context that person pages read their totals from."""
+    from django.contrib.auth import get_user_model
+
+    from app import statistics_cache
+
+    user = get_user_model().objects.filter(pk=user_id).first()
+    if user is None:
+        return
+    statistics_cache.get_person_talent_context(user)
+
+
+@shared_task(name="app.tasks.mark_credits_statistics_refresh", ignore_result=True)
+def mark_credits_statistics_refresh(user_id: int):
+    """Record the credits change left behind by a coalesced backfill batch."""
+    from app import statistics_sync
+
+    statistics_sync.mark_credits_statistics_refresh(user_id)
+
+
+# A reconcile is one query and a bounded fan-out of cache writes, so a run that
+# exceeds this is wedged (a held SQLite writer, a hung Redis call), not busy.
+# The hard limit kills the child; the soft one cannot interrupt a C-level wait.
+@shared_task(
+    name="Reconcile statistics sync",
+    ignore_result=True,
+    soft_time_limit=60,
+    time_limit=120,
+)
 def reconcile_statistics_sync_task():
     """Queue a sync for every user whose Statistics trail their changes.
 
-    Lives on the interactive worker so a long import on the background worker
-    cannot hold up recovery.
+    Periodic recovery runs on the default worker. Viewer-requested syncs
+    select the interactive lane independently.
     """
     from app import statistics_sync
 
-    statistics_sync.reconcile()
+    started = time.monotonic()
+    logger.info("reconcile_statistics_sync start pid=%s", os.getpid())
+    queued = statistics_sync.reconcile()
+    logger.info(
+        "reconcile_statistics_sync finish queued=%s duration_ms=%.0f",
+        queued,
+        (time.monotonic() - started) * 1000,
+    )
 
 
 # Retired names from the chunked refresh run. Kept registered for one release

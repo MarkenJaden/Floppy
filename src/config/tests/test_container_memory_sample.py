@@ -395,6 +395,8 @@ class PrivacyInvariantTests(SimpleTestCase):
         "measurement",
         "fd_count",
         "uptime_seconds",
+        "start_ticks",
+        "cpu_seconds",
         "pss_kib",
         "rss_kib",
         "private_kib",
@@ -407,7 +409,9 @@ class PrivacyInvariantTests(SimpleTestCase):
 
     def test_no_command_arguments_reach_the_sample(self):
         """Every emitted process carries argv0 only, and no derived flags."""
-        sampled = sampler.sample()
+        # Include this process as an application even when it is alone as PID 1.
+        with patch.object(sampler.os, "getpid", return_value=-1):
+            sampled = sampler.sample()
 
         self.assertTrue(sampled["processes"], "expected at least one process")
         for item in sampled["processes"]:
@@ -435,7 +439,8 @@ class ReconciliationTests(SimpleTestCase):
 
     def test_complete_sample_reports_totals_as_reconciled(self):
         """With every process measured, the PSS total is a real total."""
-        sampled = sampler.sample()
+        with patch.object(sampler.os, "getpid", return_value=-1):
+            sampled = sampler.sample()
         reconciliation = sampled["reconciliation"]
 
         # In a Floppy container every process in the cgroup is one Floppy
@@ -463,7 +468,10 @@ class ReconciliationTests(SimpleTestCase):
         def deny_rollup(path):
             return None if path.name == "smaps_rollup" else real_read_text(path)
 
-        with patch.object(sampler, "_read_text", side_effect=deny_rollup):
+        with (
+            patch.object(sampler, "_read_text", side_effect=deny_rollup),
+            patch.object(sampler.os, "getpid", return_value=-1),
+        ):
             sampled = sampler.sample()
 
         self.assertEqual(sampled["measured_processes"], 0)

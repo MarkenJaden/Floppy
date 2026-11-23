@@ -9,7 +9,7 @@ from datetime import date, datetime
 from django import forms
 from django.conf import settings
 
-from app import helpers
+from app import helpers, local_covers
 from app.models import MediaTypes
 from app.statistics import parse_runtime_to_minutes
 
@@ -40,6 +40,7 @@ TITLE_MEDIA_TYPES = (
     MediaTypes.GAME.value,
     MediaTypes.BOOK.value,
     MediaTypes.COMIC.value,
+    MediaTypes.COMIC_ISSUE.value,
     MediaTypes.BOARDGAME.value,
 )
 
@@ -127,6 +128,7 @@ FIELD_SPECS: dict[str, CustomMetadataFieldSpec] = {
             MediaTypes.MOVIE.value,
             MediaTypes.GAME.value,
             MediaTypes.COMIC.value,
+            MediaTypes.COMIC_ISSUE.value,
             MediaTypes.BOARDGAME.value,
         ),
     ),
@@ -269,6 +271,7 @@ FIELD_SPECS: dict[str, CustomMetadataFieldSpec] = {
             MediaTypes.GAME.value,
             MediaTypes.BOOK.value,
             MediaTypes.COMIC.value,
+            MediaTypes.COMIC_ISSUE.value,
             MediaTypes.MANGA.value,
             MediaTypes.BOARDGAME.value,
         ),
@@ -303,6 +306,7 @@ FIELD_SPECS: dict[str, CustomMetadataFieldSpec] = {
             MediaTypes.GAME.value,
             MediaTypes.BOOK.value,
             MediaTypes.COMIC.value,
+            MediaTypes.COMIC_ISSUE.value,
             MediaTypes.BOARDGAME.value,
         ),
     ),
@@ -323,6 +327,7 @@ FIELD_SPECS: dict[str, CustomMetadataFieldSpec] = {
             MediaTypes.GAME.value,
             MediaTypes.BOOK.value,
             MediaTypes.COMIC.value,
+            MediaTypes.COMIC_ISSUE.value,
             MediaTypes.BOARDGAME.value,
         ),
     ),
@@ -338,6 +343,7 @@ FIELD_SPECS: dict[str, CustomMetadataFieldSpec] = {
         media_types=(
             MediaTypes.BOOK.value,
             MediaTypes.COMIC.value,
+            MediaTypes.COMIC_ISSUE.value,
             MediaTypes.MANGA.value,
         ),
     ),
@@ -350,6 +356,7 @@ FIELD_SPECS: dict[str, CustomMetadataFieldSpec] = {
         media_types=(
             MediaTypes.BOOK.value,
             MediaTypes.COMIC.value,
+            MediaTypes.COMIC_ISSUE.value,
             MediaTypes.MANGA.value,
             MediaTypes.BOARDGAME.value,
         ),
@@ -541,6 +548,20 @@ MEDIA_TYPE_FIELD_ORDER: dict[str, list[str]] = {
         "country",
         "languages",
     ],
+    MediaTypes.COMIC_ISSUE.value: [
+        "title",
+        "original_title",
+        "localized_title",
+        "image_url",
+        "synopsis",
+        "genres",
+        "release_date",
+        "authors",
+        "publishers",
+        "format",
+        "country",
+        "languages",
+    ],
     MediaTypes.BOARDGAME.value: [
         "title",
         "original_title",
@@ -615,7 +636,7 @@ def detail_field_names_for_media_type(media_type: str) -> list[str]:
     return DETAIL_VALUE_ORDER.get(media_type, [])
 
 
-def _coerce_list(value) -> list[str]:
+def _coerce_text_list(value) -> list[str]:
     if isinstance(value, list):
         return [str(entry).strip() for entry in value if str(entry).strip()]
     if not value:
@@ -624,7 +645,7 @@ def _coerce_list(value) -> list[str]:
 
 
 def _serialize_list_for_initial(value) -> str:
-    return "\n".join(_coerce_list(value))
+    return "\n".join(_coerce_text_list(value))
 
 
 def _split_list_value(value) -> list[str]:
@@ -655,7 +676,7 @@ def _date_to_iso(value) -> str:
 
 def _normalize_stored_value(value, spec: CustomMetadataFieldSpec):
     if spec.list_value:
-        return _coerce_list(value)
+        return _coerce_text_list(value)
     if spec.numeric_value:
         try:
             return int(value) if value not in (None, "") else None
@@ -683,8 +704,12 @@ def _build_field(spec: CustomMetadataFieldSpec) -> forms.Field:
             **common_kwargs,
         )
     if spec.widget == "url":
-        return forms.URLField(
-            widget=forms.URLInput(attrs={"placeholder": spec.placeholder}),
+        return _CoverAwareURLField(
+            # Plain text input: a type="url" box would make the browser refuse
+            # the /covers/... path of an uploaded cover. The field validates.
+            widget=forms.TextInput(
+                attrs={"placeholder": spec.placeholder, "inputmode": "url"}
+            ),
             **common_kwargs,
         )
     if spec.widget == "date":
@@ -703,6 +728,15 @@ def _build_field(spec: CustomMetadataFieldSpec) -> forms.Field:
         widget=forms.TextInput(attrs={"placeholder": spec.placeholder}),
         **common_kwargs,
     )
+
+
+class _CoverAwareURLField(forms.URLField):
+    """A URL field that also keeps a cover the person uploaded to Floppy."""
+
+    def clean(self, value):
+        if local_covers.is_local(value):
+            return value
+        return super().clean(value)
 
 
 def _manual_metadata_map(item) -> dict:
@@ -781,7 +815,7 @@ def provider_value_for_item(item, field_name: str, fallback=None):
         normalized = str(value).strip() if value not in (None, "") else ""
         return normalized or settings.IMG_NONE
     if spec.list_value:
-        return _coerce_list(value)
+        return _coerce_text_list(value)
     if spec.numeric_value:
         try:
             return int(value) if value not in (None, "") else None
@@ -812,7 +846,7 @@ def detail_value_for_item(item, field_name: str, fallback_details: dict | None =
     if spec.widget == "date":
         return _date_to_iso(value)
     if spec.list_value:
-        return _coerce_list(value)
+        return _coerce_text_list(value)
     if spec.numeric_value:
         try:
             return int(value) if value not in (None, "") else None

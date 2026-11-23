@@ -20,7 +20,11 @@ from integrations.imports.helpers import (
 )
 from integrations.models import RadarrInstance
 from integrations.safe_fetch import send_to_self_hosted
-from integrations.source_sync import upsert_collection_source_state
+from integrations.source_sync import (
+    prune_collection_source_states,
+    replace_source_pages,
+    sync_collection_source_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +132,7 @@ class RadarrImporter:
     def import_data(self):
         """Return the import data."""
         imported_counts = defaultdict(int)
+        owned_item_ids = set()
 
         try:
             movies = self.client.movies()
@@ -138,6 +143,20 @@ class RadarrImporter:
                 auth=isinstance(error, ConnectionAuthError),
             )
             raise
+
+        # Every movie Radarr manages links from its detail page, downloaded or not.
+        replace_source_pages(
+            user=self.user,
+            source="radarr",
+            source_instance_id=self.instance.pk,
+            pages={
+                (Sources.TMDB.value, MediaTypes.MOVIE.value, str(row["tmdbId"])): (
+                    f"movie/{row.get('titleSlug') or row['tmdbId']}"
+                )
+                for row in movies
+                if row.get("tmdbId")
+            },
+        )
 
         total = len(movies)
         for i, row in enumerate(movies, start=1):
@@ -150,11 +169,12 @@ class RadarrImporter:
                 imported_counts["skipped_missing_ids"] += 1
                 continue
 
+            owned_item_ids.add(item.id)
             quality_label = (row.get("movieFile") or {}).get("quality", {}).get(
                 "quality", {}
             ).get("name") or ""
             updated_at = self._parse_source_timestamp(row)
-            upsert_collection_source_state(
+            _entry, changed = sync_collection_source_state(
                 user=self.user,
                 item=item,
                 source="radarr",
@@ -162,9 +182,23 @@ class RadarrImporter:
                 quality_label=quality_label,
                 source_updated_at=updated_at,
             )
-            imported_counts[item.media_type] += 1
-            imported_counts["updated"] += 1
+            # An unchanged copy is not an import: counting it would start a
+            # calendar reload and a Statistics rebuild every scheduled run.
+            if changed:
+                imported_counts["collection"] += 1
+                imported_counts["updated"] += 1
+            else:
+                imported_counts["unchanged"] += 1
 
+        # The full movie list was read, so anything missing is no longer owned.
+        removed = prune_collection_source_states(
+            user=self.user,
+            source="radarr",
+            source_instance_id=self.instance.pk,
+            keep_item_ids=owned_item_ids,
+        )
+        if removed:
+            imported_counts["removed"] += removed
         self.instance.last_sync_at = timezone.now()
         connection_health.record_success(self.instance, extra_fields=["last_sync_at"])
 
@@ -236,4 +270,5 @@ class RadarrImporter:
                 )
             except ValueError:
                 continue
-        return timezone.now()
+        # None: Radarr sent no timestamp, so the stored one stays.
+        return None

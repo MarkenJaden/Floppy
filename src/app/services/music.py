@@ -12,6 +12,7 @@ from django.utils.dateparse import parse_date
 from app.log_safety import exception_summary
 from app.models import Album, AlbumArtist, Artist, Item, Music, Track
 from app.models.music import ArtistMember
+from app.services.tracker_fold import fold_tracker_into
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,166 @@ FUZZY_MATCH_SIMILARITY_THRESHOLD = 0.8
 # When resolving ambiguous MusicBrainz search results, trust the first
 # candidate outright if the result set is this small or smaller.
 FEW_CANDIDATES_AUTO_TRUST_MAX = 3
+
+
+def album_for_media_id(media_id, user=None):
+    """Return the Album behind an album page's media id, or None.
+
+    The album page identifies its Item with the release id, else the release
+    group id, else ``album-<pk>`` for an album with no MusicBrainz id. Duplicate
+    rows for one MusicBrainz identity resolve to the canonical one for ``user``.
+    """
+    media_id = str(media_id or "")
+    albums = Album.objects.select_related("artist")
+    if media_id.startswith("album-"):
+        album_pk = media_id.removeprefix("album-")
+        matches = list(albums.filter(pk=album_pk)) if album_pk.isdigit() else []
+    elif media_id:
+        matches = list(
+            albums.filter(
+                models.Q(musicbrainz_release_id=media_id)
+                | models.Q(musicbrainz_release_group_id=media_id),
+            ),
+        )
+    else:
+        matches = []
+    if not matches and media_id and not media_id.startswith("album-"):
+        matches = _albums_for_stale_release_id(media_id)
+    if not matches:
+        return None
+    # Rank every exact match first: the seed row's own group id would otherwise
+    # hide a duplicate that has the same release id but no group id.
+    return find_canonical_album(_preferred_album(matches, user), user=user)
+
+
+def _albums_for_stale_release_id(release_id):
+    """Find albums for a release id that no album row holds any more.
+
+    A list stores the id the album page had when the album was added. An album's
+    release id can change later (enrichment, merges), leaving the saved id on no
+    row. MusicBrainz knows the release's group, and the group id is stable. The
+    answer, including a failed or empty one, is cached for a day so a page does
+    not call MusicBrainz on every render.
+    """
+    from django.core.cache import cache
+
+    from app.providers import musicbrainz
+
+    cache_key = f"album_stale_release_group_{release_id}"
+    group_id = cache.get(cache_key)
+    if group_id is None:
+        try:
+            group_id = musicbrainz.get_release_group_id(release_id)
+        except Exception:
+            logger.debug("Could not resolve release %s to a group", release_id)
+            group_id = None
+        cache.set(cache_key, group_id or "", 60 * 60 * 24)
+    if not group_id:
+        return []
+    return list(
+        Album.objects.select_related("artist").filter(
+            musicbrainz_release_group_id=group_id,
+        ),
+    )
+
+
+def repair_stale_album_list_items(user, items, limit=3):
+    """Re-point list items saved under a replaced release id at the album's id.
+
+    Only items that no album row matches are looked up, and at most ``limit``
+    MusicBrainz requests are made per call, misses included. Returns the number
+    repaired.
+    """
+    from app.models import MediaTypes, Sources
+
+    candidates = [
+        item for item in items
+        if item.media_type == MediaTypes.MUSIC.value
+        and item.source == Sources.MUSICBRAINZ.value
+        and item.season_number is None
+        and item.episode_number is None
+        and not str(item.media_id).startswith("album-")
+    ]
+    if not candidates:
+        return 0
+    ids = [item.media_id for item in candidates]
+    known = set(
+        Album.objects.filter(musicbrainz_release_id__in=ids).values_list(
+            "musicbrainz_release_id", flat=True,
+        ),
+    ) | set(
+        Album.objects.filter(musicbrainz_release_group_id__in=ids).values_list(
+            "musicbrainz_release_group_id", flat=True,
+        ),
+    )
+    from django.core.cache import cache
+
+    repaired = 0
+    lookups = 0
+    for item in candidates:
+        if item.media_id in known:
+            continue
+        # Only a cold cache costs a MusicBrainz request, so only that counts
+        # against the limit, whether the lookup then hits or misses. Recordings
+        # on a list never match an album and must not each cost a request.
+        if cache.get(f"album_stale_release_group_{item.media_id}") is None:
+            if lookups >= limit:
+                continue
+            lookups += 1
+        album = album_for_media_id(item.media_id, user=user)
+        new_id = album and (
+            album.musicbrainz_release_id or album.musicbrainz_release_group_id
+        )
+        if not new_id or new_id == item.media_id:
+            continue
+        taken = Item.objects.filter(
+            media_id=new_id,
+            source=item.source,
+            media_type=item.media_type,
+            library_media_type=item.library_media_type,
+            season_number=None,
+            episode_number=None,
+        ).exists()
+        if taken:
+            continue
+        item.media_id = new_id
+        item.save(update_fields=["media_id"])
+        repaired += 1
+    return repaired
+
+
+def album_trackers_for_list_items(user, items):
+    """Load album tracking for list cards in bounded queries."""
+    from django.db.models import Subquery
+    from django.urls import reverse
+
+    from app.library_query.spec import ROUTING_MODEL
+    from app.library_query.trackers import tracker_sources
+    from app.models import AlbumTracker, MediaTypes, Sources
+
+    items_by_id = {
+        item.pk: item for item in items
+        if item.media_type == MediaTypes.MUSIC.value and item.source == Sources.MUSICBRAINZ.value
+    }
+    if not items_by_id:
+        return {}
+    repair_stale_album_list_items(user, items_by_id.values())
+    source = tracker_sources(user, MediaTypes.MUSIC.value, ROUTING_MODEL, include_albums=True)[0]
+    ids = Item.objects.filter(pk__in=items_by_id).annotate(
+        _tracker_id=Subquery(source.item_rows(user).order_by("-updated_at", "-pk").values("pk")[:1])
+    ).values_list("pk", "_tracker_id")
+    ids = dict(ids)
+    trackers = AlbumTracker.objects.in_bulk(value for value in ids.values() if value)
+    result = {}
+    for item_id, tracker_id in ids.items():
+        tracker = trackers.get(tracker_id)
+        if tracker:
+            tracker.item = items_by_id[item_id]
+            tracker.item_id = item_id
+            tracker.formatted_score = tracker.score
+            tracker.score_url = reverse("update_album_score", args=[tracker.album_id])
+            result[item_id] = tracker
+    return result
 
 
 def _parse_partial_date(date_str):
@@ -1085,6 +1246,21 @@ def _sync_single_artist_member(band: Artist, member_data: dict) -> bool:
     return True
 
 
+def artist_members_need_sync(artist: Artist) -> bool:
+    """Return True when an artist's band members are due a MusicBrainz sync.
+
+    Members synced within 30 days (7 when none were found) are fresh.
+    """
+    if not artist.musicbrainz_id:
+        return False
+    if not artist.members_synced_at:
+        return True
+    days_since_sync = (timezone.now() - artist.members_synced_at).days
+    existing_members = ArtistMember.objects.filter(band=artist).exists()
+    max_age = 30 if existing_members else 7
+    return days_since_sync >= max_age
+
+
 def sync_artist_members(artist: Artist, force: bool = False) -> int:
     """Sync band members for an artist from MusicBrainz.
 
@@ -1109,20 +1285,9 @@ def sync_artist_members(artist: Artist, force: bool = False) -> int:
         )
         return 0
 
-    if not force and artist.members_synced_at:
-        days_since_sync = (timezone.now() - artist.members_synced_at).days
-        existing_members = ArtistMember.objects.filter(band=artist).exists()
-        max_age = 30 if existing_members else 7
-
-        if days_since_sync < max_age:
-            logger.debug(
-                "Artist %s members synced %d days ago (max_age=%d, has_members=%s), skipping",
-                artist.name,
-                days_since_sync,
-                max_age,
-                existing_members,
-            )
-            return 0
+    if not force and not artist_members_need_sync(artist):
+        logger.debug("Artist %s members synced recently, skipping", artist.name)
+        return 0
 
     try:
         artist_data = musicbrainz.get_artist(artist.musicbrainz_id)
@@ -1237,11 +1402,16 @@ def find_canonical_album(album: Album, user=None) -> Album:
     if identity_filter is None:
         return album
 
-    from app.models import AlbumTracker, Music
-
     candidates = list(Album.objects.filter(identity_filter).select_related("artist"))
     if len(candidates) <= 1:
         return album
+
+    return _preferred_album(candidates, user)
+
+
+def _preferred_album(candidates: list[Album], user=None) -> Album:
+    """Return the candidate a user is most likely to mean."""
+    from app.models import AlbumTracker, Music
 
     def score(candidate: Album) -> tuple:
         user_tracker = 0
@@ -1324,26 +1494,7 @@ def merge_album_records(source_album: Album, target_album: Album) -> Album:
             album=target_album,
         ).first()
         if existing:
-            tracker_updates = set()
-            preferred_status = _preferred_status(existing.status, tracker.status)
-            if preferred_status and preferred_status != existing.status:
-                existing.status = preferred_status
-                tracker_updates.add("status")
-            if existing.score is None and tracker.score is not None:
-                existing.score = tracker.score
-                tracker_updates.add("score")
-            if tracker.start_date and (
-                not existing.start_date or tracker.start_date < existing.start_date
-            ):
-                existing.start_date = tracker.start_date
-                tracker_updates.add("start_date")
-            if tracker.end_date and (
-                not existing.end_date or tracker.end_date > existing.end_date
-            ):
-                existing.end_date = tracker.end_date
-                tracker_updates.add("end_date")
-            if tracker_updates:
-                existing.save(update_fields=list(tracker_updates))
+            fold_tracker_into(tracker, existing)
             tracker.delete()
         else:
             tracker.album = target_album
@@ -1383,11 +1534,18 @@ def canonicalize_album(album: Album, user=None) -> Album:
     return merge_album_records(album, canonical)
 
 
-def canonicalize_albums(albums: list[Album], user=None) -> list[Album]:
+def canonicalize_albums(
+    albums: list[Album],
+    user=None,
+    *,
+    merge: bool = True,
+) -> list[Album]:
     """Canonicalize many albums, checking for duplicate rows in one query.
 
     Only albums whose MusicBrainz identity is shared with another row go
     through canonicalize_album; every other album is returned as it is.
+    ``merge=False`` returns the canonical row without merging the
+    duplicate into it, for a request that only reads.
     """
     group_ids = {
         a.musicbrainz_release_group_id for a in albums if a.musicbrainz_release_group_id
@@ -1418,7 +1576,12 @@ def canonicalize_albums(albums: list[Album], user=None) -> list[Album]:
             shared = release_counts.get(album.musicbrainz_release_id, 0) > 1
         else:
             shared = False
-        canonical.append(canonicalize_album(album, user=user) if shared else album)
+        if not shared:
+            canonical.append(album)
+        elif merge:
+            canonical.append(canonicalize_album(album, user=user))
+        else:
+            canonical.append(find_canonical_album(album, user=user))
     return canonical
 
 
@@ -1658,6 +1821,128 @@ def populate_album_tracks(album: Album) -> int:
         return 0
 
 
+def sync_album_metadata(album: Album, *, get_release=None, ensure_release_id=None) -> dict:
+    """Force re-sync of an album's metadata and tracks from MusicBrainz.
+
+    Returns a result dict consumed by both the web action and the REST API:
+    ``merged_into`` names a canonical duplicate the album was merged into,
+    ``synced_tracks`` is the rebuilt tracklist size, ``missing_release`` is
+    true when no MusicBrainz release could be resolved, and ``error`` carries
+    a user-safe failure message. The album instance is updated in place unless
+    it was merged.
+    """
+    from django.core.cache import cache as django_cache
+
+    from app.providers import musicbrainz
+
+    get_release = get_release or musicbrainz.get_release
+    ensure_release_id = ensure_release_id or ensure_album_has_release_id
+
+    if album.musicbrainz_release_group_id:
+        # Force re-derivation of the release: a previous sync may have
+        # locked in the wrong pressing (e.g. a partial reissue instead of
+        # the full release), so drop the cached group->release pick and
+        # the release_id itself before re-resolving.
+        django_cache.delete(
+            f"musicbrainz_release_for_group_{album.musicbrainz_release_group_id}",
+        )
+        album.musicbrainz_release_id = ""
+
+    ensure_release_id(album)
+
+    if not album.musicbrainz_release_id:
+        return {
+            "album": album,
+            "merged_into": None,
+            "synced_tracks": 0,
+            "missing_release": True,
+            "error": None,
+        }
+
+    try:
+        django_cache.delete(f"musicbrainz_release_{album.musicbrainz_release_id}")
+        release_data = get_release(album.musicbrainz_release_id)
+
+        # If this album is missing its release-group ID (e.g. created via
+        # search before the fix), check whether a canonical album already
+        # exists for that release-group and merge into it.
+        fetched_release_group_id = release_data.get("release_group_id")
+        if fetched_release_group_id and album.artist_id:
+            needs_group_id = not album.musicbrainz_release_group_id
+            canonical = (
+                Album.objects.filter(
+                    artist_id=album.artist_id,
+                    musicbrainz_release_group_id=fetched_release_group_id,
+                )
+                .exclude(pk=album.pk)
+                .first()
+            )
+            if canonical:
+                Music.objects.filter(album=album).update(album=canonical)
+                if not canonical.musicbrainz_release_id:
+                    canonical.musicbrainz_release_id = album.musicbrainz_release_id
+                    canonical.save(update_fields=["musicbrainz_release_id"])
+                album.delete()
+                return {
+                    "album": canonical,
+                    "merged_into": canonical,
+                    "synced_tracks": 0,
+                    "missing_release": False,
+                    "error": None,
+                }
+            if needs_group_id:
+                album.musicbrainz_release_group_id = fetched_release_group_id
+                album.release_type = release_data.get("release_type", "")
+                album.save(
+                    update_fields=["musicbrainz_release_group_id", "release_type"],
+                )
+
+        new_image = release_data.get("image", "")
+        if new_image and new_image != settings.IMG_NONE:
+            album.image = new_image
+
+        if release_data.get("genres"):
+            album.genres = release_data.get("genres")
+
+        tracks_data = release_data.get("tracks", [])
+        # Clear any tracks left over from a previous, differently-shaped
+        # release (e.g. fewer discs/tracks) before rebuilding.
+        Track.objects.filter(album=album).delete()
+        for track_data in tracks_data:
+            Track.objects.update_or_create(
+                album=album,
+                disc_number=track_data.get("disc_number", 1),
+                track_number=track_data.get("track_number"),
+                defaults={
+                    "title": track_data.get("title", "Unknown Track"),
+                    "musicbrainz_recording_id": track_data.get("recording_id"),
+                    "duration_ms": track_data.get("duration_ms"),
+                    "genres": track_data.get("genres", [])
+                    or release_data.get("genres", []),
+                },
+            )
+
+        album.tracks_populated = True
+        album.save(update_fields=["tracks_populated", "image", "genres"])
+    except Exception as e:
+        logger.warning("Failed to sync album %s: %s", album.title, e)
+        return {
+            "album": album,
+            "merged_into": None,
+            "synced_tracks": 0,
+            "missing_release": False,
+            "error": str(e),
+        }
+    else:
+        return {
+            "album": album,
+            "merged_into": None,
+            "synced_tracks": len(tracks_data),
+            "missing_release": False,
+            "error": None,
+        }
+
+
 def sync_album_release_tracks(album: Album, release_id: str) -> int:
     """Replace an album's tracklist with a specific MusicBrainz release's tracks.
 
@@ -1795,25 +2080,6 @@ def prefetch_album_covers(artist: Artist, limit: int | None = 20) -> int:
     return updated
 
 
-def _preferred_status(current: str | None, incoming: str | None) -> str | None:
-    """Pick the higher-precedence status between two values."""
-    from app.models import Status
-
-    if not current:
-        return incoming
-    if not incoming:
-        return current
-
-    order = {
-        Status.COMPLETED.value: 5,
-        Status.DROPPED.value: 4,
-        Status.IN_PROGRESS.value: 3,
-        Status.PAUSED.value: 2,
-        Status.PLANNING.value: 1,
-    }
-    return current if order.get(current, 0) >= order.get(incoming, 0) else incoming
-
-
 def merge_artist_records(source_artist: Artist, target_artist: Artist) -> Artist:
     """Merge a duplicate artist into a canonical one without losing data."""
     if source_artist.id == target_artist.id:
@@ -1835,42 +2101,7 @@ def merge_artist_records(source_artist: Artist, target_artist: Artist) -> Artist
         ).first()
 
         if existing:
-            updates = set()
-            preferred_status = _preferred_status(existing.status, tracker.status)
-            if preferred_status and preferred_status != existing.status:
-                existing.status = preferred_status
-                updates.add("status")
-
-            # Preserve earliest start and latest end dates
-            start_date = min(
-                [d for d in [existing.start_date, tracker.start_date] if d],
-                default=None,
-            )
-            end_date = max(
-                [d for d in [existing.end_date, tracker.end_date] if d],
-                default=None,
-            )
-            if start_date and start_date != existing.start_date:
-                existing.start_date = start_date
-                updates.add("start_date")
-            if end_date and end_date != existing.end_date:
-                existing.end_date = end_date
-                updates.add("end_date")
-
-            # Fill missing score/notes
-            if existing.score is None and tracker.score is not None:
-                existing.score = tracker.score
-                updates.add("score")
-            if tracker.notes and tracker.notes.strip():
-                if not existing.notes:
-                    existing.notes = tracker.notes
-                    updates.add("notes")
-                elif tracker.notes not in existing.notes:
-                    existing.notes = f"{existing.notes}\n{tracker.notes}"
-                    updates.add("notes")
-
-            if updates:
-                existing.save(update_fields=list(updates))
+            fold_tracker_into(tracker, existing)
             tracker.delete()
         else:
             tracker.artist = target_artist
@@ -1949,33 +2180,7 @@ def merge_artist_records(source_artist: Artist, target_artist: Artist) -> Artist
                 album=target_album,
             ).first()
             if existing:
-                tracker_updates = set()
-                preferred_status = _preferred_status(existing.status, tracker.status)
-                if preferred_status and preferred_status != existing.status:
-                    existing.status = preferred_status
-                    tracker_updates.add("status")
-
-                start_date = min(
-                    [d for d in [existing.start_date, tracker.start_date] if d],
-                    default=None,
-                )
-                end_date = max(
-                    [d for d in [existing.end_date, tracker.end_date] if d],
-                    default=None,
-                )
-                if start_date and start_date != existing.start_date:
-                    existing.start_date = start_date
-                    tracker_updates.add("start_date")
-                if end_date and end_date != existing.end_date:
-                    existing.end_date = end_date
-                    tracker_updates.add("end_date")
-
-                if existing.score is None and tracker.score is not None:
-                    existing.score = tracker.score
-                    tracker_updates.add("score")
-
-                if tracker_updates:
-                    existing.save(update_fields=list(tracker_updates))
+                fold_tracker_into(tracker, existing)
                 tracker.delete()
             else:
                 tracker.album = target_album

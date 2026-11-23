@@ -2,6 +2,7 @@ import logging
 from collections import defaultdict
 
 import requests
+from billiard.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
@@ -515,7 +516,9 @@ class SimklImporter:
                         },
                     )
 
-                if episodes[-1]["number"] == season_metadata["max_progress"]:
+                if episodes[-1]["number"] == helpers.season_last_episode_number(
+                    season_metadata,
+                ):
                     season_status = Status.COMPLETED.value
                 else:
                     season_status = tv_instance.status
@@ -665,6 +668,21 @@ class SimklImporter:
                 self.bulk_media[MediaTypes.MOVIE.value].append(movie_instance)
                 existing_movie_ids.add(tmdb_id)
 
+            except SoftTimeLimitExceeded:
+                # Rate-limited TMDB lookups can sleep long enough to trip the
+                # task's soft time limit. Stop here rather than losing every
+                # movie already staged - "new" mode skips them on re-run.
+                logger.warning(
+                    "Simkl movie import for %s hit the time limit at entry %s/%s",
+                    self.user.username,
+                    self._progress_current,
+                    self._progress_total,
+                )
+                self.warnings.append(
+                    "Import stopped partway through because it was taking too "
+                    "long. Run the import again to pick up the remaining movies.",
+                )
+                break
             except Exception as error:
                 msg = f"Error processing entry: {movie}"
                 raise MediaImportUnexpectedError(msg) from error
@@ -681,6 +699,21 @@ class SimklImporter:
             import_progress.report(self._progress_current, self._progress_total, "SIMKL")
             try:
                 self._process_single_anime_entry(anime, existing_anime_ids)
+            except SoftTimeLimitExceeded:
+                # Rate-limited MAL lookups can sleep long enough to trip the
+                # task's soft time limit. Stop here rather than losing every
+                # anime already staged - "new" mode skips them on re-run.
+                logger.warning(
+                    "Simkl anime import for %s hit the time limit at entry %s/%s",
+                    self.user.username,
+                    self._progress_current,
+                    self._progress_total,
+                )
+                self.warnings.append(
+                    "Import stopped partway through because it was taking too "
+                    "long. Run the import again to pick up the remaining anime.",
+                )
+                break
             except Exception as error:
                 msg = f"Error processing entry: {anime}"
                 raise MediaImportUnexpectedError(msg) from error

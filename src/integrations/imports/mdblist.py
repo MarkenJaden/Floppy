@@ -30,6 +30,8 @@ from integrations.imports.trakt import TraktMetadataResolverMixin
 
 logger = logging.getLogger(__name__)
 
+MODE_STAGES = {"watchlist": "watchlist", "update_collection": "collection"}
+
 MDBLIST_API_BASE_URL = "https://api.mdblist.com"
 PAGE_SIZE = 500
 
@@ -178,7 +180,10 @@ class MDBListImporter(TraktMetadataResolverMixin):
         """Initialize the importer with the API key, user and mode."""
         self.api_key = api_key
         self.user = user
-        self.mode = mode
+        # Watchlist only and Collection only run one stage; the watchlist stage
+        # then behaves like "new" so it never touches an existing entry.
+        self.stage = MODE_STAGES.get(mode)
+        self.mode = "new" if mode == "watchlist" else mode
         self.warnings = []
 
         # Track existing media to handle "new" mode correctly
@@ -244,11 +249,14 @@ class MDBListImporter(TraktMetadataResolverMixin):
 
     def import_data(self):
         """Import all user data from MDBList."""
-        self.process_dropped()
-        self.process_watched()
-        self.process_watchlist()
-        self.process_ratings()
-        self.process_collection()
+        if self.stage is None:
+            self.process_dropped()
+            self.process_watched()
+            self.process_watchlist()
+            self.process_ratings()
+            self.process_collection()
+        else:
+            getattr(self, f"process_{self.stage}")()
 
         helpers.cleanup_existing_media(self.to_delete, self.user)
         self.warnings.extend(helpers.bulk_create_media(self.bulk_media, self.user))
@@ -259,12 +267,14 @@ class MDBListImporter(TraktMetadataResolverMixin):
                 app.models.Season,
                 fields=["status"],
             )
+            helpers.note_bulk_rows(self.completed_seasons)
         if self.dropped_tvs:
             bulk_update_with_history(
                 self.dropped_tvs,
                 app.models.TV,
                 fields=["status"],
             )
+            helpers.note_bulk_rows(self.dropped_tvs)
 
         imported_counts = {
             media_type: len(media_list)
@@ -609,7 +619,7 @@ class MDBListImporter(TraktMetadataResolverMixin):
         )
         if not episode_exists:
             self.warnings.append(
-                f"{title} S{season_number}E{episode_number}: not found in "
+                f"{title} S{int(season_number):02d}E{int(episode_number):02d}: not found in "
                 f"{Sources.TMDB.label} with ID {tmdb_id}.",
             )
             return
@@ -649,7 +659,13 @@ class MDBListImporter(TraktMetadataResolverMixin):
                     item=season_item,
                     user=self.user,
                     related_tv=tv_obj,
-                    status=Status.IN_PROGRESS.value,
+                    # History for a new season of a show the user dropped or
+                    # paused is recorded without reopening the show.
+                    status=(
+                        tv_obj.status
+                        if tv_obj.status in app.models.USER_HELD_STATUSES
+                        else Status.IN_PROGRESS.value
+                    ),
                 )
                 if watched_at_dt is not None:
                     season_obj._history_date = watched_at_dt
@@ -861,7 +877,7 @@ class MDBListImporter(TraktMetadataResolverMixin):
                     self._entry_error_warning(entry, "rating")
 
     def _process_movie_rating(self, entry):
-        """Apply a movie rating, creating a COMPLETED movie if needed."""
+        """Apply a movie rating, storing the score without tracking the movie."""
         self._process_rated_media_item(
             entry,
             entry.get("movie") or {},
@@ -869,19 +885,20 @@ class MDBListImporter(TraktMetadataResolverMixin):
             app.models.Movie,
             {
                 "score": entry["rating"],
-                "status": Status.COMPLETED.value,
-                "progress": 1,
+                # A rating says nothing about whether the user watched it.
+                # Leave the row statusless so it stays out of the lists.
+                "status": None,
             },
         )
 
     def _process_show_rating(self, entry):
-        """Apply a show rating, creating a COMPLETED show if needed."""
+        """Apply a show rating, storing the score without tracking the show."""
         self._process_rated_media_item(
             entry,
             entry.get("show") or {},
             MediaTypes.TV.value,
             app.models.TV,
-            {"score": entry["rating"], "status": Status.COMPLETED.value},
+            {"score": entry["rating"], "status": None},
         )
 
     def _process_season_rating(self, entry):
@@ -930,7 +947,7 @@ class MDBListImporter(TraktMetadataResolverMixin):
             tmdb_id,
             tv_metadata,
             _parse_entry_datetime(entry, "rated_at"),
-            Status.IN_PROGRESS.value,
+            None,
         )
 
         season_item = self._get_or_create_item(
@@ -943,7 +960,9 @@ class MDBListImporter(TraktMetadataResolverMixin):
             item=season_item,
             user=self.user,
             related_tv=tv_obj,
-            status=Status.COMPLETED.value,
+            # A rating is not a watch: the season keeps no status, so it never
+            # triggers the completed-season episode backfill.
+            status=None,
             score=entry["rating"],
         )
         rated_at = _parse_entry_datetime(entry, "rated_at")
@@ -991,10 +1010,12 @@ class MDBListImporter(TraktMetadataResolverMixin):
                 item__episode_number=episode_number,
             )
             if episodes.exists():
-                episodes.exclude(score=scaled_score).update(
-                    score=scaled_score,
-                    scored_at=timezone.now(),
-                )
+                # A queryset update sends no save signal; publish these days.
+                changed = list(episodes.exclude(score=scaled_score))
+                app.models.Episode.objects.filter(
+                    pk__in=[episode.pk for episode in changed],
+                ).update(score=scaled_score, scored_at=timezone.now())
+                helpers.note_bulk_rows(changed)
                 return
 
         ep_key = f"{tmdb_id}:{season_number}:{episode_number}"

@@ -8,7 +8,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from app import checkin, live_playback
+from app import checkin, checkin_session, live_playback
 from app.models import (
     TV,
     Episode,
@@ -20,6 +20,39 @@ from app.models import (
     Sources,
     Status,
 )
+
+
+def running_checkin(user_id):
+    """Return the running movie or show check-in record, if any."""
+    for slot in checkin.SLOTS:
+        record = checkin._record(user_id, slot)
+        if record:
+            return record
+    return None
+
+
+def running_session(user_id):
+    """Return the running session record of any type, if any."""
+    for slot in checkin_session.MODELS:
+        record = checkin_session._record(user_id, slot)
+        if record:
+            return record
+    return None
+
+def peek_card(user_id):
+    """Return the stored card of the real playback, else the first check-in's."""
+    for slot in (None, *live_playback.CHECKIN_SLOTS):
+        state = live_playback.peek_user_playback_state(user_id, slot)
+        if state:
+            return state
+    return None
+
+
+def build_card(user):
+    """Return the first Home card, if any."""
+    cards = live_playback.build_home_playback_cards(user)
+    return cards[0] if cards else None
+
 
 RUNTIME_MINUTES = 100
 RUNTIME_SECONDS = RUNTIME_MINUTES * 60
@@ -69,14 +102,14 @@ class CheckInTests(TestCase):
             checkin.start(self.user, "movie", "603")
 
     def card(self):
-        return live_playback.peek_user_playback_state(self.user.id)
+        return peek_card(self.user.id)
 
     def phase(self, instance):
         return checkin.phase(self.user, instance)["phase"]
 
     def at(self, seconds_after_start):
         """Pretend the clock is this many seconds after the check-in began."""
-        record = cache.get(checkin._key(self.user.id))
+        record = running_checkin(self.user.id)
         return patch(
             "app.checkin._now_ts",
             return_value=record["started_at_ts"] + seconds_after_start,
@@ -97,6 +130,18 @@ class CheckInTests(TestCase):
         self.assertTrue(card["checkin_token"])
         self.assertIsNotNone(card["scrobble_expires_at_ts"])
         self.assertEqual(self.phase(planning), checkin.PHASE_ACTIVE)
+
+    def test_start_card_uses_the_backdrop_not_the_stored_poster(self):
+        self.movie(Status.PLANNING.value)
+
+        with patch(
+            "app.helpers.get_tmdb_backdrop_image",
+            return_value="http://example.com/heat-backdrop.jpg",
+        ):
+            self.start()
+
+        card = self.card()
+        self.assertEqual(card["image"], "http://example.com/heat-backdrop.jpg")
 
     def test_start_on_a_completed_movie_adds_a_rewatch_row(self):
         done = self.movie(Status.COMPLETED.value)
@@ -140,7 +185,7 @@ class CheckInTests(TestCase):
     def test_assumed_end_completes_the_movie_at_the_expected_time(self):
         planning = self.movie(Status.PLANNING.value)
         self.start()
-        record = cache.get(checkin._key(self.user.id))
+        record = running_checkin(self.user.id)
 
         with self.at(RUNTIME_SECONDS + 1):
             self.assertEqual(self.phase(planning), checkin.PHASE_IDLE)
@@ -152,7 +197,7 @@ class CheckInTests(TestCase):
             planning.end_date,
             datetime.fromtimestamp(record["end_ts"], tz=UTC).replace(second=0),
         )
-        self.assertIsNone(cache.get(checkin._key(self.user.id)))
+        self.assertIsNone(running_checkin(self.user.id))
         self.assertTrue(
             PlaybackProgress.objects.get(user=self.user, item=self.item).completed,
         )
@@ -166,7 +211,7 @@ class CheckInTests(TestCase):
 
         planning.refresh_from_db()
         self.assertEqual(planning.status, Status.IN_PROGRESS.value)
-        self.assertIsNotNone(cache.get(checkin._key(self.user.id)))
+        self.assertIsNotNone(running_checkin(self.user.id))
 
     def test_a_real_scrobble_takes_the_card_over(self):
         planning = self.movie(Status.PLANNING.value)
@@ -191,7 +236,7 @@ class CheckInTests(TestCase):
 
         planning.refresh_from_db()
         self.assertEqual(planning.status, Status.IN_PROGRESS.value)
-        self.assertIsNone(cache.get(checkin._key(self.user.id)))
+        self.assertIsNone(running_checkin(self.user.id))
         self.assertIsNotNone(self.card())
 
     def test_scrobbler_completes_the_check_in_row_instead_of_adding_one(self):
@@ -240,7 +285,7 @@ class CheckInTests(TestCase):
         self.assertEqual(self.phase(planning), checkin.PHASE_PAUSED)
 
         self.start()
-        record = cache.get(checkin._key(self.user.id))
+        record = running_checkin(self.user.id)
         self.assertEqual(record["offset"], 30 * 60)
         self.assertEqual(
             record["end_ts"] - record["started_at_ts"],
@@ -259,7 +304,7 @@ class CheckInTests(TestCase):
         self.assertEqual(planning.status, Status.COMPLETED.value)
         self.assertIsNotNone(planning.end_date)
         self.assertIsNone(self.card())
-        self.assertIsNone(cache.get(checkin._key(self.user.id)))
+        self.assertIsNone(running_checkin(self.user.id))
 
     def test_cancel_removes_the_row_the_check_in_added(self):
         done = self.movie(Status.COMPLETED.value)
@@ -339,12 +384,12 @@ class CheckInTests(TestCase):
             with no_provider_calls():
                 checkin.start(self.user, "movie", "604")
 
-        self.assertEqual(cache.get(checkin._key(self.user.id))["media_id"], "604")
+        self.assertEqual(running_checkin(self.user.id)["media_id"], "604")
         first.refresh_from_db()
         self.assertEqual(first.status, Status.IN_PROGRESS.value)
         self.assertEqual(self.phase(first), checkin.PHASE_PAUSED)
 
-    def test_checking_in_saves_a_running_game_session_first(self):
+    def test_checking_in_leaves_a_running_game_session_alone(self):
         from app import checkin_session
         from app.models import Game
 
@@ -363,7 +408,7 @@ class CheckInTests(TestCase):
             return_value={"max_progress": None},
         ):
             checkin_session.start(self.user, "igdb", "game", "1942")
-            record = cache.get(checkin_session._key(self.user.id))
+            record = running_session(self.user.id)
             with patch(
                 "app.checkin_session._now_ts",
                 return_value=record["started_at_ts"] + 30 * 60,
@@ -379,10 +424,10 @@ class CheckInTests(TestCase):
                 ):
                     checkin.start(self.user, "movie", "603")
 
-        self.assertIsNone(cache.get(checkin_session._key(self.user.id)))
-        game = Game.objects.get(id=record["row_id"])
-        self.assertEqual(game.progress, 30)
-        self.assertEqual(cache.get(checkin._key(self.user.id))["media_id"], "603")
+        # Different media types run side by side: the game keeps going.
+        self.assertEqual(running_session(self.user.id)["media_id"], "1942")
+        self.assertEqual(running_checkin(self.user.id)["media_id"], "603")
+        self.assertEqual(len(live_playback.build_home_playback_cards(self.user)), 2)
 
     def test_a_long_movie_keeps_its_record_until_the_end_can_settle(self):
         self.item.runtime_minutes = 600
@@ -394,7 +439,7 @@ class CheckInTests(TestCase):
         record_writes = [
             call
             for call in set_mock.call_args_list
-            if call.args[0] == checkin._key(self.user.id)
+            if call.args[0] == checkin._key(self.user.id, "movie")
         ]
         self.assertGreater(record_writes[-1].kwargs["timeout"], 600 * 60)
 
@@ -411,13 +456,26 @@ class CheckInTests(TestCase):
         self.item.save()
         planning = self.movie(Status.PLANNING.value)
         self.start()
-        record = cache.get(checkin._key(self.user.id))
+        record = running_checkin(self.user.id)
         self.assertIsNone(record["end_ts"])
 
         with self.at(24 * 60 * 60):
             self.assertEqual(self.phase(planning), checkin.PHASE_FINISHABLE)
         planning.refresh_from_db()
         self.assertEqual(planning.status, Status.IN_PROGRESS.value)
+
+    def test_an_unknown_runtime_marker_is_not_a_duration(self):
+        for marker in (999998, 999999):
+            with self.subTest(marker=marker):
+                cache.clear()
+                self.item.runtime_minutes = marker
+                self.item.save()
+                self.start()
+
+                record = running_checkin(self.user.id)
+                self.assertIsNone(record["duration"])
+                self.assertIsNone(record["end_ts"])
+                self.assertFalse(self.card()["duration_seconds"])
 
     def test_other_sources_cannot_be_checked_in(self):
         self.assertFalse(checkin.supports(MediaTypes.MOVIE.value, Sources.MANUAL.value))
@@ -491,10 +549,10 @@ class CheckInShowTests(TestCase):
         checkin.start(self.user, "tv", "1668")
 
     def card(self):
-        return live_playback.peek_user_playback_state(self.user.id)
+        return peek_card(self.user.id)
 
     def at(self, seconds_after_start):
-        record = cache.get(checkin._key(self.user.id))
+        record = running_checkin(self.user.id)
         return patch(
             "app.checkin._now_ts",
             return_value=record["started_at_ts"] + seconds_after_start,
@@ -539,9 +597,22 @@ class CheckInShowTests(TestCase):
         self.assertEqual(info["phase"], checkin.PHASE_ACTIVE)
         self.assertEqual(info["code"], "S02E02")
 
+    def test_an_unknown_episode_runtime_is_not_a_duration(self):
+        self.episodes[1].runtime_minutes = 999998
+        self.episodes[1].save()
+
+        self.start()
+
+        record = running_checkin(self.user.id)
+        self.assertIsNone(record["duration"])
+        self.assertIsNone(record["end_ts"])
+        card = self.card()
+        self.assertFalse(card["duration_seconds"])
+        self.assertEqual(card["episode_number"], 1)
+
     def test_assumed_end_completes_the_episode(self):
         self.start()
-        record = cache.get(checkin._key(self.user.id))
+        record = running_checkin(self.user.id)
 
         with self.at(20 * 60 + 1):
             info = checkin.phase(self.user, self.show)
@@ -571,7 +642,7 @@ class CheckInShowTests(TestCase):
         self.start()
 
         self.assertEqual(self.open_plays().count(), 1)
-        record = cache.get(checkin._key(self.user.id))
+        record = running_checkin(self.user.id)
         self.assertEqual(record["offset"], 5 * 60)
 
     def test_finish_completes_now(self):
@@ -623,6 +694,31 @@ class CheckInShowTests(TestCase):
         self.show.refresh_from_db()
         self.assertEqual(self.season.status, Status.PAUSED.value)
         self.assertEqual(self.show.status, Status.PAUSED.value)
+
+    @patch("app.models.Episode._local_season_max_progress", return_value=3)
+    def test_cancel_clears_views_after_putting_the_show_back(self, _max_progress):
+        """The status restore skips signals, so it clears the views itself."""
+        from app.tests.test_view_cache_invalidation import ALL, cleared, seed
+
+        self.watched(1)
+        self.start()
+        original_restore = checkin._restore_parents
+
+        def restore_after_a_reader_cached(*args, **kwargs):
+            # A page read between the play's delete and the status restore.
+            seed(self.user.id)
+            return original_restore(*args, **kwargs)
+
+        with (
+            patch(
+                "app.checkin._restore_parents",
+                side_effect=restore_after_a_reader_cached,
+            ),
+            self.captureOnCommitCallbacks(execute=False),
+        ):
+            checkin.cancel(self.user, "tv", "1668")
+
+        self.assertEqual(cleared(self.user.id), ALL)
 
     def test_cancel_keeps_a_play_that_was_already_open(self):
         Episode.objects.create(
@@ -725,18 +821,105 @@ class CheckInViewTests(TestCase):
         )
         self.client.login(username="checkin-view", password="12345")
 
-    def test_start_then_pause_refreshes_the_page(self):
+    def test_start_then_pause_updates_tracking_without_reloading(self):
         with no_provider_calls():
             started = self.client.post(self.url, {"action": "start"})
         paused = self.client.post(self.url, {"action": "pause"})
 
         for response in (started, paused):
-            self.assertEqual(response.status_code, 204)
-            self.assertEqual(response["HX-Refresh"], "true")
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn("HX-Refresh", response)
+            self.assertContains(response, 'hx-swap-oob="outerHTML"')
+            self.assertNotContains(response, "detail-carousel-wrap")
         self.assertEqual(
             Movie.objects.get(item=self.item).status,
             Status.IN_PROGRESS.value,
         )
+
+    def test_timed_refresh_updates_phase_without_starting_another_watch(self):
+        with no_provider_calls():
+            self.client.post(self.url, {"action": "start"})
+        count = Movie.objects.filter(user=self.user).count()
+        record = running_checkin(self.user.id)
+        with patch("app.checkin._now_ts", return_value=record["started_at_ts"] + int(RUNTIME_SECONDS * 0.95)):
+            response = self.client.post(self.url, {"action": "refresh"})
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("HX-Refresh", response)
+        self.assertContains(response, ">Finish</span>")
+        self.assertContains(response, "checkin-refresh")
+        self.assertNotContains(response, "location.reload()")
+        self.assertEqual(Movie.objects.filter(user=self.user).count(), count)
+
+    def test_refresh_requires_a_tracker_owned_by_the_viewer(self):
+        Movie.objects.filter(user=self.user).delete()
+        other = get_user_model().objects.create_user(username="other-checkin")
+        Movie.objects.create(item=self.item, user=other, status=Status.PLANNING.value)
+        self.assertEqual(self.client.post(self.url, {"action": "refresh"}).status_code, 400)
+
+    def test_now_playing_stop_keeps_position_and_removes_the_card(self):
+        with no_provider_calls():
+            self.client.post(self.url, {"action": "start"})
+        record = running_checkin(self.user.id)
+        card = build_card(self.user)
+        self.assertEqual(card["checkin_control"]["action"], "pause")
+        fragment = self.client.get(reverse("active_playback_fragment"))
+        self.assertContains(fragment, "Stop check-in")
+        with patch("app.checkin._now_ts", return_value=record["started_at_ts"] + 300):
+            response = self.client.post(self.url, {
+                "action": "pause", "from_now_playing": "1", "checkin_token": record["token"],
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"")
+        self.assertNotIn("HX-Refresh", response)
+        self.assertIsNone(build_card(self.user))
+        self.assertEqual(PlaybackProgress.objects.get(user=self.user, item=self.item).position_seconds, 300)
+        self.assertEqual(Movie.objects.get(user=self.user, item=self.item).status, Status.IN_PROGRESS.value)
+
+    def test_now_playing_cancel_restores_the_movie(self):
+        with no_provider_calls():
+            self.client.post(self.url, {"action": "start"})
+        record = running_checkin(self.user.id)
+        response = self.client.post(self.url, {
+            "action": "cancel", "from_now_playing": "1", "checkin_token": record["token"],
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"")
+        self.assertEqual(Movie.objects.get(user=self.user, item=self.item).status, Status.PLANNING.value)
+        self.assertIsNone(build_card(self.user))
+
+    def test_stale_card_cannot_stop_a_new_checkin(self):
+        with no_provider_calls():
+            self.client.post(self.url, {"action": "start"})
+        token = running_checkin(self.user.id)["token"]
+        response = self.client.post(self.url, {
+            "action": "pause", "from_now_playing": "1", "checkin_token": "stale-token",
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(running_checkin(self.user.id)["token"], token)
+
+    def test_card_taken_over_by_a_scrobbler_has_no_manual_controls(self):
+        with no_provider_calls():
+            self.client.post(self.url, {"action": "start"})
+        token = peek_card(self.user.id)["checkin_token"]
+        live_playback.apply_playback_event(
+            user_id=self.user.id,
+            event_type="media.play",
+            playback_media_type=MediaTypes.MOVIE.value,
+            media_id="603",
+            source=Sources.TMDB.value,
+            title="Heat",
+            image="https://example.com/heat.jpg",
+            view_offset_seconds=10,
+            duration_seconds=RUNTIME_SECONDS,
+        )
+        cards = live_playback.build_home_playback_cards(self.user)
+        self.assertEqual(len(cards), 1)
+        self.assertIsNone(cards[0]["checkin_control"])
+        response = self.client.post(self.url, {
+            "action": "pause", "from_now_playing": "1", "checkin_token": token,
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIsNotNone(peek_card(self.user.id))
 
     def test_unknown_action_is_rejected(self):
         self.assertEqual(

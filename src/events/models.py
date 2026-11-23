@@ -5,9 +5,8 @@ from django.conf import settings
 from django.db import models
 from django.db.models import (
     Case,
-    Exists,
     IntegerField,
-    OuterRef,
+    Min,
     Q,
     UniqueConstraint,
     Value,
@@ -16,7 +15,7 @@ from django.db.models import (
 from django.utils import timezone
 
 from app import config
-from app.models import TV, Item, MediaTypes, Season, Sources, Status
+from app.models import TV, Anime, Item, MediaTypes, Season, Sources, Status
 from app.services.item_merge import dedupe_cross_provider_items
 from integrations.anime_mapping import resolve_provider_series_id
 
@@ -48,6 +47,10 @@ class ReleaseTypes(models.TextChoices):
     PHYSICAL = "physical", "Physical"
 
 
+# Any release date before this year is a placeholder, not a real release.
+MIN_VALID_RELEASE_DATETIME = datetime(1900, 1, 1, tzinfo=UTC)
+
+
 class SentinelDatetime:
     """Sentinel time for event without a specific time."""
 
@@ -58,6 +61,60 @@ class SentinelDatetime:
     MINUTE = 59
     SECOND = 59
     MICROSECOND = 999999
+
+
+def _unknown_time_q(field_name):
+    """Match a datetime carrying the date-only sentinel time.
+
+    DateTimeField extracts its parts in the active timezone, so the sentinel's
+    11:59:59 UTC hour is not stable: it becomes 12:59 or 13:59 in Europe.
+    Minute and second survive a timezone shift, and provider air times sit on
+    minute boundaries, so matching :59:59 identifies the sentinel portably.
+    """
+    return Q(
+        **{
+            f"{field_name}__minute": SentinelDatetime.MINUTE,
+            f"{field_name}__second": SentinelDatetime.SECOND,
+        },
+    )
+
+
+def released_q(field_name, now=None):
+    """Return a Q matching datetimes whose release moment has passed.
+
+    A provider that knows only the release date stores the sentinel time. That
+    value is an all-day date, not an instant: it counts as released once the
+    date has ended in the active timezone. Comparing it directly with ``now``
+    made an episode released at the sentinel's midday time on its listed date,
+    which is the day before it airs for users east of UTC (#1588).
+
+    The lower bound keeps year-1 unknown-date sentinels out of the query before
+    its timezone-aware lookups run. SQLite's datetime extract/cast functions
+    underflow datetime.MINYEAR when converting year 1 into a zone west of UTC,
+    which surfaced as ``DataError: string or blob too big`` (#1717).
+    """
+    now = now or timezone.now()
+    return (
+        Q(**{f"{field_name}__gte": MIN_VALID_RELEASE_DATETIME})
+        & Q(**{f"{field_name}__lte": now})
+        & ~(
+            _unknown_time_q(field_name)
+            & Q(**{f"{field_name}__date__gte": timezone.localdate(now)})
+        )
+    )
+
+
+def is_released_datetime(value, now=None):
+    """Return whether a stored release datetime has passed."""
+    if value is None:
+        return False
+    now = now or timezone.now()
+    if (
+        value.minute == SentinelDatetime.MINUTE
+        and value.second == SentinelDatetime.SECOND
+    ):
+        return timezone.localtime(value).date() < timezone.localdate(now)
+    return value <= now
 
 
 # Columns dedupe_cross_provider_items reads; every other Item column is skipped.
@@ -151,10 +208,13 @@ class EventManager(models.Manager):
         """
         return list(
             Item.objects.filter(
-                tv__user=user,
+                # Select from the user's own TV rows: excluding through the
+                # reverse relation would also match other accounts' trackers.
+                id__in=TV.objects.filter(user=user)
+                .exclude(status__in=INACTIVE_TRACKING_STATUSES)
+                .values("item_id"),
                 media_type=MediaTypes.TV.value,
             )
-            .exclude(tv__status__in=INACTIVE_TRACKING_STATUSES)
             .only(*_DEDUPE_ITEM_FIELDS),
         )
 
@@ -275,8 +335,13 @@ class EventManager(models.Manager):
             Item.objects.filter(
                 media_type=MediaTypes.ANIME.value,
                 source=Sources.MAL.value,
-                anime__user=user,
-            ).exclude(anime__status__in=INACTIVE_TRACKING_STATUSES),
+                # Select from the user's own rows; excluding through the reverse
+                # relation would also match other accounts' paused trackers.
+                id__in=Anime.objects.filter(user=user)
+                .exclude(status__in=INACTIVE_TRACKING_STATUSES)
+                .values("item_id"),
+            )
+            .only(*_DEDUPE_ITEM_FIELDS, "title"),
         )
         if not active_anime_items:
             return set()
@@ -327,26 +392,46 @@ class EventManager(models.Manager):
         if not active_tv_shows:
             return Q()
 
-        # A dropped/paused season hides itself and every later season of the
-        # same show. Checking "does an inactive season at or before this
-        # season's number exist" via a correlated Exists avoids compiling one
-        # OR clause per active show with a dropped season.
-        dropped_season_exists = Exists(
+        season_query = Q(
+            item__media_type=MediaTypes.SEASON.value,
+            item__media_id__in=active_tv_shows,
+        )
+        hidden_season_ids = self._dropped_season_item_ids(user, active_tv_shows)
+        if hidden_season_ids:
+            season_query &= ~Q(item_id__in=hidden_season_ids)
+        return season_query
+
+    def _dropped_season_item_ids(self, user, show_media_ids):
+        """Return Season `Item` ids hidden by a dropped or paused season.
+
+        A dropped/paused season hides itself and every later season of the
+        same show. This used to be a correlated EXISTS in the calendar query,
+        which SQLite ran once per event in the month, each time walking every
+        season the user tracks: at 10k items that was 2 of the page's 3.4
+        seconds (SURFACE-16). Two small queries up front give the same rows.
+        """
+        first_hidden_number = dict(
             Season.objects.filter(
                 user=user,
-                item__media_id=OuterRef("item__media_id"),
                 status__in=INACTIVE_TRACKING_STATUSES,
-                item__season_number__lte=OuterRef("item__season_number"),
-            ),
-        )
-
-        return (
-            Q(
-                item__media_type=MediaTypes.SEASON.value,
-                item__media_id__in=active_tv_shows,
+                item__media_id__in=show_media_ids,
+                item__season_number__isnull=False,
             )
-            & ~Q(dropped_season_exists)
+            .values("item__media_id")
+            .annotate(first_number=Min("item__season_number"))
+            .values_list("item__media_id", "first_number"),
         )
+        if not first_hidden_number:
+            return []
+        return [
+            item_id
+            for item_id, media_id, season_number in Item.objects.filter(
+                media_type=MediaTypes.SEASON.value,
+                media_id__in=first_hidden_number,
+                season_number__isnull=False,
+            ).values_list("id", "media_id", "season_number")
+            if season_number >= first_hidden_number[media_id]
+        ]
 
     def sort_with_sentinel_last(self, queryset):
         """Sort events with sentinel time last."""
@@ -409,6 +494,11 @@ class Event(models.Model):
         """Meta class for Event model."""
 
         ordering = ["-datetime"]
+        # The calendar filters one month out of every event ever stored.
+        # Without this index SQLite scans the whole table (SCAN events_event).
+        indexes = [
+            models.Index(fields=["datetime"], name="events_event_datetime_idx"),
+        ]
         constraints = [
             UniqueConstraint(
                 fields=["item", "content_number"],
@@ -425,6 +515,9 @@ class Event(models.Model):
         """Return event title."""
         if self.release_type:
             return f"{self.item} ({self.get_release_type_display()} release)"
+
+        if self.content_number is not None and self.item.media_type == MediaTypes.SEASON.value and self.item.season_number is not None:
+            return f"{self.item.title} {self.season_episode_label}"
 
         if self.content_number:
             return (
@@ -444,6 +537,18 @@ class Event(models.Model):
         return (
             f"{config.get_unit(self.item.media_type, short=True)}{self.content_number}"
         )
+
+    @property
+    def season_episode_label(self):
+        """Return "S02E05" for a season's episode, else the plain episode number."""
+        item = self.item
+        if (
+            item.media_type == "season"
+            and item.season_number is not None
+            and self.content_number is not None
+        ):
+            return f"S{item.season_number:02d}E{self.content_number:02d}"
+        return self.readable_content_number
 
     @property
     def is_sentinel_time(self):

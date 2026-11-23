@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
-from dataclasses import dataclass, replace
+import hashlib
+import json
+import re
+from dataclasses import dataclass, fields, replace
 
 from django.apps import apps
 from django.core.cache import cache
 from django.utils import timezone
 
 from app import helpers
+from app.library_query.alphabet import normalize_initial
 from app.models import (
     BasicMedia,
     CollectionEntry,
@@ -52,6 +57,7 @@ MEDIA_LIST_SORTS = {
     "id",
     "ended",
     "started",
+    "last_watched",
 }
 MEDIA_LIST_SORT_DEFAULTS_ASC = {
     "author",
@@ -82,6 +88,11 @@ MEDIA_LIST_LANGUAGE_TYPES = {
 }
 
 
+def _not_in_cache_token(default):
+    """Declare a field that ``MediaListFilters.cache_token`` leaves out."""
+    return dataclasses.field(default=default, metadata={"cache_token": False})
+
+
 class MediaListFilterError(ValueError):
     """Raised when an API media-list query parameter is invalid."""
 
@@ -89,6 +100,7 @@ class MediaListFilterError(ValueError):
         """Store the invalid query parameter alongside the message."""
         super().__init__(message)
         self.parameter = parameter
+        self.message = message
 
 
 @dataclass(frozen=True)
@@ -98,6 +110,11 @@ class MediaListFilters:
     statuses: tuple[str, ...] = ()
     include_no_status: bool = False
     search: str = ""
+    # View state (the A to Z rail): parsed from the query, never saved as a smart rule.
+    initial: str = ""
+    separate_entries: bool = False
+    group_by: str = "item"
+    group: str = ""
     rating: str = "all"
     rating_min: str = ""
     rating_max: str = ""
@@ -108,19 +125,21 @@ class MediaListFilters:
     year: str = ""
     # Each date range is resolved to from/to; ``*_within`` keeps a relative
     # window ("last 7 days") as asked, so a page can show the choice again.
+    # The window is display only: the dates it resolved to are what filter,
+    # so it stays out of ``cache_token``.
     completed_date_from: str = ""
     completed_date_to: str = ""
-    completed_date_within: str = ""
-    completed_date_within_unit: str = "days"
+    completed_date_within: str = _not_in_cache_token("")
+    completed_date_within_unit: str = _not_in_cache_token("days")
     release: str = "all"
     release_date_from: str = ""
     release_date_to: str = ""
-    release_date_within: str = ""
-    release_date_within_unit: str = "days"
+    release_date_within: str = _not_in_cache_token("")
+    release_date_within_unit: str = _not_in_cache_token("days")
     date_added_from: str = ""
     date_added_to: str = ""
-    date_added_within: str = ""
-    date_added_within_unit: str = "days"
+    date_added_within: str = _not_in_cache_token("")
+    date_added_within_unit: str = _not_in_cache_token("days")
     source: str = ""
     media_status: str = ""
     language: str = ""
@@ -135,10 +154,38 @@ class MediaListFilters:
     pinned_providers: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
     tag_mode: str = "or"
+    # API-only: ISO 8601 moment (as isoformat); keep entries changed at or after it.
+    updated_since: str = ""
     sort: str = ""
     direction: str = ""
     exclude: tuple[str, ...] = ()
     media_type: str | None = None
+
+    def cache_token(self, *, exclude: frozenset[str] = frozenset()) -> str:
+        """Return a short, stable digest of everything that filters the list.
+
+        Two filter objects that select the same entries get the same token.
+        Multi-value fields are compared as sets of values, so their order
+        does not matter. A new field is included automatically; declare it
+        with ``_not_in_cache_token`` only when it cannot change the result.
+        ``exclude`` names fields a particular cache deliberately ignores.
+
+        The digest is computed from JSON, not ``hash()``, so it is the same in
+        every process and across restarts.
+        """
+        names = {item.name for item in fields(self)}
+        unknown = set(exclude) - names
+        if unknown:
+            message = f"Unknown MediaListFilters fields: {sorted(unknown)}"
+            raise ValueError(message)
+        values = {}
+        for item in fields(self):
+            if item.name in exclude or not item.metadata.get("cache_token", True):
+                continue
+            value = getattr(self, item.name)
+            values[item.name] = sorted(value) if isinstance(value, tuple) else value
+        payload = json.dumps(values, sort_keys=True, separators=(",", ":"))
+        return hashlib.blake2b(payload.encode(), digest_size=12).hexdigest()
 
     def menu_state(self) -> dict:
         """Return the filter menu's state in the smart-rule vocabulary.
@@ -260,6 +307,30 @@ class _Params:
         return fallback
 
 
+_OFFSET_SPACE = re.compile(r"(?<=\d) (?=\d{2}:?\d{2}$)")
+
+
+def parse_since(params: _Params, name: str) -> str:
+    """Read query parameter ``name`` as an aware datetime, returned as isoformat.
+
+    An unescaped ``+`` in a query string arrives as a space, so a UTC offset
+    written ``+01:00`` is restored before parsing.
+    """
+    raw = params.text(name)
+    if not raw:
+        return ""
+    try:
+        return helpers.parse_completion_datetime(
+            _OFFSET_SPACE.sub("+", raw),
+        ).isoformat()
+    except (ValueError, TypeError):
+        return params.invalid(
+            name,
+            f"{name} must be an ISO 8601 date or datetime",
+            "",
+        )
+
+
 def _parse_status_values(params: _Params) -> tuple[tuple[str, ...], bool]:
     statuses = []
     include_no_status = False
@@ -304,7 +375,7 @@ def _parse_choice(params: _Params, name: str, allowed: set[str], default: str) -
     return value
 
 
-def _parse_date(params: _Params, name: str) -> str:
+def _date_param(params: _Params, name: str) -> str:
     raw = params.text(name)
     if raw and not normalize_completed_date_filter(raw):
         return params.invalid(name, f"{name} must be a YYYY-MM-DD date", "")
@@ -337,8 +408,8 @@ def _parse_date_ranges(params: _Params) -> dict[str, str]:
 
     ranges = {}
     for field in RELATIVE_DATE_FIELDS:
-        ranges[f"{field}_from"] = _parse_date(params, f"{field}_from")
-        ranges[f"{field}_to"] = _parse_date(params, f"{field}_to")
+        ranges[f"{field}_from"] = _date_param(params, f"{field}_from")
+        ranges[f"{field}_to"] = _date_param(params, f"{field}_to")
         amount = params.text(f"{field}_within")
         ranges[f"{field}_within"] = _normalize_relative_amount(amount)
         if amount and not ranges[f"{field}_within"]:
@@ -410,6 +481,10 @@ def parse_media_list_filters(request, *, strict: bool = True) -> MediaListFilter
         statuses=statuses,
         include_no_status=include_no_status,
         search=params.text("search"),
+        initial=normalize_initial(params.text("initial")),
+        separate_entries=_parse_choice(params, "separate_entries", {"0", "1"}, "0") == "1",
+        group_by=_parse_choice(params, "group_by", {"item", "series", "franchise"}, "item"),
+        group=params.text("group"),
         rating=_parse_choice(params, "rating", {"all", "rated", "not_rated"}, "all"),
         rating_min=_parse_rating_bound(params, "rating_min"),
         rating_max=_parse_rating_bound(params, "rating_max"),
@@ -463,6 +538,7 @@ def parse_media_list_filters(request, *, strict: bool = True) -> MediaListFilter
         sort=sort,
         direction=direction,
         exclude=params.values("exclude"),
+        updated_since=parse_since(params, "updated_since"),
     )
 
 
@@ -759,11 +835,12 @@ def _next_episode_for_media(media):
                         "season_number": season_number,
                         "episode_number": episode_number,
                         "air_date": _episode_air_date(season, episode_number),
+                        "is_rewatch": season.is_rewatching,
                     },
                     item,
                     media,
                 )
-        from events.models import Event
+        from events.models import Event, released_q
 
         untracked_events = (
             Event.objects.filter(
@@ -771,8 +848,8 @@ def _next_episode_for_media(media):
                 item__media_id=item.media_id,
                 item__source=item.source,
                 content_number__isnull=False,
-                datetime__lte=timezone.now(),
             )
+            .filter(released_q("datetime", timezone.now()))
             .exclude(item__season_number=0)
             .exclude(item__season_number__in=excluded_season_numbers)
             .order_by("item__season_number", "content_number", "datetime")
@@ -784,6 +861,7 @@ def _next_episode_for_media(media):
                     "season_number": event.item.season_number,
                     "episode_number": event.content_number,
                     "air_date": event.datetime,
+                    "is_rewatch": False,
                 },
                 item,
                 media,
@@ -798,20 +876,21 @@ def _next_episode_for_media(media):
                 "season_number": getattr(item, "season_number", None),
                 "episode_number": episode_number,
                 "air_date": _episode_air_date(media, episode_number),
+                "is_rewatch": media.is_rewatching,
             },
             item,
             media,
         )
     if media_type == MediaTypes.ANIME.value:
-        from events.models import Event
+        from events.models import Event, released_q
 
         progress = int(getattr(media, "progress", 0) or 0)
         event = (
             Event.objects.filter(
                 item=item,
                 content_number__gt=progress,
-                datetime__lte=timezone.now(),
             )
+            .filter(released_q("datetime", timezone.now()))
             .exclude(datetime__year__lt=1900)
             .order_by("content_number", "datetime")
             .first()
@@ -822,6 +901,7 @@ def _next_episode_for_media(media):
                     "season_number": None,
                     "episode_number": event.content_number,
                     "air_date": event.datetime,
+                    "is_rewatch": False,
                 },
                 item,
                 media,
@@ -857,7 +937,7 @@ def _sort_value(entry, sort, next_episode):
     if sort in {"release_date", "release_datetime"}:
         return getattr(item, "release_datetime", None)
     if sort in {"date_added", "added", "created_at"}:
-        return getattr(media, "created_at", None)
+        return getattr(media, "aggregated_created_at", None) or getattr(media, "created_at", None)
     if sort in {"start_date", "started"}:
         return getattr(media, "aggregated_start_date", None) or getattr(
             media, "start_date", None
@@ -865,6 +945,12 @@ def _sort_value(entry, sort, next_episode):
     if sort in {"end_date", "ended"}:
         return getattr(media, "aggregated_end_date", None) or getattr(
             media, "end_date", None
+        )
+    if sort == "last_watched":
+        return (
+            getattr(media, "aggregated_last_watched", None)
+            or getattr(media, "end_date", None)
+            or helpers.progress_activity(media)
         )
     if sort in {"updated", "progressed_at"}:
         return getattr(media, "progressed_at", None)
@@ -900,6 +986,24 @@ def media_list_media_types(filters: MediaListFilters, media_type) -> tuple[str, 
     )
 
 
+def attach_card_collection_platforms(user, items):
+    """Attach the owner's collected platforms to a bounded set of game items."""
+    from app.models import CollectionEntry
+
+    games = [item for item in items if item.media_type == MediaTypes.GAME.value and item.pk]
+    if not games:
+        return
+    platforms = {}
+    for item_id, value in CollectionEntry.objects.filter(
+        user=user, item_id__in=[item.pk for item in games]
+    ).values_list("item_id", "resolution"):
+        platform = value.strip()
+        if platform:
+            platforms.setdefault(item_id, set()).add(platform)
+    for item in games:
+        item.card_collection_platforms = sorted(platforms.get(item.pk, ()), key=str.lower)
+
+
 def media_list_entries_for_items(user, items) -> list[MediaListEntry]:
     """Attach each item's tracker row for a page of items.
 
@@ -927,13 +1031,15 @@ def media_list_entries_for_items(user, items) -> list[MediaListEntry]:
             owner = {"user": user}
             related = ("item",)
         rows = model.objects.filter(item_id__in=item_ids, **owner).select_related(*related)
-        rows = list(BasicMedia.objects._apply_prefetch_related(rows, media_type, list_mode=True, compact_episodes=True))
+        rows = rows.defer(*(f"{relation}__watch_providers" for relation in related if relation.endswith("item")))
+        rows = list(BasicMedia.objects._apply_prefetch_related(rows, media_type, list_mode=True, compact_episodes=True, light_rows=True))
         if media_type != MediaTypes.EPISODE.value:
             BasicMedia.objects._aggregate_duplicate_data(rows, user, media_type)
         for media in sorted(rows, key=lambda row: (row.created_at, row.pk)):
             media_by_item_id[media.item_id] = media
     # A tracked entry keeps its row's own item: the prefetches (events, tags)
-    # hang off that instance.
+    # hang off that instance. Generic/API hydration must not query CollectionEntry
+    # for card decoration; HTML surfaces attach platforms from page context (#1004).
     return [
         MediaListEntry(
             item=media.item if media is not None else item,
@@ -962,6 +1068,14 @@ def get_media_list_entries(user, media_type, filters: MediaListFilters, *, limit
     query = from_media_list_filters(filters, media_list_media_types(filters, media_type))
     executor = LibraryQueryExecutor(user, query)
     offset = offset or 0
+    if filters.separate_entries:
+        from app.media_list_entry_grouping import preference_field
+
+        if not preference_field(media_type):
+            parameter = "separate_entries"
+            message = "This media type does not support separate entries"
+            raise MediaListFilterError(parameter, message)
+        return executor.entry_page(offset, limit)
     if limit is None:
         total = executor.count()
         page = executor.page(offset, max(total - offset, 0), total=total)

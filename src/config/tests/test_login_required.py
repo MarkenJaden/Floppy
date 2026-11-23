@@ -19,6 +19,10 @@ from lists.models import CustomList, CustomListItem
 class LoginRequiredConfigurationTests(TestCase):
     """Test suite for global authentication settings and route policies."""
 
+    def test_pages_do_not_send_referrers_to_external_resources(self):
+        response = self.client.get(reverse("account_login"))
+        self.assertEqual(response.headers["Referrer-Policy"], "same-origin")
+
     def setUp(self):
         self.user = get_user_model().objects.create_user(
             username="auth-test-user",

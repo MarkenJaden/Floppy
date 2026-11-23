@@ -1,4 +1,5 @@
 import calendar
+import re
 from datetime import UTC, date, timedelta
 from unittest.mock import patch
 
@@ -10,9 +11,13 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from app import backdrops
 from app import models as app_models
 from app.models import TV, Anime, Item, MediaTypes, Movie, Season, Sources, Status
 from events.models import Event, SentinelDatetime
+
+PAST_MONTH = date(2025, 4, 1)
+PAST_MONTH_QUERY = {"month": PAST_MONTH.month, "year": PAST_MONTH.year}
 
 
 class CalendarViewTests(TestCase):
@@ -23,6 +28,7 @@ class CalendarViewTests(TestCase):
         self.credentials = {"username": "testuser", "password": "testpassword"}
         self.user = get_user_model().objects.create_user(**self.credentials)
         self.client.login(**self.credentials)
+        self.backdrop_warm = self.enterContext(patch("events.views.backdrops.schedule_backdrop_warm"))
 
     @patch("events.models.Event.objects.get_user_events")
     @patch.object(get_user_model(), "update_preference")
@@ -112,27 +118,29 @@ class CalendarViewTests(TestCase):
 
     @patch("events.models.Event.objects.get_user_events")
     @patch.object(get_user_model(), "update_preference")
-    def test_calendar_with_view_param(
+    def test_calendar_view_param_keeps_grid_fallback(
         self,
         mock_update_preference,
         mock_get_user_events,
     ):
-        """Test the calendar view with view parameter."""
+        """The stored legacy list preference must not render the old list surface."""
         # Set up mocks
         mock_update_preference.return_value = "list"
         mock_get_user_events.return_value = []
 
-        # Make the request with view parameter
+        # Make the request with the legacy view parameter
         response = self.client.get(reverse("calendar") + "?view=list")
 
         # Check response
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "events/calendar.html")
+        self.assertContains(response, 'data-calendar-view="grid"')
+        self.assertNotContains(response, 'data-calendar-view="list"')
 
         # Check that the view called the mocked methods
         mock_update_preference.assert_called_once_with("calendar_layout", "list")
 
-        # Check context data
+        # The preference is still stored even though the page renders the shared grid.
         self.assertEqual(response.context["view_type"], "list")
 
     @patch("events.models.Event.objects.get_user_events")
@@ -273,6 +281,212 @@ class CalendarViewTests(TestCase):
 
     @patch("events.models.Event.objects.get_user_events")
     @patch.object(get_user_model(), "update_preference")
+    def test_day_details_show_episode_and_available_time(
+        self, mock_update_preference, mock_get_user_events
+    ):
+        """Day details show episode identity, times, and an untimed fallback."""
+        mock_update_preference.return_value = "grid"
+        # A past month: its selected day is the first one with releases,
+        # not today, whose agenda panel is the only one pre-painted.
+        today = PAST_MONTH
+        timed = timezone.make_aware(timezone.datetime(today.year, today.month, 15, 12))
+        untimed = timed.replace(
+            hour=SentinelDatetime.HOUR,
+            minute=SentinelDatetime.MINUTE,
+            second=SentinelDatetime.SECOND,
+            microsecond=SentinelDatetime.MICROSECOND,
+        )
+        season = Item(id=1, media_id="1", source=Sources.MANUAL.value,
+                      media_type=MediaTypes.SEASON.value, title="Test Season", season_number=1)
+        podcast = Item(id=2, media_id="2", source=Sources.MANUAL.value,
+                       media_type=MediaTypes.PODCAST.value, title="Test Podcast")
+        movie = Item(id=3, media_id="3", source=Sources.MANUAL.value,
+                     media_type=MediaTypes.MOVIE.value, title="Test Movie")
+        mock_get_user_events.return_value = [
+            Event(item=season, content_number=2, datetime=timed),
+            Event(item=podcast, datetime=timed),
+            Event(item=movie, datetime=untimed),
+        ]
+
+        response = self.client.get(reverse("calendar"), PAST_MONTH_QUERY)
+        subtitles = re.findall(r"data-agenda-subtitle>\s*(.*?)\s*</div>", response.content.decode())
+        self.assertEqual(len(subtitles), 3)
+        self.assertRegex(subtitles[0], r"^S01E02\s+at ")
+        self.assertRegex(subtitles[1], r"^at ")
+        self.assertEqual(subtitles[2], "Time unknown")
+
+    @patch("events.models.Event.objects.get_user_events")
+    @patch.object(get_user_model(), "update_preference")
+    def test_day_details_use_parent_show_title_for_season_events(
+        self, mock_preference, mock_events
+    ):
+        """Untracked seasons use the viewer's show title and retain a safe fallback."""
+        mock_preference.return_value = "grid"
+        show_item = Item.objects.create(
+            media_id="calendar-title-show", source=Sources.TMDB.value,
+            media_type=MediaTypes.TV.value, title="Tougen Anki",
+        )
+        TV.objects.create(item=show_item, user=self.user, status=Status.IN_PROGRESS.value)
+        season = Item(
+            id=90001, media_id=show_item.media_id, source=show_item.source,
+            media_type=MediaTypes.SEASON.value, title="Tougen Anki Season 2", season_number=2,
+        )
+        orphan = Item(
+            id=90002, media_id="calendar-title-orphan", source=Sources.TMDB.value,
+            media_type=MediaTypes.SEASON.value, title="Unmatched Season", season_number=3,
+        )
+        # A past month: its selected day is the first one with releases,
+        # not today, whose agenda panel is the only one pre-painted.
+        today = PAST_MONTH
+        event_time = timezone.make_aware(timezone.datetime(today.year, today.month, 15, 12))
+        mock_events.return_value = [
+            Event(item=season, content_number=5, datetime=event_time),
+            Event(item=orphan, content_number=1, datetime=event_time),
+        ]
+
+        response = self.client.get(reverse("calendar"), PAST_MONTH_QUERY)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-release-title="Tougen Anki"')
+        self.assertContains(response, 'data-release-title="Unmatched Season"')
+        self.assertContains(response, "S02E05")
+
+    @patch("events.views.backdrops.cached_backdrop", wraps=backdrops.cached_backdrop)
+    @patch("events.models.Event.objects.get_user_events")
+    @patch.object(get_user_model(), "update_preference")
+    def test_calendar_uses_cached_backdrops_and_falls_back_to_posters(
+        self, mock_preference, mock_events, mock_backdrop
+    ):
+        """Read artwork once per item, warm misses, and preserve poster fallback."""
+        mock_preference.return_value = "list"
+        today = timezone.localdate()
+        event_time = timezone.make_aware(timezone.datetime(today.year, today.month, 15, 12))
+        season = Item(id=1, media_id="calendar-art-test", source=Sources.TMDB.value,
+                      media_type=MediaTypes.SEASON.value, title="Show", season_number=1,
+                      image="https://example.com/poster.jpg")
+        movie = Item(id=2, media_id="2", source=Sources.TMDB.value,
+                     media_type=MediaTypes.MOVIE.value, title="Movie",
+                     image="https://example.com/movie-poster.jpg")
+        mock_events.return_value = [
+            Event(item=season, content_number=1, datetime=event_time),
+            Event(item=season, content_number=2, datetime=event_time),
+            Event(item=movie, datetime=event_time),
+        ]
+        cache.set("tmdb_backdrop_tv_calendar-art-test", "https://example.com/backdrop.jpg")
+
+        response = self.client.get(reverse("calendar") + "?view=list")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "https://example.com/backdrop.jpg")
+        self.assertContains(response, "https://example.com/movie-poster.jpg")
+        self.assertEqual(mock_backdrop.call_count, 2)
+        self.backdrop_warm.assert_called_once_with([movie])
+
+    @patch("events.models.Event.objects.get_user_events")
+    @patch.object(get_user_model(), "update_preference")
+    def test_prepaint_renders_only_the_selected_days_agenda(
+        self, mock_preference, mock_events
+    ):
+        """The island replaces the agenda, so hidden days are not rendered (SURFACE-16)."""
+        mock_preference.return_value = "grid"
+        movies = [
+            Item(id=index, media_id=str(index), source=Sources.MANUAL.value,
+                 media_type=MediaTypes.MOVIE.value, title=f"Day {day} Movie")
+            for index, day in enumerate((3, 9, 21), start=1)
+        ]
+        mock_events.return_value = [
+            Event(item=movie, datetime=timezone.make_aware(
+                timezone.datetime(PAST_MONTH.year, PAST_MONTH.month, day, 12),
+            ))
+            for movie, day in zip(movies, (3, 9, 21), strict=True)
+        ]
+
+        response = self.client.get(reverse("calendar"), PAST_MONTH_QUERY)
+
+        html = response.content.decode()
+        self.assertEqual(re.findall(r'data-day-panel="(\d+)"', html), ["3"])
+        self.assertContains(response, 'data-release-title="Day 3 Movie"')
+        self.assertNotContains(response, 'data-release-title="Day 9 Movie"')
+        # Every day still reaches the island, and every cell keeps its artwork.
+        props = response.context["calendar_props"]
+        self.assertEqual(
+            {day for day, releases in props["releases"].items() if releases},
+            {"3", "9", "21"},
+        )
+        self.assertContains(response, 'title="Day 21 Movie"')
+
+    @patch("events.models.Event.objects.get_user_events")
+    @patch.object(get_user_model(), "update_preference")
+    def test_calendar_list_shows_season_label_and_clean_show_title(
+        self,
+        mock_update_preference,
+        mock_get_user_events,
+    ):
+        """A season's episode reads "S39E170" and the show name drops "Season 39"."""
+        mock_update_preference.return_value = "list"
+        item = Item.objects.create(
+            media_id="1",
+            source=Sources.MANUAL.value,
+            media_type=MediaTypes.SEASON.value,
+            title="Home and Away Season 39",
+            image="",
+            season_number=39,
+        )
+        # A past month: its selected day is the first one with releases,
+        # not today, whose agenda panel is the only one pre-painted.
+        today = PAST_MONTH
+        mock_get_user_events.return_value = [
+            Event(
+                item=item,
+                content_number=170,
+                datetime=timezone.make_aware(
+                    timezone.datetime(today.year, today.month, 15, 12, 0),
+                ),
+            ),
+        ]
+
+        rendered = self.client.get(reverse("calendar"), {"view": "list", **PAST_MONTH_QUERY}).content.decode()
+
+        self.assertIn("S39E170", rendered)
+        self.assertIn(">Home and Away</h4>", rendered)
+
+    def test_calendar_menu_offers_week_start_and_saves_through_preferences(self):
+        """The gear menu carries the saved week start and the endpoint it saves to."""
+        with patch("events.models.Event.objects.get_user_events", return_value=[]):
+            response = self.client.get(reverse("calendar"))
+
+        menu = response.context["calendar_menu"]
+        self.assertEqual(menu["weekStart"], "monday")
+        self.assertEqual(menu["urls"]["preferences"], reverse("update_statistics_preferences"))
+        self.assertContains(response, "data-release-calendar-root")
+        self.assertEqual(
+            response.context["calendar_props"]["menu"]["weekStart"],
+            "monday",
+        )
+
+        self.client.post(reverse("update_statistics_preferences"), {"week_start_day": "sunday"})
+        with patch("events.models.Event.objects.get_user_events", return_value=[]):
+            response = self.client.get(reverse("calendar"))
+        self.assertEqual(response.context["calendar_menu"]["weekStart"], "sunday")
+        self.assertEqual(response.context["weekday_headers"][0], "Sun")
+
+    def test_calendar_links_fallback_keeps_static_subscription_links(self):
+        """The no-JS links fallback exposes both feeds without Alpine state."""
+        with patch("events.models.Event.objects.get_user_events", return_value=[]):
+            response = self.client.get(reverse("calendar"))
+
+        links = response.context["calendar_links_props"]
+        for entry in links["statuses"] + links["releaseTypes"]:
+            self.assertTrue(entry["icon"]["children"], entry["value"])
+        for entry in links["releaseMediaTypes"] + links["historyMediaTypes"]:
+            self.assertTrue(entry["icon"]["children"], entry["value"])
+        self.assertContains(response, "data-calendar-links-root")
+        self.assertContains(response, links["releaseBaseUrl"])
+        self.assertContains(response, links["historyBaseUrl"])
+        self.assertNotContains(response, "calendarExportUrl")
+
+    @patch("events.models.Event.objects.get_user_events")
+    @patch.object(get_user_model(), "update_preference")
     def test_calendar_list_uses_podcast_show_image_when_item_image_missing(
         self,
         mock_update_preference,
@@ -358,6 +572,46 @@ class CalendarViewTests(TestCase):
             f'data-release-status="{Status.PLANNING.value}"',
             response.content.decode(),
         )
+
+    @patch("events.models.Event.objects.get_user_events")
+    @patch.object(get_user_model(), "update_preference")
+    def test_calendar_untracked_season_event_has_empty_status(
+        self,
+        mock_update_preference,
+        mock_get_user_events,
+    ):
+        """An event on a season the user has no row for must not render "None".
+
+        The client-side status filter hides any non-empty status that is not
+        selected, so the literal "None" made a newly announced season vanish
+        (#1531).
+        """
+        mock_update_preference.return_value = "grid"
+
+        season_item = Item.objects.create(
+            media_id="253391",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.SEASON.value,
+            title="Sheriff Country",
+            image="https://example.com/season.jpg",
+            season_number=2,
+        )
+        today = timezone.localdate()
+        mock_get_user_events.return_value = [
+            Event(
+                item=season_item,
+                content_number=1,
+                datetime=timezone.make_aware(
+                    timezone.datetime(today.year, today.month, 15, 12, 0),
+                ),
+            ),
+        ]
+
+        response = self.client.get(reverse("calendar"))
+
+        content = response.content.decode()
+        self.assertIn('data-release-status=""', content)
+        self.assertNotIn('data-release-status="None"', content)
 
     @patch("events.models.Event.objects.get_user_events")
     @patch.object(get_user_model(), "update_preference")
@@ -850,7 +1104,8 @@ class CalendarFeedCacheTests(TestCase):
         url = reverse("download_calendar", kwargs={"token": self.user.token})
         self.assertEqual(self.client.get(url).status_code, 200)
 
-        with self.assertNumQueries(1):  # the token lookup only
+        # The token lookup and the user's change marker (the validator).
+        with self.assertNumQueries(2):
             response = self.client.get(url)
 
         self.assertEqual(response.status_code, 200)

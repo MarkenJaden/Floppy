@@ -9,7 +9,7 @@ from typing import Any, NoReturn
 import requests
 from django.db import IntegrityError, transaction
 
-from app import history_cache, signals
+from app import cache_utils, history_cache, signals
 from app.models import (
     TV,
     Anime,
@@ -66,7 +66,10 @@ def destination_media_type(item: Item) -> str:
 def _source_shape(item: Item) -> str:
     if item.media_type == MediaTypes.TV.value:
         return "grouped"
-    if item.media_type == MediaTypes.ANIME.value and item.source == Sources.MAL.value:
+    if (
+        item.media_type == MediaTypes.ANIME.value
+        and item.source == Sources.MAL.value
+    ):
         return "flat"
     _migration_error("This tracking entry is not a movable show.")
 
@@ -208,15 +211,12 @@ def _load_target_seasons(
         return {}
 
     try:
-        payload = (
-            services.get_media_metadata(
-                "tv_with_seasons",
-                target_media_id,
-                target_source,
-                sorted(set(season_numbers)),
-            )
-            or {}
-        )
+        payload = services.get_media_metadata(
+            "tv_with_seasons",
+            target_media_id,
+            target_source,
+            sorted(set(season_numbers)),
+        ) or {}
     except services.ProviderAPIError:
         _migration_error(
             "The destination seasons could not be loaded; nothing was changed."
@@ -245,7 +245,9 @@ def preflight_library_move(
         "anime_enabled",
         False,
     ):
-        _migration_error("Enable both TV Shows and Anime before moving a title.")
+        _migration_error(
+            "Enable both TV Shows and Anime before moving a title."
+        )
 
     target_media_type = (target_media_type or "").strip()
     target_source = (target_source or "").strip()
@@ -313,7 +315,7 @@ def preflight_library_move(
                     )
                 if int(episode_number) not in episodes_by_season[int(season_number)]:
                     _migration_error(
-                        f"The destination has no matching episode {season_number}x{episode_number}; nothing was changed."
+                        f"The destination has no matching episode S{int(season_number):02d}E{int(episode_number):02d}; nothing was changed."
                     )
     else:
         if target_source not in {Sources.TMDB.value, Sources.TVDB.value}:
@@ -381,9 +383,7 @@ def _target_item(
     ).item
 
 
-def _season_item(
-    plan: LibraryMigrationPlan, season_number: int, metadata: dict
-) -> Item:
+def _season_item(plan: LibraryMigrationPlan, season_number: int, metadata: dict) -> Item:
     defaults = Item.title_fields_from_metadata(metadata, fallback_title="")
     item, _created = Item.objects.get_or_create(
         media_id=plan.target_media_id,
@@ -480,9 +480,7 @@ def _move_grouped(user, source_item: Item, plan: LibraryMigrationPlan) -> Item:
         library_media_type=plan.target_bucket,
     )
     target_item = Item.objects.select_for_update().get(pk=target_item.pk)
-    target_tv = (
-        TV.objects.select_for_update().filter(user=user, item=target_item).first()
-    )
+    target_tv = TV.objects.select_for_update().filter(user=user, item=target_item).first()
     destination_fields = None
     if target_tv is not None:
         destination_fields = {
@@ -500,6 +498,15 @@ def _move_grouped(user, source_item: Item, plan: LibraryMigrationPlan) -> Item:
         season_number = int(source_season.item.season_number)
         source_season_item = source_season.item
         metadata = plan.target_seasons[season_number]
+        if not metadata:
+            # The preview only lets an empty season through when the
+            # destination lacks it; there is nowhere to move it to.
+            if Episode.objects.filter(related_season=source_season).exists():
+                _migration_error(
+                    f"The destination has no matching season {season_number}; nothing was changed."
+                )
+            source_season.delete()
+            continue
         destination_season_item = _season_item(plan, season_number, metadata)
         destination_season = Season.objects.filter(
             user=user,
@@ -540,7 +547,7 @@ def _move_grouped(user, source_item: Item, plan: LibraryMigrationPlan) -> Item:
         episode_metadata = _episode_map(season_metadata).get(episode_number)
         if episode_metadata is None:
             _migration_error(
-                f"The destination has no matching episode {season_number}x{episode_number}; nothing was changed."
+                f"The destination has no matching episode S{int(season_number):02d}E{int(episode_number):02d}; nothing was changed."
             )
         destination_episode_item = _episode_item(
             plan,
@@ -565,15 +572,11 @@ def _move_grouped_to_flat(user, source_item: Item, plan: LibraryMigrationPlan) -
         library_media_type=MediaTypes.ANIME.value,
     )
     target_item = Item.objects.select_for_update().get(pk=target_item.pk)
-    target_anime = (
-        Anime.all_objects.select_for_update()
-        .filter(
-            user=user,
-            item=target_item,
-            migrated_to_item__isnull=True,
-        )
-        .first()
-    )
+    target_anime = Anime.all_objects.select_for_update().filter(
+        user=user,
+        item=target_item,
+        migrated_to_item__isnull=True,
+    ).first()
     if target_anime is None:
         target_anime = Anime(
             user=user,
@@ -607,26 +610,33 @@ def migrate_library_item(
         target_media_id,
     )
 
+    # The flat-anime preflight reads provider metadata. Run it before the
+    # transaction: SQLite has one writer, and a slow provider response must not
+    # hold the write lock for the whole move.
+    flat_preflight = None
+    if plan.source_shape == "flat":
+        try:
+            flat_preflight = anime_migration.preflight_flat_anime_to_grouped(
+                user,
+                source_item,
+                plan.target_source,
+            )
+        except services.ProviderAPIError:
+            _migration_error(
+                "The verified Anime mapping could not be loaded; nothing was changed."
+            )
+        except anime_migration.AnimeMigrationError as error:
+            _migration_error(str(error))
+        if flat_preflight.provider_series_id != plan.target_media_id:
+            _migration_error("The verified Anime mapping changed; retry the move.")
+
     with transaction.atomic(), suppress_media_change_side_effects():
         source_item = Item.objects.select_for_update().get(pk=plan.source_item_id)
         if _owned_source_tracker(user, source_item) is None:
             _migration_error("The source tracking entry changed; retry the move.")
 
         if plan.source_shape == "flat":
-            try:
-                preflight = anime_migration.preflight_flat_anime_to_grouped(
-                    user,
-                    source_item,
-                    plan.target_source,
-                )
-            except services.ProviderAPIError:
-                _migration_error(
-                    "The verified Anime mapping could not be loaded; nothing was changed."
-                )
-            except anime_migration.AnimeMigrationError as error:
-                _migration_error(str(error))
-            if preflight.provider_series_id != plan.target_media_id:
-                _migration_error("The verified Anime mapping changed; retry the move.")
+            preflight = flat_preflight
             try:
                 result = anime_migration.persist_flat_anime_migration(preflight)
             except anime_migration.AnimeMigrationError as error:
@@ -658,23 +668,34 @@ def migrate_library_item(
 
 
 def _schedule_cache_reconcile(user, target_item: Item) -> None:
-        history_days = {
-            day
-            for episode in Episode.objects.filter(
-                related_season__related_tv__user=user,
-                related_season__related_tv__item=target_item,
-            ).only("end_date")
-            if (day := history_cache.history_day_key(episode.end_date))
-        }
-        transaction.on_commit(
-            lambda: _reconcile_caches(user.id, history_days),
-        )
+    history_days = {
+        day
+        for episode in Episode.objects.filter(
+            related_season__related_tv__user=user,
+            related_season__related_tv__item=target_item,
+        ).only("end_date")
+        if (day := history_cache.history_day_key(episode.end_date))
+    }
+    transaction.on_commit(
+        lambda: _reconcile_caches(user.id, history_days, target_item.id),
+    )
 
 
-def _reconcile_caches(user_id: int, history_days: set[str]) -> None:
-    signals._clear_media_runtime_caches(user_id, MediaTypes.EPISODE.value)
+def _reconcile_caches(user_id: int, history_days: set[str], target_item_id: int) -> None:
+    cache_utils.clear_library_view_caches(
+        user_id,
+        media_types=(MediaTypes.EPISODE.value,),
+    )
     if history_days:
         signals._invalidate_episode_history_changes({user_id: list(history_days)})
+    # The move suppresses media side effects, so the target's seasons have no
+    # release events yet. Next-episode, Check-in and upcoming all read those.
+    import events.tasks
+
+    events.tasks.reload_calendar.apply_async(
+        kwargs={"item_ids": [target_item_id]},
+        countdown=3,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -782,7 +803,18 @@ def preview_tv_provider_switch(user, item: Item) -> TvProviderSwitch:
         number: dict(payload.get(f"season/{number}") or {})
         for number in season_numbers
     }
-    missing = [f"Season {number}" for number, meta in target_seasons.items() if not meta]
+    # A tracked season with no plays has nothing to lose: one the destination
+    # lacks (an announced season, say) is dropped by the move, not a blocker.
+    played_seasons = {
+        int(episode.related_season.item.season_number)
+        for episode in source_episodes
+        if episode.related_season.item.season_number is not None
+    }
+    missing = [
+        f"Season {number}"
+        for number, meta in target_seasons.items()
+        if not meta and number in played_seasons
+    ]
     episodes_by_season = {
         number: _episode_map(meta) for number, meta in target_seasons.items() if meta
     }
@@ -795,7 +827,7 @@ def preview_tv_provider_switch(user, item: Item) -> TvProviderSwitch:
             )
         known = episodes_by_season.get(int(season_number))
         if known is not None and int(episode_number) not in known:
-            missing.append(f"{int(season_number)}x{int(episode_number)}")
+            missing.append(f"S{int(season_number):02d}E{int(episode_number):02d}")
 
     plan = None
     if not missing:

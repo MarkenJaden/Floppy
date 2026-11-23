@@ -10,6 +10,7 @@ between pages.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -18,10 +19,13 @@ from django.db.models import (
     Case,
     CharField,
     Count,
+    DateTimeField,
+    Exists,
     ExpressionWrapper,
     F,
     IntegerField,
     Max,
+    Min,
     OuterRef,
     Q,
     Subquery,
@@ -80,6 +84,18 @@ class SortDef:
     # expensive subquery is computed once per row. It must order exactly like
     # ``batch_values``, which still serves queries a Python filter scans.
     sql_order: Callable[[TypeContext, int, str], tuple | None] | None = None
+    # The Python value reads nothing from a show's tracker row beyond what
+    # ``app.tv_show_facts.TrackedShow`` carries, so a scan need not hydrate
+    # seasons and plays to compute it. Other media types are unaffected.
+    tv_facts: bool = False
+    # The Python value reads the candidate's item and nothing of its tracker
+    # rows, so a scan ordering by it loads no tracker. Only for a sort without
+    # a SQL form; a filter that reads the tracker still loads it.
+    item_only: bool = False
+    # For a movie the Python value reads the item and the tracker's own
+    # columns (status, progress, end date, creation), so a scan attaches an
+    # ``app.movie_rows.MovieRow`` instead of a model. Other types unaffected.
+    movie_rows: bool = False
 
 
 def _field(name: str):
@@ -91,6 +107,9 @@ def _tracker_aggregate(sort_key: str):
     field_name = {
         "start_date": "start_date",
         "end_date": "end_date",
+        # Last watched is derived from the same rows, but falls back to
+        # progressed_at for entries that are still in progress.
+        "last_watched": "end_date",
         "progress": "progress",
     }[sort_key]
 
@@ -100,6 +119,17 @@ def _tracker_aggregate(sort_key: str):
         subqueries = []
         for source in ctx.sources:
             if source.is_episode:
+                value = F(field_name)
+                if sort_key == "last_watched":
+                    value = Coalesce("end_date", Case(
+                        When(status=Status.IN_PROGRESS.value, then=F("start_date")),
+                    ))
+                if sort_key != "progress":
+                    aggregate = Min if sort_key == "start_date" else Max
+                    subqueries.append(Subquery(
+                        source.item_rows(ctx.user).order_by().values("item_id")
+                        .annotate(value=aggregate(value)).values("value")[:1],
+                    ))
                 continue
             if not source.has_field(field_name):
                 # The value is derived in Python (TV dates come from seasons).
@@ -125,13 +155,75 @@ def _latest_score(ctx: TypeContext, seed: int):
     return latest_value(ctx, "score", Q(score__isnull=False))
 
 
-def _latest_created(ctx: TypeContext, seed: int):
+def _stores_progressed_at(model) -> bool:
+    """Return whether ``progressed_at`` on this model is its stored column.
+
+    TV and Season inherit the column but replace the attribute with a value
+    derived from their episodes; Episode reports none. Only the column can be
+    read in SQL.
+    """
+    from functools import cached_property
+
+    stored = any(field.attname == "progressed_at" for field in model._meta.concrete_fields)
+    attribute = inspect.getattr_static(model, "progressed_at", None)
+    return stored and not isinstance(attribute, (property, cached_property))
+
+
+def _progressed_at(ctx: TypeContext, seed: int):
+    """Order by ``progressed_at`` on the row a scan displays.
+
+    That is the item's newest tracker row by ``created_at`` (``_attach_media``
+    keeps it; ``_aggregate_item_data`` leaves the value alone), not the
+    latest ``progressed_at`` across repeat viewings.
+    """
+    from app.library_query.trackers import AlbumSource, PodcastShowSource
+    from app.models import Podcast, PodcastShowTracker
+
+    subqueries = []
+    for source in ctx.sources:
+        if source.is_episode:
+            # An episode card reports no progressed_at.
+            continue
+        if isinstance(source, PodcastShowSource):
+            # Handled below: a show tracker replaces the podcast row.
+            continue
+        if isinstance(source, AlbumSource) or not _stores_progressed_at(source.model):
+            return None
+        value = Subquery(
+            source.item_rows(ctx.user)
+            .order_by("-created_at", "-id")
+            .values("progressed_at")[:1],
+        )
+        if source.model is Podcast:
+            # A tracked show is displayed through its show tracker, which has
+            # no progressed_at.
+            show_tracked = PodcastShowTracker.objects.filter(
+                user=ctx.user,
+                show__podcast_uuid=OuterRef("media_id"),
+                show__source=OuterRef("source"),
+            )
+            value = Case(
+                When(Exists(show_tracked), then=Value(None)),
+                default=value,
+            )
+        subqueries.append(value)
+    if not subqueries:
+        return Value(None, output_field=DateTimeField())
+    return subqueries[0] if len(subqueries) == 1 else Coalesce(*subqueries)
+
+
+def _first_created(ctx: TypeContext, seed: int):
+    """Order by when the item was first tracked, not its latest row.
+
+    A rewatch adds a newer tracker row; Date Added must stay the earliest one,
+    matching the media list's ``aggregated_created_at``.
+    """
     subqueries = [
         Subquery(
             source.item_rows(ctx.user)
             .order_by()
             .values("item_id")
-            .annotate(value=Max("created_at"))
+            .annotate(value=Min("created_at"))
             .values("value")[:1],
         )
         for source in ctx.sources
@@ -274,6 +366,9 @@ def _random_sql(ctx: TypeContext, seed: int):
 
 # Measurements where zero means "not measured": such items sort last.
 MEASURED_SORT_KEYS = frozenset({"runtime", "time_watched", "time_to_beat"})
+# An empty value is unknown and sorts last: measurements, and a title with no
+# author (the media list's value for it is an empty string).
+EMPTY_IS_UNKNOWN_SORT_KEYS = MEASURED_SORT_KEYS | {"author"}
 
 
 def _next_episode_air_date_values(user, candidates, direction):
@@ -281,13 +376,8 @@ def _next_episode_air_date_values(user, candidates, direction):
     from app.models import BasicMedia
 
     medias = [c.media for c in candidates if c.media is not None]
-    BasicMedia.objects.attach_show_season_events(medias)
-    return [
-        None
-        if candidate.media is None
-        else BasicMedia.objects._next_episode_air_date_value(candidate.media)
-        for candidate in candidates
-    ]
+    values = iter(BasicMedia.objects.next_episode_air_date_values(medias))
+    return [None if candidate.media is None else next(values) for candidate in candidates]
 
 
 def _media_list_value(sort_key: str):
@@ -301,7 +391,7 @@ def _media_list_value(sort_key: str):
             sort_key,
             None,
         )
-        if sort_key in MEASURED_SORT_KEYS and not result:
+        if sort_key in EMPTY_IS_UNKNOWN_SORT_KEYS and not result:
             return None
         return result
 
@@ -319,23 +409,33 @@ SORTS: tuple[SortDef, ...] = (
     SortDef(("id", "itemid", "mediaid"), sql=_field("media_id")),
     SortDef(("source",), sql=_field("source")),
     SortDef(("type",), sql=_field("media_type")),
-    SortDef(("date_added", "added", "created_at"), sql=_latest_created, tracker=True),
-    SortDef(("start_date", "started"), sql=_tracker_aggregate("start_date"), tracker=True),
-    SortDef(("end_date", "ended"), sql=_tracker_aggregate("end_date"), tracker=True),
+    SortDef(("date_added", "added", "created_at"), sql=_first_created, tracker=True),
+    # A show has no SQL form for these (its dates and progress come from its
+    # seasons' plays) and one tracker row, so its value is the ``TV``
+    # property, which ``TrackedShow`` reads from grouped facts.
+    SortDef(("start_date", "started"), sql=_tracker_aggregate("start_date"), tracker=True, tv_facts=True),
+    SortDef(("end_date", "ended"), sql=_tracker_aggregate("end_date"), tracker=True, tv_facts=True),
+    SortDef(("last_watched",), sql=_tracker_aggregate("last_watched"), tracker=True, tv_facts=True),
     SortDef(("score",), sql=_latest_score, tracker=True),
-    SortDef(("progress", "plays"), sql=_tracker_aggregate("progress"), tracker=True),
+    SortDef(("progress", "plays"), sql=_tracker_aggregate("progress"), tracker=True, tv_facts=True),
     SortDef(("random",), sql=_random_sql),
     SortDef(("list_added",), sql=_list_added),
     SortDef(("list_tier",), sql=_list_tier),
     SortDef(("status",), sql=_status_rank, tracker=True),
     SortDef(("platform",), sql=_platform),
     # The rest are computed in Python from the hydrated candidate.
-    SortDef(("runtime",), needs=_MEDIA_RUNTIME),
-    SortDef(("time_watched",), needs=_MEDIA_RUNTIME),
-    SortDef(("time_to_beat",), needs=_MEDIA),
-    SortDef(("author",), needs=_MEDIA),
-    SortDef(("updated", "progressed_at"), needs=_MEDIA),
-    SortDef(("time_left",), needs=frozenset({NEEDS_MEDIA, NEEDS_MAX_PROGRESS})),
+    # Shows rank from facts (plus the episode runtime index), movies from
+    # their columns; other types hydrate their tracker rows.
+    SortDef(("runtime",), needs=_MEDIA_RUNTIME, tv_facts=True, movie_rows=True),
+    SortDef(("time_watched",), needs=_MEDIA_RUNTIME, tv_facts=True, movie_rows=True),
+    SortDef(("time_to_beat",), item_only=True),
+    SortDef(("author",), item_only=True),
+    # SQL for types that store the column; TV and seasons scan.
+    SortDef(("updated", "progressed_at"), sql=_progressed_at, needs=_MEDIA, tracker=True),
+    # Episodes left (``max_progress - progress``), both of which a
+    # ``TrackedShow`` carries. The web list's grouped time-left order is its
+    # own pipeline (``app.tv_sort``); this one serves the API and Expo.
+    SortDef(("time_left",), needs=frozenset({NEEDS_MEDIA, NEEDS_MAX_PROGRESS}), tv_facts=True),
     SortDef(
         ("next_episode_air_date",),
         needs=_MEDIA,

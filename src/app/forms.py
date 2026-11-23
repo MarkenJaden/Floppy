@@ -11,6 +11,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from app import config
+from app.helpers import minutes_to_hhmm, seconds_to_clock
 from app.models import (
     TV,
     AlbumTracker,
@@ -29,6 +30,7 @@ from app.models import (
     Movie,
     Music,
     Podcast,
+    PodcastEpisode,
     PodcastShowTracker,
     Season,
     Sources,
@@ -181,6 +183,11 @@ class ManualItemForm(forms.ModelForm):
         empty_label=_("Select"),
         label=_("Parent Season"),
     )
+    rss_feed_url = forms.URLField(
+        required=False,
+        label=_("RSS feed URL"),
+        help_text=_("Optional. Import the show's episodes from this feed."),
+    )
 
     class Meta:
         """Bind form to model."""
@@ -260,6 +267,9 @@ class ManualItemForm(forms.ModelForm):
             cleaned_data["season_number"] = None
             cleaned_data["episode_number"] = None
 
+        if media_type != MediaTypes.PODCAST.value:
+            cleaned_data["rss_feed_url"] = ""
+
         return cleaned_data
 
     def save(self, commit=True):
@@ -280,6 +290,133 @@ class ManualItemForm(forms.ModelForm):
         if commit:
             instance.save()
         return instance
+
+
+def episode_duration_input(seconds):
+    """Return a duration as the ``mm:ss`` / ``h:mm:ss`` text the form accepts."""
+    if not seconds:
+        return ""
+    return seconds_to_clock(seconds)
+
+
+class PodcastDurationField(forms.CharField):
+    """Accept minutes, ``mm:ss`` or ``h:mm:ss`` and store seconds."""
+
+    _MINUTES = re.compile(r"\d+")
+    _MINUTES_UNIT = re.compile(r"(\d+)\s*(?:m|min|mins|minute|minutes)")
+    _SECONDS_UNIT = re.compile(r"(\d+)\s*(?:s|sec|secs|second|seconds)")
+    _SECONDS_PER_MINUTE = 60
+    _SECONDS_PER_HOUR = 3600
+    _SHORT_PARTS = 2
+    _LONG_PARTS = 3
+
+    def clean(self, value):
+        """Convert the submitted duration to seconds."""
+        value = (super().clean(value) or "").strip().lower()
+        if not value:
+            return None
+
+        seconds_per_minute = self._SECONDS_PER_MINUTE
+
+        if self._MINUTES.fullmatch(value):
+            return int(value) * seconds_per_minute
+
+        if match := self._MINUTES_UNIT.fullmatch(value):
+            return int(match.group(1)) * seconds_per_minute
+
+        if match := self._SECONDS_UNIT.fullmatch(value):
+            return int(match.group(1))
+
+        parts = value.split(":")
+        try:
+            numbers = [int(part) for part in parts]
+        except ValueError:
+            numbers = []
+        if len(numbers) == self._SHORT_PARTS and all(
+            number >= 0 for number in numbers
+        ):
+            minutes, secs = numbers
+            if secs < seconds_per_minute:
+                return minutes * seconds_per_minute + secs
+        if len(numbers) == self._LONG_PARTS and all(number >= 0 for number in numbers):
+            hours, minutes, secs = numbers
+            if minutes < seconds_per_minute and secs < seconds_per_minute:
+                return (
+                    hours * self._SECONDS_PER_HOUR
+                    + minutes * seconds_per_minute
+                    + secs
+                )
+
+        raise forms.ValidationError(
+            _("Enter the duration as minutes, mm:ss or h:mm:ss."),
+        )
+
+
+class PodcastEpisodeForm(forms.ModelForm):
+    """Create or edit a manually managed podcast episode."""
+
+    duration = PodcastDurationField(
+        required=False,
+        label=_("Duration"),
+        help_text=_("Minutes, mm:ss or h:mm:ss. Leave blank if unknown."),
+    )
+    field_order = [
+        "title",
+        "description",
+        "episode_number",
+        "season_number",
+        "published",
+        "duration",
+        "audio_url",
+        "website_url",
+        "image",
+    ]
+
+    class Meta:
+        """Bind the form to the episode model."""
+
+        model = PodcastEpisode
+        fields = [
+            "title",
+            "description",
+            "episode_number",
+            "season_number",
+            "published",
+            "duration",
+            "audio_url",
+            "website_url",
+            "image",
+        ]
+        labels = {
+            "title": _("Episode title"),
+            "description": _("Description"),
+            "episode_number": _("Episode number"),
+            "season_number": _("Season number"),
+            "published": _("Publication date"),
+            "audio_url": _("Audio URL"),
+            "website_url": _("Website URL"),
+            "image": _("Artwork URL"),
+        }
+        widgets = {
+            "description": forms.Textarea(attrs={"rows": "4"}),
+            "published": forms.DateTimeInput(
+                attrs={"type": "datetime-local"},
+                format="%Y-%m-%dT%H:%M",
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        """Style the fallback inputs and show the stored duration."""
+        super().__init__(*args, **kwargs)
+        input_class = (
+            "w-full p-2 bg-[var(--color-surface-strong)] rounded-md "
+            "text-[var(--color-text)] border border-gray-600 "
+            "focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
+        )
+        for field in self.fields.values():
+            field.widget.attrs.setdefault("class", input_class)
+        if not self.is_bound and self.instance and self.instance.pk:
+            self.initial["duration"] = episode_duration_input(self.instance.duration)
 
 
 class RatingScaleFormMixin:
@@ -435,10 +572,44 @@ class MediaForm(RatingScaleFormMixin, forms.ModelForm):
         return (self.cleaned_data.get("image_url") or "").strip()
 
 
-class MangaForm(MediaForm):
-    """Form for manga."""
+class ReadingForm(MediaForm):
+    """Shared base for books, comics and manga: adds the time spent reading."""
+
+    reading_time = CustomDurationField(
+        required=False,
+        widget=forms.TextInput(attrs={"placeholder": _("hh:mm or 111 minutes")}),
+        label=_("Reading time"),
+    )
 
     class Meta(MediaForm.Meta):
+        """Put reading time right after progress."""
+
+        fields = [
+            "score",
+            "progress",
+            "reading_time",
+            "status",
+            "start_date",
+            "end_date",
+            "notes",
+            "entry_source",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        """Drop reading time for audiobooks, whose progress already is the time."""
+        super().__init__(*args, **kwargs)
+        item = getattr(self.instance, "item", None)
+        if item is not None and item.format == "audiobook":
+            del self.fields["reading_time"]
+        elif self.instance.reading_time:
+            # The field reads bare numbers as hours, so never show raw minutes.
+            self.initial["reading_time"] = minutes_to_hhmm(self.instance.reading_time)
+
+
+class MangaForm(ReadingForm):
+    """Form for manga."""
+
+    class Meta(ReadingForm.Meta):
         """Bind form to model."""
 
         model = Manga
@@ -533,10 +704,10 @@ class BoardgameForm(MediaForm):
         }
 
 
-class BookForm(MediaForm):
+class BookForm(ReadingForm):
     """Form for books."""
 
-    class Meta(MediaForm.Meta):
+    class Meta(ReadingForm.Meta):
         """Bind form to model."""
 
         model = Book
@@ -557,10 +728,10 @@ class BookForm(MediaForm):
             )
 
 
-class ComicForm(MediaForm):
+class ComicForm(ReadingForm):
     """Form for comics."""
 
-    class Meta(MediaForm.Meta):
+    class Meta(ReadingForm.Meta):
         """Bind form to model."""
 
         model = Comic
@@ -699,6 +870,23 @@ class EpisodeForm(RatingScaleFormMixin, forms.ModelForm):
     def clean_status(self):
         """Keep legacy episode-save clients equivalent to adding a watch."""
         return self.cleaned_data.get("status") or Status.COMPLETED.value
+
+    def clean(self):
+        """Complete an open play when the edit gives it a watch date.
+
+        The track modal edits the latest play, so marking an episode watched
+        while a paused check-in left it open resubmits its In Progress status.
+        """
+        cleaned_data = super().clean()
+        if (
+            self.instance.pk
+            and self.instance.status == Status.IN_PROGRESS.value
+            and self.instance.end_date is None
+            and cleaned_data.get("status") == Status.IN_PROGRESS.value
+            and cleaned_data.get("end_date")
+        ):
+            cleaned_data["status"] = Status.COMPLETED.value
+        return cleaned_data
 
 
 class BulkEpisodeTrackForm(forms.Form):
@@ -984,6 +1172,17 @@ class BulkEpisodeTrackForm(forms.Form):
         return cleaned_data
 
 
+class MusicTrackNotesForm(forms.ModelForm):
+    """Edit a song's notes independently of its listens."""
+
+    class Meta:
+        """Bind only the existing per-user notes field."""
+
+        model = Music
+        fields = ("notes",)
+        widgets = MediaForm.Meta.widgets
+
+
 class MusicForm(MediaForm):
     """Form for music tracks."""
 
@@ -1197,7 +1396,7 @@ class CollectionEntryForm(forms.ModelForm):
                 attrs={"placeholder": "9.99", "step": "0.01", "min": "0"},
             ),
             "purchase_location": forms.TextInput(
-                attrs={"placeholder": "Steam, NAS, Home, Storage"},
+                attrs={"placeholder": "Amazon"},
             ),
         }
 
@@ -1252,7 +1451,9 @@ class CollectionEntryForm(forms.ModelForm):
                     normalized.append((option[0], option[1]))
                 else:
                     normalized.append((option, option))
-            current_value = getattr(self.instance, field_name, None)
+            current_value = getattr(
+                self.instance, field_name, None
+            ) or self.initial.get(field_name)
             existing_values = {str(value) for value, _ in normalized}
             if current_value and str(current_value) not in existing_values:
                 normalized.append((current_value, current_value))

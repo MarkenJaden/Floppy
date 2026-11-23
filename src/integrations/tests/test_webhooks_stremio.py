@@ -124,7 +124,10 @@ class StremioAddonViewTests(TestCase):
         self.assertEqual(response["Access-Control-Allow-Origin"], "*")
         manifest = json.loads(response.content)
         self.assertEqual(manifest["id"], "org.yamtrack.scrobbler")
-        self.assertEqual(manifest["resources"], ["catalog", "meta", "subtitles"])
+        # Membership, not exact equality: an added resource must not break this,
+        # but a resource a client depends on disappearing must.
+        for resource in ("catalog", "meta", "subtitles"):
+            self.assertIn(resource, manifest["resources"])
         self.assertEqual(manifest["idPrefixes"], ["tt"])
         self.assertEqual(
             manifest["catalogs"],
@@ -213,7 +216,9 @@ class StremioAddonViewTests(TestCase):
                 expected_ids = [f"tt{index + 1:07d}" for index in range(count)]
                 expected_ids.reverse()
                 for skip in (0, 100, 200):
-                    response = self.client.get(self._catalog_url(extra=f"skip={skip}"))
+                    response = self.client.get(
+                        self._catalog_url(extra=f"skip={skip}")
+                    )
                     self.assertEqual(response.status_code, 200)
                     self.assertEqual(response["Access-Control-Allow-Origin"], "*")
                     self.assertEqual(response["Content-Type"], "application/json")
@@ -817,7 +822,7 @@ class StremioAddonViewTests(TestCase):
                 media_id=str(index),
             )
 
-        with self.assertLogs("integrations.views", level="INFO") as logs:
+        with self.assertLogs("integrations.stremio_views", level="INFO") as logs:
             response = self.client.get(self._catalog_url())
 
         self.assertEqual(response.status_code, 200)
@@ -833,8 +838,8 @@ class StremioAddonViewTests(TestCase):
 
         self.assertEqual(response.status_code, 401)
 
-    @patch("integrations.views.stremio_queue.reserve_pending", return_value="accepted")
-    @patch("integrations.views.tasks.process_stremio_webhook.delay")
+    @patch("integrations.stremio_views.stremio_queue.reserve_pending", return_value="accepted")
+    @patch("integrations.stremio_views.tasks.process_stremio_webhook.delay")
     def test_subtitles_enqueues_scrobble(self, mock_delay, _mock_reserve):
         """A subtitles request records one scrobble per throttle window."""
         response = self.client.get(self._subtitles_url("movie", "tt0133093"))
@@ -856,8 +861,8 @@ class StremioAddonViewTests(TestCase):
         self.client.get(self._subtitles_url("series", "tt0108778:1:1"))
         self.assertEqual(mock_delay.call_count, 2)
 
-    @patch("integrations.views.stremio_queue.reserve_pending", return_value="accepted")
-    @patch("integrations.views.tasks.process_stremio_webhook.delay")
+    @patch("integrations.stremio_views.stremio_queue.reserve_pending", return_value="accepted")
+    @patch("integrations.stremio_views.tasks.process_stremio_webhook.delay")
     def test_subtitles_with_extra_path(self, mock_delay, _mock_reserve):
         """Stremio extra segments like videoHash are accepted and ignored."""
         response = self.client.get(
@@ -872,8 +877,8 @@ class StremioAddonViewTests(TestCase):
             "series:tt0108778:1:1",
         )
 
-    @patch("integrations.views.stremio_queue.reserve_pending", return_value="accepted")
-    @patch("integrations.views.tasks.process_stremio_webhook.delay")
+    @patch("integrations.stremio_views.stremio_queue.reserve_pending", return_value="accepted")
+    @patch("integrations.stremio_views.tasks.process_stremio_webhook.delay")
     def test_subtitles_with_slash_in_extra_path(self, mock_delay, _mock_reserve):
         """A release filename containing a slash still resolves and scrobbles."""
         response = self.client.get(
@@ -888,8 +893,8 @@ class StremioAddonViewTests(TestCase):
             "movie:tt1872181",
         )
 
-    @patch("integrations.views.stremio_queue.reserve_pending", return_value="limited")
-    @patch("integrations.views.tasks.process_stremio_webhook.delay")
+    @patch("integrations.stremio_views.stremio_queue.reserve_pending", return_value="limited")
+    @patch("integrations.stremio_views.tasks.process_stremio_webhook.delay")
     def test_subtitles_limit_returns_empty_response_without_dispatch(
         self,
         mock_delay,
@@ -902,10 +907,8 @@ class StremioAddonViewTests(TestCase):
         self.assertEqual(json.loads(response.content), {"subtitles": []})
         mock_delay.assert_not_called()
 
-    @patch(
-        "integrations.views.stremio_queue.reserve_pending", return_value="unavailable"
-    )
-    @patch("integrations.views.tasks.process_stremio_webhook.delay")
+    @patch("integrations.stremio_views.stremio_queue.reserve_pending", return_value="unavailable")
+    @patch("integrations.stremio_views.tasks.process_stremio_webhook.delay")
     def test_subtitles_redis_failure_fails_closed(
         self,
         mock_delay,
@@ -917,15 +920,19 @@ class StremioAddonViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         mock_delay.assert_not_called()
 
-    @patch("integrations.views.stremio_queue.reserve_pending")
-    @patch("integrations.views.tasks.process_stremio_webhook.delay")
+    @patch("integrations.stremio_views.stremio_queue.reserve_pending")
+    @patch("integrations.stremio_views.tasks.process_stremio_webhook.delay")
     def test_invalid_video_id_is_ignored(
         self,
         mock_delay,
         mock_reserve,
     ):
-        """Zero/negative-style episode coordinates cannot enter the queue."""
-        response = self.client.get(self._subtitles_url("series", "tt0133093:0:1"))
+        """Episode-zero coordinates cannot enter the queue.
+
+        Season 0 is Stremio's specials bucket and is a real coordinate, so the
+        malformed case here is an episode number of zero.
+        """
+        response = self.client.get(self._subtitles_url("series", "tt0133093:1:0"))
 
         self.assertEqual(response.status_code, 200)
         mock_reserve.assert_not_called()
@@ -1066,6 +1073,94 @@ class StremioWebhookProcessorTests(TestCase):
         self.assertEqual(kwargs["series_title"], "Friends")
         self.assertEqual(kwargs["season_number"], 1)
         self.assertEqual(kwargs["episode_number"], 1)
+
+    @patch("integrations.webhooks.stremio.live_playback.apply_playback_event")
+    @patch(
+        "integrations.webhooks.anime_mappings.fetch_mapping_data",
+        return_value={
+            "tvdb_show:305089:s4": {
+                "tmdb_show:65942:s1": {"1-19": "67-85"},
+            },
+        },
+    )
+    @patch(
+        "app.providers.tmdb.tv_with_seasons",
+        return_value={"season/1": {"episodes": [{"episode_number": 78}]}},
+    )
+    @patch(
+        "app.providers.tmdb.tv",
+        return_value={"title": "Re:ZERO", "tvdb_id": "305089"},
+    )
+    @patch(
+        "app.providers.tmdb.find",
+        return_value={"tv_episode_results": [{"show_id": 65942}]},
+    )
+    def test_anime_episode_start_uses_canonical_tmdb_numbering(
+        self,
+        _mock_find,
+        _mock_tv,
+        _mock_tv_with_seasons,
+        _mock_mapping,
+        mock_apply_event,
+    ):
+        """Anime live playback uses AniBridge's canonical TMDB coordinates."""
+        self.user.anime_enabled = True
+        processor = StremioWebhookProcessor()
+
+        processor._update_live_playback_episode(
+            {"id": "tt5607616:4:12", "type": "series"},
+            self.user,
+            "tt5607616",
+        )
+
+        _, kwargs = mock_apply_event.call_args
+        self.assertEqual(kwargs["media_id"], "65942")
+        self.assertEqual(kwargs["season_number"], 1)
+        self.assertEqual(kwargs["episode_number"], 78)
+
+    @patch("integrations.webhooks.stremio.live_playback.apply_playback_event")
+    @patch(
+        "integrations.webhooks.anime_mappings.fetch_mapping_data",
+        return_value={
+            "tvdb_show:305089:s4": {
+                "tmdb_show:65942:s1": {"1-19": "67-85"},
+            },
+        },
+    )
+    @patch(
+        "app.providers.tmdb.tv_with_seasons",
+        return_value={"season/1": {"episodes": [{"episode_number": 1}]}},
+    )
+    @patch(
+        "app.providers.tmdb.tv",
+        return_value={"title": "Re:ZERO", "tvdb_id": "305089"},
+    )
+    @patch(
+        "app.providers.tmdb.find",
+        return_value={"tv_episode_results": [{"show_id": 65942}]},
+    )
+    def test_anime_episode_start_keeps_source_numbers_when_target_lacks_episode(
+        self,
+        _mock_find,
+        _mock_tv,
+        _mock_tv_with_seasons,
+        _mock_mapping,
+        mock_apply_event,
+    ):
+        """A target season without the episode keeps the source coordinates."""
+        self.user.anime_enabled = True
+        processor = StremioWebhookProcessor()
+
+        processor._update_live_playback_episode(
+            {"id": "tt5607616:4:12", "type": "series"},
+            self.user,
+            "tt5607616",
+        )
+
+        _, kwargs = mock_apply_event.call_args
+        self.assertEqual(kwargs["media_id"], "65942")
+        self.assertEqual(kwargs["season_number"], 4)
+        self.assertEqual(kwargs["episode_number"], 12)
 
     @patch("integrations.webhooks.stremio.live_playback.apply_playback_event")
     def test_unsupported_id_skips_live_playback(self, mock_apply_event):

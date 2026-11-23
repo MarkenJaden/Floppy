@@ -6,7 +6,7 @@ import hashlib
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import NAMESPACE_URL, uuid5
 
 from django.utils import timezone
@@ -288,6 +288,21 @@ def _row_from_library_item(item: dict) -> PlaybackReportingRow | None:
     )
 
 
+def _playback_window(row: PlaybackReportingRow, item: dict) -> tuple[datetime, datetime]:
+    """Return when a start-stamped play began and roughly when it stopped.
+
+    A stored play is usually stamped at playback-stop (the webhook, a manual
+    log), so this play matches it near its end, not its start. The library
+    backfill has no session length (``play_duration`` is a placeholder 1), so
+    it falls back to the item's runtime.
+    """
+    seconds = row.play_duration
+    if seconds <= 1:
+        runtime_ticks = item.get("RunTimeTicks")
+        seconds = runtime_ticks // 10_000_000 if isinstance(runtime_ticks, int) else 0
+    return row.date_created, row.date_created + timedelta(seconds=seconds)
+
+
 def _episode_numbers(item: dict) -> tuple[int, int] | None:
     """Return Jellyfin's season/episode numbers when both are usable."""
     try:
@@ -441,6 +456,7 @@ class JellyfinPlaybackReportingImporter:
                 row,
                 library,
                 source_id=f"{LIBRARY_BACKFILL_SOURCE}:{item_id}",
+                played=True,
             )
 
         self._save_skipped_count()
@@ -469,6 +485,7 @@ class JellyfinPlaybackReportingImporter:
         library: dict[str, dict],
         *,
         source_id: str | None = None,
+        played: bool = False,
     ) -> None:
         item = library.get(row.item_id)
         normalized_type = row.item_type.casefold()
@@ -487,6 +504,17 @@ class JellyfinPlaybackReportingImporter:
                 f"Line {row.line_number}: Jellyfin item type did not match the export."
             )
             return
+
+        # Played is authoritative only for the core-library backfill. The
+        # library's current Played flag cannot prove a historical session ended.
+        if not played:
+            runtime_ticks = item.get("RunTimeTicks")
+            if not isinstance(runtime_ticks, int) or runtime_ticks <= 0:
+                self._skip(f"Line {row.line_number}: Jellyfin runtime was missing or invalid.")
+                return
+            if row.play_duration * 10_000_000 * 5 < runtime_ticks * 4:
+                self._skip(f"Line {row.line_number}: session was below 80% of runtime.")
+                return
 
         candidates = _provider_candidates(item)
         series_item = None
@@ -515,9 +543,10 @@ class JellyfinPlaybackReportingImporter:
 
         source, media_id = candidates[0]
         source_id = source_id or row.source_identity()
+        window = _playback_window(row, item)
         try:
             if normalized_type == "movie":
-                self._import_movie(row, media_id, source, source_id)
+                self._import_movie(row, media_id, source, source_id, window)
             else:
                 self._import_episode(
                     row,
@@ -525,6 +554,7 @@ class JellyfinPlaybackReportingImporter:
                     source,
                     source_id,
                     episode_numbers,
+                    window,
                 )
         except Exception as error:  # provider metadata failures are row-level skips
             logger.warning(
@@ -540,6 +570,7 @@ class JellyfinPlaybackReportingImporter:
         media_id: str,
         source: str,
         source_id: str,
+        window: tuple[datetime, datetime],
     ) -> None:
         if MoviePlay.objects.filter(
             movie__user=self.user,
@@ -551,11 +582,12 @@ class JellyfinPlaybackReportingImporter:
         # The same play may already have been recorded by the Jellyfin webhook
         # (#1162), which timestamps a play at playback-stop while this import
         # uses playback-start, so the two rows never share an external_id.
-        duplicate = play_dedupe.existing_movie_play_times(
+        known = play_dedupe.existing_movie_play_times(
             self.user,
             media_ids=[media_id],
             source=source,
-        ).is_duplicate(media_id, row.date_created)
+        )
+        duplicate = any(known.is_duplicate(media_id, moment) for moment in window)
         if duplicate:
             self._skip(f"Line {row.line_number}: duplicate of an existing play.")
             return
@@ -580,6 +612,7 @@ class JellyfinPlaybackReportingImporter:
         source: str,
         source_id: str,
         episode_numbers: tuple[int, int] | None,
+        window: tuple[datetime, datetime],
     ) -> None:
         if episode_numbers is None:
             self._skip(f"Line {row.line_number}: season/episode numbers were invalid.")
@@ -593,11 +626,13 @@ class JellyfinPlaybackReportingImporter:
         # The same play may already have been recorded by the Jellyfin webhook
         # (#1162), which timestamps a play at playback-stop while this import
         # uses playback-start, so the two rows never share a watch_operation_id.
-        duplicate = play_dedupe.existing_episode_play_times(
+        known = play_dedupe.existing_episode_play_times(
             self.user,
             media_ids=[media_id],
             source=source,
-        ).is_duplicate((media_id, season_number, episode_number), row.date_created)
+        )
+        key = (media_id, season_number, episode_number)
+        duplicate = any(known.is_duplicate(key, moment) for moment in window)
         if duplicate:
             self._skip(f"Line {row.line_number}: duplicate of an existing play.")
             return

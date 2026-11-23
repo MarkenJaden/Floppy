@@ -8,12 +8,18 @@ from types import SimpleNamespace
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.db import models
 from django.db.models import Q
 from django.utils import timezone
 
-from app import statistics as stats
 from app.metadata_utils import ANIME_SUPPLEMENT_GENRE, genre_list_has_name
 from app.models import MediaTypes, Sources
+from app.play_duration import (
+    boardgame_recorded_minutes,
+    elapsed_minutes,
+    elapsed_minutes_by_hour,
+    play_minutes,
+)
 from app.statistics_day_cache import (
     STATISTICS_DAY_CACHE_TIMEOUT,
     _day_cache_key,
@@ -23,6 +29,14 @@ from app.statistics_day_cache import (
 from app.statistics_talent import (
     _resolve_missing_credit_item_ids,
     _safe_runtime_minutes,
+)
+from app.stats_music import _country_name_from_code
+from app.stats_podcast import _get_podcast_runtime_minutes
+from app.stats_time import _get_music_runtime_minutes
+from app.stats_utils import (
+    _coerce_genre_list,
+    _get_entry_play_dates,
+    _localize_datetime,
 )
 
 logger = logging.getLogger(__name__)
@@ -146,6 +160,52 @@ def _fetch_overlap_rows(
     )
 
 
+# Days further apart than this get separate prefetches. One prefetch is about a
+# dozen queries; a span reads every row between its first and last day, so
+# fetching a day four years back together with today read four years of rows.
+# Measured on a 40,000-play library, splitting stops paying off near a month.
+PREFETCH_MAX_GAP_DAYS = 31
+
+
+def _prefetch_runs(day_list, max_gap_days=PREFETCH_MAX_GAP_DAYS):
+    """Group days into runs whose neighbouring days are at most ``max_gap_days`` apart."""
+    runs = []
+    for day in sorted(set(day_list)):
+        if runs and (day - runs[-1][-1]).days <= max_gap_days:
+            runs[-1].append(day)
+        else:
+            runs.append([day])
+    return runs
+
+
+class SpanPrefetches:
+    """Prefetches for a list of days, one per run of nearby days, built on first use.
+
+    ``for_day(day)`` returns the prefetch of the run holding ``day``. Each day's
+    rows are the ones a single span-wide prefetch would bucket to it: a run's
+    span covers the day, and bucketing keeps only the run's own days.
+    """
+
+    def __init__(self, user, day_list):
+        """Group ``day_list`` into runs; nothing is fetched yet."""
+        self.user = user
+        self._run_of = {}
+        self._runs = _prefetch_runs(day_list)
+        for index, run in enumerate(self._runs):
+            for day in run:
+                self._run_of[day] = index
+        self._built = {}
+
+    def for_day(self, day):
+        """Return the prefetch for ``day``'s run, or None for a day not in the list."""
+        index = self._run_of.get(day)
+        if index is None:
+            return None
+        if index not in self._built:
+            self._built[index] = _build_prefetch_for_range(self.user, self._runs[index])
+        return self._built[index]
+
+
 def _build_prefetch_for_range(user, day_list):
     """Bulk-fetch every media model once across `day_list`'s full span, bucketed by day.
 
@@ -178,6 +238,7 @@ def _build_prefetch_for_range(user, day_list):
         Episode = apps.get_model("app", "Episode")
         episode_rows = list(
             Episode.all_objects.filter(
+                Episode.watch_q(),
                 related_season__user=user,
                 end_date__gte=range_start,
                 end_date__lt=range_end,
@@ -300,6 +361,7 @@ def _build_prefetch_for_range(user, day_list):
                 "status",
                 "score",
                 "progress",
+                "item__runtime_minutes",
             )
             .iterator(chunk_size=2000),
         )
@@ -358,21 +420,21 @@ def _build_prefetch_for_range(user, day_list):
         prefetch["track_duration_cache"] = track_duration_cache
 
     if MediaTypes.PODCAST.value in active_media_types:
-        HistoricalPodcast = apps.get_model("app", "HistoricalPodcast")
+        PodcastPlay = apps.get_model("app", "PodcastPlay")
         podcast_history_rows = list(
-            HistoricalPodcast.objects.filter(
-                Q(history_user=user) | Q(history_user__isnull=True),
+            PodcastPlay.objects.filter(
+                podcast__user=user,
                 end_date__gte=range_start,
                 end_date__lt=range_end,
             )
-            .values("id", "end_date", "history_date", "progress")
+            .values("podcast_id", "end_date", "progress")
             .iterator(chunk_size=2000),
         )
         prefetch["podcast_history"] = _bucket_single_field_rows(
             podcast_history_rows, "end_date", day_list_set
         )
 
-        podcast_ids = {row["id"] for row in podcast_history_rows if row.get("id")}
+        podcast_ids = {row["podcast_id"] for row in podcast_history_rows}
         if podcast_ids:
             Podcast = apps.get_model("app", "Podcast")
             prefetch["podcast_map"] = {
@@ -435,12 +497,28 @@ def _build_prefetch_for_range(user, day_list):
                 "status",
                 "score",
                 "progress",
+                "reading_time",
                 "item__genres",
+                "item__format",
             )
             .iterator(chunk_size=2000),
         )
         reading_prefetch[media_type] = _bucket_overlap_rows(rows, day_list_set)
     prefetch["reading"] = reading_prefetch
+
+    if MediaTypes.BOOK.value in active_media_types:
+        # Same window and local-day bucketing as the per-day SUM below.
+        BookListeningSession = apps.get_model("app", "BookListeningSession")
+        listening_minutes = defaultdict(int)
+        for row in BookListeningSession.objects.filter(
+            book__user=user,
+            started_at__gte=range_start,
+            started_at__lt=range_end,
+        ).values("started_at", "minutes"):
+            day = _normalize_day_value(row["started_at"])
+            if day in day_list_set:
+                listening_minutes[day] += row["minutes"] or 0
+        prefetch["listening_minutes"] = listening_minutes
 
     # Resolve which TMDB candidates still need credits backfill once for the
     # whole range; per-day builds intersect against this instead of issuing
@@ -450,6 +528,425 @@ def _build_prefetch_for_range(user, day_list):
     )
 
     return prefetch
+
+
+def _add_boardgame_rows(
+    rows,
+    day,
+    day_start,
+    day_end,
+    *,
+    minutes_by_type,
+    plays_by_type,
+    daily_minutes_by_type,
+    hour_minutes,
+    update_item_meta,
+    update_top_played,
+):
+    """Add one day's board game rows to the day builder's accumulators.
+
+    Progress is a play count; elapsed time is a separate quantity.
+    """
+    key = MediaTypes.BOARDGAME.value
+    for row in rows:
+        activity_dt = (
+            row.get("end_date") or row.get("start_date") or row.get("created_at")
+        )
+        update_item_meta(
+            key,
+            row.get("item_id"),
+            row.get("id"),
+            row.get("status"),
+            row.get("score"),
+            activity_dt,
+        )
+
+        plays = row.get("progress") or 0
+        play_dt = row.get("end_date") or row.get("start_date")
+        if play_dt and day_start <= play_dt < day_end:
+            plays_by_type[key] += plays
+            update_top_played(
+                key,
+                row.get("item_id"),
+                row.get("id"),
+                minutes=plays,
+                plays=plays,
+                episode_count=0,
+                activity_dt=play_dt,
+            )
+
+        recorded_minutes = boardgame_recorded_minutes(
+            row.get("item__runtime_minutes"), plays
+        )
+        start_dt, end_dt = row.get("start_date"), row.get("end_date")
+        if recorded_minutes and start_dt and end_dt and start_dt <= end_dt:
+            first_day = _localize_datetime(start_dt).date()
+            last_day = _localize_datetime(end_dt).date()
+            minutes = recorded_minutes / ((last_day - first_day).days + 1)
+        elif recorded_minutes:
+            minutes = recorded_minutes if play_dt and day_start <= play_dt < day_end else 0
+        else:
+            minutes = elapsed_minutes(start_dt, end_dt, range_start=day_start, range_end=day_end)
+            for hour, value in elapsed_minutes_by_hour(
+                start_dt, end_dt, day_start, day_end, timezone.get_current_timezone()
+            ).items():
+                hour_minutes[key][hour] += value
+        minutes_by_type[key] += minutes
+        daily_minutes_by_type[key] += minutes
+
+
+def _add_music_plays(
+    user,
+    day,
+    day_start,
+    day_end,
+    prefetch,
+    *,
+    plays_by_type,
+    minutes_by_type,
+    daily_minutes_by_type,
+    music_rollups,
+    add_hour,
+    update_item_meta,
+    update_top_played,
+):
+    """Add one day's music plays to the day builder's accumulators.
+
+    A play is one (music id, end date) pair, deduplicated across history rows.
+    Returns how many plays were added and how many lacked a runtime or genres.
+    """
+    missing_runtime = 0
+    missing_genres = 0
+    plays = 0
+    if prefetch is not None:
+        music_history = prefetch.get("music_history", {}).get(day, [])
+        music_map = prefetch.get("music_map", {})
+        track_duration_cache = prefetch.get("track_duration_cache", {})
+    else:
+        HistoricalMusic = apps.get_model("app", "HistoricalMusic")
+        music_history = (
+            HistoricalMusic.objects.filter(
+                Q(history_user=user) | Q(history_user__isnull=True),
+                end_date__gte=day_start,
+                end_date__lt=day_end,
+            )
+            .values("id", "end_date", "history_date")
+            .iterator(chunk_size=1000)
+        )
+
+    plays_by_key = {}
+    for record in music_history:
+        music_id = record.get("id")
+        play_end = record.get("end_date")
+        hist_date = record.get("history_date")
+        if not music_id or not play_end or not hist_date:
+            continue
+        key = (music_id, play_end)
+        existing = plays_by_key.get(key)
+        if not existing:
+            plays_by_key[key] = hist_date
+            continue
+        existing_diff = abs((existing - play_end).total_seconds())
+        current_diff = abs((hist_date - play_end).total_seconds())
+        if current_diff < existing_diff and current_diff < SECONDS_PER_DAY:
+            plays_by_key[key] = hist_date
+
+    if prefetch is None:
+        music_ids = {key[0] for key in plays_by_key}
+        if music_ids:
+            Music = apps.get_model("app", "Music")
+            music_map = {
+                entry.id: entry
+                for entry in Music.objects.filter(id__in=music_ids).select_related(
+                    "item", "artist", "album", "track"
+                )
+            }
+        else:
+            music_map = {}
+
+        track_duration_cache = {}
+        if music_map:
+            album_ids = {
+                music.album_id
+                for music in music_map.values()
+                if music and music.album_id
+            }
+            if album_ids:
+                Track = apps.get_model("app", "Track")
+                track_rows = Track.objects.filter(
+                    album_id__in=album_ids,
+                    duration_ms__isnull=False,
+                ).values(
+                    "album_id", "title", "duration_ms", "musicbrainz_recording_id"
+                )
+                for track_data in track_rows:
+                    title_key = (track_data["album_id"], track_data["title"])
+                    track_duration_cache[title_key] = track_data["duration_ms"]
+                    recording_id = track_data.get("musicbrainz_recording_id")
+                    if recording_id:
+                        recording_key = ("recording", recording_id)
+                        track_duration_cache[recording_key] = track_data[
+                            "duration_ms"
+                        ]
+
+    for music_id, play_end in plays_by_key:
+        music = music_map.get(music_id)
+        if not music:
+            continue
+        runtime_minutes = _get_music_runtime_minutes(
+            music,
+            track_duration_cache=track_duration_cache,
+        )
+        if runtime_minutes <= 0:
+            missing_runtime += 1
+            runtime_minutes = 0
+        localized = _localize_datetime(play_end)
+        plays_by_type[MediaTypes.MUSIC.value] += 1
+        plays += 1
+        add_hour(MediaTypes.MUSIC.value, localized, runtime_minutes)
+        if runtime_minutes:
+            minutes_by_type[MediaTypes.MUSIC.value] += runtime_minutes
+            daily_minutes_by_type[MediaTypes.MUSIC.value] += runtime_minutes
+
+        update_item_meta(
+            MediaTypes.MUSIC.value,
+            music.item_id if getattr(music, "item_id", None) else music.id,
+            music.id,
+            getattr(music, "status", None),
+            getattr(music, "score", None),
+            play_end,
+        )
+        if runtime_minutes:
+            update_top_played(
+                MediaTypes.MUSIC.value,
+                music.item_id if getattr(music, "item_id", None) else music.id,
+                music.id,
+                minutes=runtime_minutes,
+                plays=1,
+                episode_count=0,
+                activity_dt=play_end,
+            )
+
+        track_key = music.id
+        track_stats = music_rollups["tracks"][track_key]
+        track_stats["minutes"] += runtime_minutes
+        track_stats["plays"] += 1
+        track_stats["title"] = music.item.title if music.item else "Unknown"
+        track_stats["id"] = music.id
+
+        album = getattr(music, "album", None)
+        artist = getattr(music, "artist", None) or getattr(album, "artist", None)
+        if artist:
+            track_stats["artist"] = artist.name
+            artist_stats = music_rollups["artists"][artist.id]
+            artist_stats["minutes"] += runtime_minutes
+            artist_stats["plays"] += 1
+            artist_stats["name"] = artist.name
+            artist_stats["image"] = artist.image or ""
+            artist_stats["id"] = artist.id
+
+        if album:
+            track_stats["album"] = album.title
+            track_stats["album_image"] = (
+                album.image or track_stats.get("album_image") or ""
+            )
+            track_stats["album_id"] = album.id
+            track_stats["album_artist_id"] = artist.id if artist else None
+            track_stats["album_artist_name"] = artist.name if artist else ""
+            album_stats = music_rollups["albums"][album.id]
+            album_stats["minutes"] += runtime_minutes
+            album_stats["plays"] += 1
+            album_stats["title"] = album.title
+            album_stats["artist"] = artist.name if artist else "Unknown"
+            album_stats["artist_id"] = artist.id if artist else None
+            album_stats["artist_name"] = artist.name if artist else ""
+            album_stats["image"] = album.image or ""
+            album_stats["id"] = album.id
+
+        genres = []
+        if album and album.genres:
+            genres = _coerce_genre_list(album.genres)
+        elif artist and artist.genres:
+            genres = _coerce_genre_list(artist.genres)
+        elif getattr(music, "track", None) and music.track.genres:
+            genres = _coerce_genre_list(music.track.genres)
+
+        if runtime_minutes > 0 and not genres:
+            missing_genres += 1
+
+        for genre in genres:
+            key = str(genre).title()
+            genre_stats = music_rollups["genres"][key]
+            genre_stats["minutes"] += runtime_minutes
+            genre_stats["plays"] += 1
+            genre_stats["name"] = key
+
+        release_date = getattr(album, "release_date", None) if album else None
+        if release_date and release_date.year:
+            decade_label = f"{(release_date.year // 10) * 10}s"
+            decade_stats = music_rollups["decades"][decade_label]
+            decade_stats["minutes"] += runtime_minutes
+            decade_stats["plays"] += 1
+            decade_stats["label"] = decade_label
+
+        country_code = getattr(artist, "country", None) if artist else None
+        if country_code:
+            code_upper = str(country_code).upper()
+            country_stats = music_rollups["countries"][code_upper]
+            country_stats["minutes"] += runtime_minutes
+            country_stats["plays"] += 1
+            country_stats["code"] = code_upper
+            country_stats["name"] = _country_name_from_code(code_upper)
+    return plays, missing_runtime, missing_genres
+
+
+def _add_podcast_plays(
+    user,
+    day,
+    day_start,
+    day_end,
+    prefetch,
+    *,
+    plays_by_type,
+    minutes_by_type,
+    daily_minutes_by_type,
+    podcast_rollups,
+    add_hour,
+    update_item_meta,
+):
+    """Add one day's podcast plays to the day builder's accumulators.
+
+    A play is one PodcastPlay row.
+    The episode runtime counts; the play's progress stands in when it is
+    unknown, and a play with neither is skipped. Returns how many plays were
+    added and how many lacked a runtime.
+    """
+    missing_runtime = 0
+    plays = 0
+    if prefetch is not None:
+        podcast_history = prefetch.get("podcast_history", {}).get(day, [])
+    else:
+        PodcastPlay = apps.get_model("app", "PodcastPlay")
+        podcast_history = (
+            PodcastPlay.objects.filter(
+                podcast__user=user,
+                end_date__gte=day_start,
+                end_date__lt=day_end,
+            )
+            .values("podcast_id", "end_date", "progress")
+            .iterator(chunk_size=1000)
+        )
+    podcast_plays = defaultdict(list)
+    for record in podcast_history:
+        if record.get("end_date"):
+            podcast_plays[record["podcast_id"]].append(
+                (record["end_date"], record.get("progress")),
+            )
+
+    if prefetch is not None:
+        podcast_map = prefetch.get("podcast_map", {})
+    else:
+        podcast_ids = set(podcast_plays.keys())
+        if podcast_ids:
+            Podcast = apps.get_model("app", "Podcast")
+            podcast_map = {
+                podcast.id: podcast
+                for podcast in Podcast.objects.filter(
+                    id__in=podcast_ids, user=user
+                ).select_related("item", "show", "episode", "episode__show")
+            }
+        else:
+            podcast_map = {}
+
+    for podcast_id, plays_for_podcast in podcast_plays.items():
+        podcast = podcast_map.get(podcast_id)
+        if not podcast:
+            continue
+        for play_end, history_progress in plays_for_podcast:
+            runtime_minutes = _get_podcast_runtime_minutes(podcast)
+            if runtime_minutes <= 0 and history_progress and history_progress > 0:
+                runtime_minutes = history_progress
+            if runtime_minutes <= 0:
+                missing_runtime += 1
+                continue
+            localized = _localize_datetime(play_end)
+            plays_by_type[MediaTypes.PODCAST.value] += 1
+            plays += 1
+            add_hour(MediaTypes.PODCAST.value, localized, runtime_minutes)
+            minutes_by_type[MediaTypes.PODCAST.value] += runtime_minutes
+            daily_minutes_by_type[MediaTypes.PODCAST.value] += runtime_minutes
+
+            update_item_meta(
+                MediaTypes.PODCAST.value,
+                podcast.item_id
+                if getattr(podcast, "item_id", None)
+                else podcast.id,
+                podcast.id,
+                getattr(podcast, "status", None),
+                getattr(podcast, "score", None),
+                play_end,
+            )
+
+            show = getattr(podcast, "show", None)
+            if show:
+                show_stats = podcast_rollups["shows"][show.id]
+                show_stats["minutes"] += runtime_minutes
+                show_stats["plays"] += 1
+                show_stats["title"] = show.title
+                show_stats["show"] = show.title
+                show_stats["show_id"] = show.id
+                show_stats["podcast_uuid"] = show.podcast_uuid or show_stats.get(
+                    "podcast_uuid"
+                )
+                show_stats["slug"] = show.slug or ""
+                show_stats["image"] = show.image or ""
+            else:
+                show_stats = podcast_rollups["shows"][podcast.id]
+                show_stats["minutes"] += runtime_minutes
+                show_stats["plays"] += 1
+                show_stats["title"] = (
+                    podcast.item.title if podcast.item else "Unknown Show"
+                )
+                show_stats["show"] = show_stats["title"]
+                show_stats["image"] = podcast.item.image if podcast.item else ""
+
+            episode = getattr(podcast, "episode", None)
+            episode_key = episode.id if episode else podcast.id
+            episode_stats = podcast_rollups["episodes"][episode_key]
+            if episode:
+                episode_stats["title"] = episode.title
+                episode_stats["episode_id"] = episode.id
+                episode_stats["duration_seconds"] = (
+                    episode.duration or episode_stats.get("duration_seconds") or 0
+                )
+                episode_stats["show"] = (
+                    episode.show.title
+                    if getattr(episode, "show", None)
+                    else episode_stats.get("show")
+                )
+                episode_stats["show_id"] = (
+                    episode.show.id
+                    if getattr(episode, "show", None)
+                    else episode_stats.get("show_id")
+                )
+            else:
+                episode_stats["title"] = (
+                    podcast.item.title if podcast.item else "Unknown Episode"
+                )
+                episode_stats["episode_id"] = episode_key
+                if podcast.item and podcast.item.runtime_minutes:
+                    episode_stats["duration_seconds"] = (
+                        podcast.item.runtime_minutes * 60
+                    )
+            if show:
+                episode_stats["podcast_uuid"] = (
+                    show.podcast_uuid or episode_stats.get("podcast_uuid")
+                )
+                episode_stats["slug"] = show.slug or ""
+                episode_stats["image"] = show.image or ""
+            elif podcast.item:
+                episode_stats["image"] = podcast.item.image or ""
+    return plays, missing_runtime
 
 
 def build_stats_for_day(
@@ -475,6 +972,23 @@ def build_stats_for_day(
     of sets — `runtime_item_ids`, `genre_item_ids`, `episode_runtime_keys`,
     `credit_item_ids` — accumulated across days and enqueued once instead of
     per day).
+
+    Cache contract consumed by `statistics_aggregator`:
+    - `day` and all activity/score timestamps are ISO strings in the current
+      timezone; item mapping keys and hour keys are strings at the cache boundary.
+    - `items` keeps the latest status/activity and latest scored activity per
+      catalog item and media bucket; `top_played` adds plays, minutes and
+      episode counts. These are distinct from tracker-row counts.
+    - `totals`, `daily_minutes_by_type`, `hour_counts` and `hour_minutes` are
+      additive across days. Exact-midnight date placeholders omit hour buckets.
+    - `genres`/`decades` and `music`/`podcast`/`game` contain family-specific
+      rollups. Reading genres use units/title counts, not elapsed minutes;
+      game genre/decade IDs remain lists so aggregation can deduplicate them.
+    - `activity.count` drives the activity calendar, while `backfill` carries
+      credit-repair hints. `history_version` fences stale cached projections.
+
+    Empty families remain present. This is a cached projection, not the public
+    statistics response; keep its shape compatible with the range aggregator.
     """
     if user is None:
         user_model = get_user_model()
@@ -505,6 +1019,7 @@ def build_stats_for_day(
     hour_counts: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
     hour_minutes: dict[str, dict[int, float]] = defaultdict(lambda: defaultdict(float))
     daily_minutes_by_type: dict[str, float] = defaultdict(float)
+    daily_reading_units: dict[str, float] = defaultdict(float)
     movie_genres = defaultdict(lambda: {"minutes": 0, "plays": 0})
     tv_genres = defaultdict(lambda: {"minutes": 0, "plays": 0})
     anime_genres = defaultdict(lambda: {"minutes": 0, "plays": 0})
@@ -598,18 +1113,26 @@ def build_stats_for_day(
     missing_credit_candidate_item_ids = set()
 
     def _update_item_meta(
-        media_type: str, item_id: int, media_id: int | None, status, score, activity_dt
+        media_type: str,
+        item_id: int,
+        media_id: int | None,
+        status,
+        score,
+        activity_dt,
+        stats_media_type: str | None = None,
     ):
         if not item_id:
             return
-        activity_dt = stats._localize_datetime(activity_dt) if activity_dt else None
+        activity_dt = _localize_datetime(activity_dt) if activity_dt else None
         score_dt = activity_dt if score is not None else None
+        stats_media_type = stats_media_type or media_type
         existing = items_by_type[media_type].get(item_id)
         if not existing:
             items_by_type[media_type][item_id] = {
                 "item_id": item_id,
                 "media_id": media_id,
                 "media_type": media_type,
+                "stats_media_type": stats_media_type,
                 "status": status,
                 "score": float(score) if score is not None else None,
                 "score_dt": score_dt,
@@ -617,6 +1140,7 @@ def build_stats_for_day(
             }
             return
 
+        existing["stats_media_type"] = stats_media_type
         existing_activity = existing.get("activity_dt")
         if activity_dt and (not existing_activity or activity_dt > existing_activity):
             existing["media_id"] = media_id or existing.get("media_id")
@@ -656,7 +1180,7 @@ def build_stats_for_day(
         entry["minutes"] += minutes or 0
         entry["plays"] += plays or 0
         entry["episode_count"] += episode_count or 0
-        activity_dt = stats._localize_datetime(activity_dt) if activity_dt else None
+        activity_dt = _localize_datetime(activity_dt) if activity_dt else None
         if activity_dt and (
             entry["activity_dt"] is None or activity_dt > entry["activity_dt"]
         ):
@@ -667,7 +1191,7 @@ def build_stats_for_day(
     def _add_hour(media_type: str, activity_dt, minutes: float = 0):
         if not activity_dt:
             return
-        localized = stats._localize_datetime(activity_dt)
+        localized = _localize_datetime(activity_dt)
         if not localized:
             return
         # Exact midnight is the date-only placeholder used when no time is known.
@@ -680,7 +1204,7 @@ def build_stats_for_day(
         if not genres or not minutes:
             return False
         added = False
-        for genre in stats._coerce_genre_list(genres):
+        for genre in _coerce_genre_list(genres):
             key = str(genre).title()
             genre_map[key]["minutes"] += minutes
             genre_map[key]["plays"] += 1
@@ -715,6 +1239,7 @@ def build_stats_for_day(
             Episode = apps.get_model("app", "Episode")
             episodes = (
                 Episode.all_objects.filter(
+                    Episode.watch_q(),
                     related_season__user=user,
                     end_date__gte=day_start,
                     end_date__lt=day_end,
@@ -833,6 +1358,7 @@ def build_stats_for_day(
                     row.get("related_season__status"),
                     row.get("related_season__score"),
                     season_activity,
+                    stats_media_type=ep_type,
                 )
 
     if MediaTypes.MOVIE.value in active_media_types:
@@ -990,20 +1516,18 @@ def build_stats_for_day(
                 start_dt = row.get("start_date")
                 end_dt = row.get("end_date")
                 if start_dt and end_dt:
-                    start_local = stats._localize_datetime(start_dt).date()
-                    end_local = stats._localize_datetime(end_dt).date()
+                    start_local = _localize_datetime(start_dt).date()
+                    end_local = _localize_datetime(end_dt).date()
                     if start_local <= day <= end_local:
                         days = (end_local - start_local).days + 1
                         per_day = total_minutes / days if days else total_minutes
                         daily_minutes_by_type[MediaTypes.ANIME.value] += per_day
                 else:
-                    activity_local = stats._localize_datetime(activity_dt)
+                    activity_local = _localize_datetime(activity_dt)
                     if activity_local and activity_local.date() == day:
                         daily_minutes_by_type[MediaTypes.ANIME.value] += total_minutes
 
-            if total_minutes > 0 and not stats._coerce_genre_list(
-                row.get("item__genres")
-            ):
+            if total_minutes > 0 and not _coerce_genre_list(row.get("item__genres")):
                 missing_genres += 1
                 item_id = row.get("item_id")
                 if item_id:
@@ -1047,20 +1571,33 @@ def build_stats_for_day(
                 activity_dt,
             )
 
-            total_minutes = row.get("progress") or 0
+            recorded_minutes = row.get("progress") or 0
+            total_minutes = play_minutes(
+                row.get("start_date"), row.get("end_date"), recorded_minutes
+            )
             if total_minutes <= 0:
                 continue
 
             end_dt = row.get("end_date")
-            if end_dt and day_start <= end_dt < day_end:
+            inferred_day_minutes = (
+                elapsed_minutes(row.get("start_date"), end_dt,
+                                range_start=day_start, range_end=day_end)
+                if not recorded_minutes else None
+            )
+            if inferred_day_minutes is not None:
+                minutes_by_type[MediaTypes.GAME.value] += inferred_day_minutes
+                for hour, value in elapsed_minutes_by_hour(
+                    row.get("start_date"), end_dt, day_start, day_end,
+                    timezone.get_current_timezone(),
+                ).items():
+                    hour_minutes[MediaTypes.GAME.value][hour] += value
+            elif end_dt and day_start <= end_dt < day_end:
                 minutes_by_type[MediaTypes.GAME.value] += total_minutes
 
             start_dt = row.get("start_date")
-            start_local = (
-                stats._localize_datetime(start_dt).date() if start_dt else None
-            )
-            end_local = stats._localize_datetime(end_dt).date() if end_dt else None
-            entry_days = stats._get_entry_play_dates(
+            start_local = _localize_datetime(start_dt).date() if start_dt else None
+            end_local = _localize_datetime(end_dt).date() if end_dt else None
+            entry_days = _get_entry_play_dates(
                 SimpleNamespace(
                     start_date=start_dt,
                     end_date=end_dt,
@@ -1083,7 +1620,8 @@ def build_stats_for_day(
                 game_rollup_days_counted.add(row.get("item_id"))
             if (start_local and end_local) and start_local <= day <= end_local:
                 total_days = (end_local - start_local).days + 1
-                per_day = total_minutes / total_days if total_days else total_minutes
+                per_day = (inferred_day_minutes if inferred_day_minutes is not None
+                           else total_minutes / total_days if total_days else total_minutes)
                 daily_minutes_by_type[MediaTypes.GAME.value] += per_day
                 _update_top_played(
                     MediaTypes.GAME.value,
@@ -1091,13 +1629,12 @@ def build_stats_for_day(
                     row.get("id"),
                     minutes=per_day,
                     plays=1
-                    if activity_dt
-                    and stats._localize_datetime(activity_dt).date() == day
+                    if activity_dt and _localize_datetime(activity_dt).date() == day
                     else 0,
                     episode_count=0,
                     activity_dt=activity_dt,
                 )
-                if activity_dt and stats._localize_datetime(activity_dt).date() == day:
+                if activity_dt and _localize_datetime(activity_dt).date() == day:
                     rollup = game_rollups.setdefault(
                         row.get("item_id"),
                         {
@@ -1119,7 +1656,7 @@ def build_stats_for_day(
                             missing_genre_item_ids.add(item_id)
                     game_id = row.get("item_id")
                     if game_id:
-                        for genre in stats._coerce_genre_list(row.get("item__genres")):
+                        for genre in _coerce_genre_list(row.get("item__genres")):
                             key = str(genre).title()
                             game_genres[key]["game_ids"].add(game_id)
                     _add_game_decade(
@@ -1130,7 +1667,7 @@ def build_stats_for_day(
                     )
                 continue
 
-            activity_local = stats._localize_datetime(activity_dt)
+            activity_local = _localize_datetime(activity_dt)
             if activity_local and activity_local.date() == day:
                 daily_minutes_by_type[MediaTypes.GAME.value] += total_minutes
                 _update_top_played(
@@ -1161,7 +1698,7 @@ def build_stats_for_day(
                         missing_genre_item_ids.add(item_id)
                 game_id = row.get("item_id")
                 if game_id:
-                    for genre in stats._coerce_genre_list(row.get("item__genres")):
+                    for genre in _coerce_genre_list(row.get("item__genres")):
                         key = str(genre).title()
                         game_genres[key]["game_ids"].add(game_id)
                 _add_game_decade(
@@ -1188,372 +1725,60 @@ def build_stats_for_day(
                 "status",
                 "score",
                 "progress",
+                "item__runtime_minutes",
             ),
             500,
             "boardgame",
             prefetch,
         )
-        for row in boardgame_rows:
-            activity_dt = (
-                row.get("end_date") or row.get("start_date") or row.get("created_at")
-            )
-            _update_item_meta(
-                MediaTypes.BOARDGAME.value,
-                row.get("item_id"),
-                row.get("id"),
-                row.get("status"),
-                row.get("score"),
-                activity_dt,
-            )
-
-            total_minutes = row.get("progress") or 0
-            if total_minutes <= 0:
-                continue
-
-            play_dt = row.get("end_date") or row.get("start_date")
-            if play_dt and day_start <= play_dt < day_end:
-                minutes_by_type[MediaTypes.BOARDGAME.value] += total_minutes
-                _update_top_played(
-                    MediaTypes.BOARDGAME.value,
-                    row.get("item_id"),
-                    row.get("id"),
-                    minutes=total_minutes,
-                    plays=1,
-                    episode_count=0,
-                    activity_dt=play_dt,
-                )
-
-            start_dt = row.get("start_date")
-            end_dt = row.get("end_date")
-            start_local = (
-                stats._localize_datetime(start_dt).date() if start_dt else None
-            )
-            end_local = stats._localize_datetime(end_dt).date() if end_dt else None
-            if start_local and end_local and start_local <= day <= end_local:
-                total_days = (end_local - start_local).days + 1
-                per_day = total_minutes / total_days if total_days else total_minutes
-                daily_minutes_by_type[MediaTypes.BOARDGAME.value] += per_day
-            else:
-                activity_local = stats._localize_datetime(activity_dt)
-                if activity_local and activity_local.date() == day:
-                    daily_minutes_by_type[MediaTypes.BOARDGAME.value] += total_minutes
+        _add_boardgame_rows(
+            boardgame_rows,
+            day,
+            day_start,
+            day_end,
+            minutes_by_type=minutes_by_type,
+            plays_by_type=plays_by_type,
+            daily_minutes_by_type=daily_minutes_by_type,
+            hour_minutes=hour_minutes,
+            update_item_meta=_update_item_meta,
+            update_top_played=_update_top_played,
+        )
 
     if MediaTypes.MUSIC.value in active_media_types:
-        if prefetch is not None:
-            music_history = prefetch.get("music_history", {}).get(day, [])
-            music_map = prefetch.get("music_map", {})
-            track_duration_cache = prefetch.get("track_duration_cache", {})
-        else:
-            HistoricalMusic = apps.get_model("app", "HistoricalMusic")
-            music_history = (
-                HistoricalMusic.objects.filter(
-                    Q(history_user=user) | Q(history_user__isnull=True),
-                    end_date__gte=day_start,
-                    end_date__lt=day_end,
-                )
-                .values("id", "end_date", "history_date")
-                .iterator(chunk_size=1000)
-            )
-
-        plays_by_key = {}
-        for record in music_history:
-            music_id = record.get("id")
-            play_end = record.get("end_date")
-            hist_date = record.get("history_date")
-            if not music_id or not play_end or not hist_date:
-                continue
-            key = (music_id, play_end)
-            existing = plays_by_key.get(key)
-            if not existing:
-                plays_by_key[key] = hist_date
-                continue
-            existing_diff = abs((existing - play_end).total_seconds())
-            current_diff = abs((hist_date - play_end).total_seconds())
-            if current_diff < existing_diff and current_diff < SECONDS_PER_DAY:
-                plays_by_key[key] = hist_date
-
-        if prefetch is None:
-            music_ids = {key[0] for key in plays_by_key}
-            if music_ids:
-                Music = apps.get_model("app", "Music")
-                music_map = {
-                    entry.id: entry
-                    for entry in Music.objects.filter(id__in=music_ids).select_related(
-                        "item", "artist", "album", "track"
-                    )
-                }
-            else:
-                music_map = {}
-
-            track_duration_cache = {}
-            if music_map:
-                album_ids = {
-                    music.album_id
-                    for music in music_map.values()
-                    if music and music.album_id
-                }
-                if album_ids:
-                    Track = apps.get_model("app", "Track")
-                    track_rows = Track.objects.filter(
-                        album_id__in=album_ids,
-                        duration_ms__isnull=False,
-                    ).values(
-                        "album_id", "title", "duration_ms", "musicbrainz_recording_id"
-                    )
-                    for track_data in track_rows:
-                        title_key = (track_data["album_id"], track_data["title"])
-                        track_duration_cache[title_key] = track_data["duration_ms"]
-                        recording_id = track_data.get("musicbrainz_recording_id")
-                        if recording_id:
-                            recording_key = ("recording", recording_id)
-                            track_duration_cache[recording_key] = track_data[
-                                "duration_ms"
-                            ]
-
-        for music_id, play_end in plays_by_key:
-            music = music_map.get(music_id)
-            if not music:
-                continue
-            runtime_minutes = stats._get_music_runtime_minutes(
-                music,
-                track_duration_cache=track_duration_cache,
-            )
-            if runtime_minutes <= 0:
-                missing_runtime += 1
-                runtime_minutes = 0
-            localized = stats._localize_datetime(play_end)
-            plays_by_type[MediaTypes.MUSIC.value] += 1
-            play_count += 1
-            _add_hour(MediaTypes.MUSIC.value, localized, runtime_minutes)
-            if runtime_minutes:
-                minutes_by_type[MediaTypes.MUSIC.value] += runtime_minutes
-                daily_minutes_by_type[MediaTypes.MUSIC.value] += runtime_minutes
-
-            _update_item_meta(
-                MediaTypes.MUSIC.value,
-                music.item_id if getattr(music, "item_id", None) else music.id,
-                music.id,
-                getattr(music, "status", None),
-                getattr(music, "score", None),
-                play_end,
-            )
-            if runtime_minutes:
-                _update_top_played(
-                    MediaTypes.MUSIC.value,
-                    music.item_id if getattr(music, "item_id", None) else music.id,
-                    music.id,
-                    minutes=runtime_minutes,
-                    plays=1,
-                    episode_count=0,
-                    activity_dt=play_end,
-                )
-
-            track_key = music.id
-            track_stats = music_rollups["tracks"][track_key]
-            track_stats["minutes"] += runtime_minutes
-            track_stats["plays"] += 1
-            track_stats["title"] = music.item.title if music.item else "Unknown"
-            track_stats["id"] = music.id
-
-            album = getattr(music, "album", None)
-            artist = getattr(music, "artist", None) or getattr(album, "artist", None)
-            if artist:
-                track_stats["artist"] = artist.name
-                artist_stats = music_rollups["artists"][artist.id]
-                artist_stats["minutes"] += runtime_minutes
-                artist_stats["plays"] += 1
-                artist_stats["name"] = artist.name
-                artist_stats["image"] = artist.image or ""
-                artist_stats["id"] = artist.id
-
-            if album:
-                track_stats["album"] = album.title
-                track_stats["album_image"] = (
-                    album.image or track_stats.get("album_image") or ""
-                )
-                track_stats["album_id"] = album.id
-                track_stats["album_artist_id"] = artist.id if artist else None
-                track_stats["album_artist_name"] = artist.name if artist else ""
-                album_stats = music_rollups["albums"][album.id]
-                album_stats["minutes"] += runtime_minutes
-                album_stats["plays"] += 1
-                album_stats["title"] = album.title
-                album_stats["artist"] = artist.name if artist else "Unknown"
-                album_stats["artist_id"] = artist.id if artist else None
-                album_stats["artist_name"] = artist.name if artist else ""
-                album_stats["image"] = album.image or ""
-                album_stats["id"] = album.id
-
-            genres = []
-            if album and album.genres:
-                genres = stats._coerce_genre_list(album.genres)
-            elif artist and artist.genres:
-                genres = stats._coerce_genre_list(artist.genres)
-            elif getattr(music, "track", None) and music.track.genres:
-                genres = stats._coerce_genre_list(music.track.genres)
-
-            if runtime_minutes > 0 and not genres:
-                missing_genres += 1
-
-            for genre in genres:
-                key = str(genre).title()
-                genre_stats = music_rollups["genres"][key]
-                genre_stats["minutes"] += runtime_minutes
-                genre_stats["plays"] += 1
-                genre_stats["name"] = key
-
-            release_date = getattr(album, "release_date", None) if album else None
-            if release_date and release_date.year:
-                decade_label = f"{(release_date.year // 10) * 10}s"
-                decade_stats = music_rollups["decades"][decade_label]
-                decade_stats["minutes"] += runtime_minutes
-                decade_stats["plays"] += 1
-                decade_stats["label"] = decade_label
-
-            country_code = getattr(artist, "country", None) if artist else None
-            if country_code:
-                code_upper = str(country_code).upper()
-                country_stats = music_rollups["countries"][code_upper]
-                country_stats["minutes"] += runtime_minutes
-                country_stats["plays"] += 1
-                country_stats["code"] = code_upper
-                country_stats["name"] = stats._country_name_from_code(code_upper)
+        music_plays, music_missing_runtime, music_missing_genres = _add_music_plays(
+            user,
+            day,
+            day_start,
+            day_end,
+            prefetch,
+            plays_by_type=plays_by_type,
+            minutes_by_type=minutes_by_type,
+            daily_minutes_by_type=daily_minutes_by_type,
+            music_rollups=music_rollups,
+            add_hour=_add_hour,
+            update_item_meta=_update_item_meta,
+            update_top_played=_update_top_played,
+        )
+        play_count += music_plays
+        missing_runtime += music_missing_runtime
+        missing_genres += music_missing_genres
 
     if MediaTypes.PODCAST.value in active_media_types:
-        if prefetch is not None:
-            podcast_history = prefetch.get("podcast_history", {}).get(day, [])
-        else:
-            HistoricalPodcast = apps.get_model("app", "HistoricalPodcast")
-            podcast_history = (
-                HistoricalPodcast.objects.filter(
-                    Q(history_user=user) | Q(history_user__isnull=True),
-                    end_date__gte=day_start,
-                    end_date__lt=day_end,
-                )
-                .values("id", "end_date", "history_date", "progress")
-                .iterator(chunk_size=1000)
-            )
-        podcast_plays = defaultdict(dict)
-        for record in podcast_history:
-            podcast_id = record.get("id")
-            play_end = record.get("end_date")
-            hist_date = record.get("history_date")
-            progress = record.get("progress")
-            if not podcast_id or not play_end or not hist_date:
-                continue
-            plays_for_podcast = podcast_plays[podcast_id]
-            existing = plays_for_podcast.get(play_end)
-            if not existing:
-                plays_for_podcast[play_end] = (hist_date, progress)
-            else:
-                existing_diff = abs((existing[0] - play_end).total_seconds())
-                current_diff = abs((hist_date - play_end).total_seconds())
-                if current_diff < existing_diff and current_diff < SECONDS_PER_DAY:
-                    plays_for_podcast[play_end] = (hist_date, progress)
-
-        if prefetch is not None:
-            podcast_map = prefetch.get("podcast_map", {})
-        else:
-            podcast_ids = set(podcast_plays.keys())
-            if podcast_ids:
-                Podcast = apps.get_model("app", "Podcast")
-                podcast_map = {
-                    podcast.id: podcast
-                    for podcast in Podcast.objects.filter(
-                        id__in=podcast_ids, user=user
-                    ).select_related("item", "show", "episode", "episode__show")
-                }
-            else:
-                podcast_map = {}
-
-        for podcast_id, plays_for_podcast in podcast_plays.items():
-            podcast = podcast_map.get(podcast_id)
-            if not podcast:
-                continue
-            for play_end, (_, history_progress) in plays_for_podcast.items():
-                runtime_minutes = stats._get_podcast_runtime_minutes(podcast)
-                if runtime_minutes <= 0 and history_progress and history_progress > 0:
-                    runtime_minutes = history_progress
-                if runtime_minutes <= 0:
-                    missing_runtime += 1
-                    continue
-                localized = stats._localize_datetime(play_end)
-                plays_by_type[MediaTypes.PODCAST.value] += 1
-                play_count += 1
-                _add_hour(MediaTypes.PODCAST.value, localized, runtime_minutes)
-                minutes_by_type[MediaTypes.PODCAST.value] += runtime_minutes
-                daily_minutes_by_type[MediaTypes.PODCAST.value] += runtime_minutes
-
-                _update_item_meta(
-                    MediaTypes.PODCAST.value,
-                    podcast.item_id
-                    if getattr(podcast, "item_id", None)
-                    else podcast.id,
-                    podcast.id,
-                    getattr(podcast, "status", None),
-                    getattr(podcast, "score", None),
-                    play_end,
-                )
-
-                show = getattr(podcast, "show", None)
-                if show:
-                    show_stats = podcast_rollups["shows"][show.id]
-                    show_stats["minutes"] += runtime_minutes
-                    show_stats["plays"] += 1
-                    show_stats["title"] = show.title
-                    show_stats["show"] = show.title
-                    show_stats["show_id"] = show.id
-                    show_stats["podcast_uuid"] = show.podcast_uuid or show_stats.get(
-                        "podcast_uuid"
-                    )
-                    show_stats["slug"] = show.slug or ""
-                    show_stats["image"] = show.image or ""
-                else:
-                    show_stats = podcast_rollups["shows"][podcast.id]
-                    show_stats["minutes"] += runtime_minutes
-                    show_stats["plays"] += 1
-                    show_stats["title"] = (
-                        podcast.item.title if podcast.item else "Unknown Show"
-                    )
-                    show_stats["show"] = show_stats["title"]
-                    show_stats["image"] = podcast.item.image if podcast.item else ""
-
-                episode = getattr(podcast, "episode", None)
-                episode_key = episode.id if episode else podcast.id
-                episode_stats = podcast_rollups["episodes"][episode_key]
-                if episode:
-                    episode_stats["title"] = episode.title
-                    episode_stats["episode_id"] = episode.id
-                    episode_stats["duration_seconds"] = (
-                        episode.duration or episode_stats.get("duration_seconds") or 0
-                    )
-                    episode_stats["show"] = (
-                        episode.show.title
-                        if getattr(episode, "show", None)
-                        else episode_stats.get("show")
-                    )
-                    episode_stats["show_id"] = (
-                        episode.show.id
-                        if getattr(episode, "show", None)
-                        else episode_stats.get("show_id")
-                    )
-                else:
-                    episode_stats["title"] = (
-                        podcast.item.title if podcast.item else "Unknown Episode"
-                    )
-                    episode_stats["episode_id"] = episode_key
-                    if podcast.item and podcast.item.runtime_minutes:
-                        episode_stats["duration_seconds"] = (
-                            podcast.item.runtime_minutes * 60
-                        )
-                if show:
-                    episode_stats["podcast_uuid"] = (
-                        show.podcast_uuid or episode_stats.get("podcast_uuid")
-                    )
-                    episode_stats["slug"] = show.slug or ""
-                    episode_stats["image"] = show.image or ""
-                elif podcast.item:
-                    episode_stats["image"] = podcast.item.image or ""
+        podcast_plays, podcast_missing_runtime = _add_podcast_plays(
+            user,
+            day,
+            day_start,
+            day_end,
+            prefetch,
+            plays_by_type=plays_by_type,
+            minutes_by_type=minutes_by_type,
+            daily_minutes_by_type=daily_minutes_by_type,
+            podcast_rollups=podcast_rollups,
+            add_hour=_add_hour,
+            update_item_meta=_update_item_meta,
+        )
+        play_count += podcast_plays
+        missing_runtime += podcast_missing_runtime
 
     if MediaTypes.VIDEO.value in active_media_types:
         # One play per watched day. Like History, a play counts the video's
@@ -1587,7 +1812,7 @@ def build_stats_for_day(
             runtime_minutes = seconds / 60
             if runtime_minutes <= 0:
                 missing_runtime += 1
-            localized = stats._localize_datetime(play["end_date"])
+            localized = _localize_datetime(play["end_date"])
             plays_by_type[MediaTypes.VIDEO.value] += 1
             play_count += 1
             _add_hour(MediaTypes.VIDEO.value, localized, runtime_minutes)
@@ -1625,7 +1850,9 @@ def build_stats_for_day(
                     "status",
                     "score",
                     "progress",
+                    "reading_time",
                     "item__genres",
+                    "item__format",
                 )
                 .iterator(chunk_size=500)
             )
@@ -1644,13 +1871,41 @@ def build_stats_for_day(
 
             play_dt = row.get("end_date") or row.get("start_date")
             if play_dt and day_start <= play_dt < day_end:
-                minutes_by_type[media_type] += 60
                 _add_hour(media_type, play_dt)
 
+            if media_type == MediaTypes.BOOK.value and (
+                row.get("item__format") == "audiobook"
+            ):
+                # An audiobook's progress is minutes, not pages. Its listening
+                # time is counted from dated sessions below, so pages and
+                # minutes never share a total.
+                continue
+            reading_time = row.get("reading_time") or 0
+            if reading_time:
+                start_dt = row.get("start_date")
+                end_dt = row.get("end_date")
+                if start_dt and end_dt and start_dt <= end_dt:
+                    first_day = _localize_datetime(start_dt).date()
+                    last_day = _localize_datetime(end_dt).date()
+                    reading_minutes = reading_time / ((last_day - first_day).days + 1)
+                else:
+                    reading_minutes = reading_time if play_dt and day_start <= play_dt < day_end else 0
+            else:
+                reading_minutes = elapsed_minutes(
+                    row.get("start_date"), row.get("end_date"),
+                    range_start=day_start, range_end=day_end,
+                )
+                for hour, value in elapsed_minutes_by_hour(
+                    row.get("start_date"), row.get("end_date"), day_start, day_end,
+                    timezone.get_current_timezone(),
+                ).items():
+                    hour_minutes[media_type][hour] += value
+            minutes_by_type[media_type] += reading_minutes
+            daily_minutes_by_type[media_type] += reading_minutes
             total_minutes = row.get("progress") or 0
             if total_minutes <= 0:
                 continue
-            genres = stats._coerce_genre_list(row.get("item__genres"))
+            genres = _coerce_genre_list(row.get("item__genres"))
             if not genres:
                 missing_genres += 1
                 item_id = row.get("item_id")
@@ -1658,14 +1913,12 @@ def build_stats_for_day(
                     missing_genre_item_ids.add(item_id)
             start_dt = row.get("start_date")
             end_dt = row.get("end_date")
-            start_local = (
-                stats._localize_datetime(start_dt).date() if start_dt else None
-            )
-            end_local = stats._localize_datetime(end_dt).date() if end_dt else None
+            start_local = _localize_datetime(start_dt).date() if start_dt else None
+            end_local = _localize_datetime(end_dt).date() if end_dt else None
             if start_local and end_local and start_local <= day <= end_local:
                 total_days = (end_local - start_local).days + 1
                 per_day = total_minutes / total_days if total_days else total_minutes
-                daily_minutes_by_type[media_type] += per_day
+                daily_reading_units[media_type] += per_day
                 _update_top_played(
                     media_type,
                     row.get("item_id"),
@@ -1683,9 +1936,9 @@ def build_stats_for_day(
                             row.get("item_id")
                         )
             else:
-                activity_local = stats._localize_datetime(activity_dt)
+                activity_local = _localize_datetime(activity_dt)
                 if activity_local and activity_local.date() == day:
-                    daily_minutes_by_type[media_type] += total_minutes
+                    daily_reading_units[media_type] += total_minutes
                     _update_top_played(
                         media_type,
                         row.get("item_id"),
@@ -1703,7 +1956,27 @@ def build_stats_for_day(
                                 row.get("item_id")
                             )
 
-    activity_count = play_count
+    listening_minutes = 0
+    if (
+        MediaTypes.BOOK.value in active_media_types
+        and prefetch is not None
+        and "listening_minutes" in prefetch
+    ):
+        listening_minutes = prefetch["listening_minutes"].get(day, 0)
+    elif MediaTypes.BOOK.value in active_media_types:
+        BookListeningSession = apps.get_model("app", "BookListeningSession")
+        listening_minutes = (
+            BookListeningSession.objects.filter(
+                book__user=user,
+                started_at__gte=day_start,
+                started_at__lt=day_end,
+            ).aggregate(total=models.Sum("minutes"))["total"]
+            or 0
+        )
+
+    activity_count = play_count + plays_by_type.get(MediaTypes.BOARDGAME.value, 0)
+    if listening_minutes > 0:
+        activity_count += 1
     non_play_types = {
         MediaTypes.ANIME.value,
         MediaTypes.GAME.value,
@@ -1713,7 +1986,11 @@ def build_stats_for_day(
         MediaTypes.COMIC.value,
     }
     for media_type, minutes in daily_minutes_by_type.items():
-        if media_type in non_play_types and minutes and minutes > 0:
+        if (media_type in non_play_types and minutes and minutes > 0
+                and not plays_by_type.get(media_type)):
+            activity_count += 1
+    for media_type, units in daily_reading_units.items():
+        if units and not daily_minutes_by_type.get(media_type):
             activity_count += 1
     if activity_count == 0 and sum(daily_minutes_by_type.values()) > 0:
         activity_count = 1
@@ -1729,6 +2006,7 @@ def build_stats_for_day(
         "totals": {
             "minutes_by_type": dict(minutes_by_type),
             "plays_by_type": dict(plays_by_type),
+            "listening_minutes": listening_minutes,
         },
         "hour_counts": {},
         "hour_minutes": {},
@@ -1751,6 +2029,7 @@ def build_stats_for_day(
         "podcast": {},
         "game": {},
         "daily_minutes_by_type": dict(daily_minutes_by_type),
+        "daily_reading_units": dict(daily_reading_units),
         "activity": {"count": activity_count},
     }
 
